@@ -71,6 +71,15 @@ load_config()
 from system.log import get_logger                                 # assign logging to universal logger
 log = get_logger(__name__)
 
+import os as _os                                                  # for intercepting hard exits
+import traceback as _tb                                           # for logging exit origins
+_real_os_exit = _os._exit                                         # keep the real hard-exit handle
+def _logged_os_exit(code):                                        # os._exit() cannot be caught by try/except,
+    log.error("[main] os._exit(%s) called from:\n%s",             # so wrap it to log WHO called it before dying
+              code, "".join(_tb.format_stack()))
+    _real_os_exit(code)                                           # then still perform the hard exit
+_os._exit = _logged_os_exit                                       # activate interception
+
 from cognition.memory.memorize import AikoMemorize                # load memory system for --clear-mem
 
 
@@ -115,10 +124,24 @@ def main():
 
     if args.cli:                                        # if CLI argument set
         from interface.cli.cli import run_cli           # load CLI with set arguments
-        run_cli(args)                                   # launch CLI — boots internally via run_session()
+        try:
+            run_cli(args)                               # launch CLI — boots internally via run_session()
+        except SystemExit:                              # silent-killer trap: SystemExit in the main thread
+            log.exception("[main] SystemExit escaped the session loop")  # logs WHO raised it, full origin traceback
+            raise                                       # preserve original exit behavior
+        except BaseException:                           # any other fatal escape
+            log.exception("[main] fatal error escaped the session loop")  # full traceback to aiko.log
+            raise                                       # re-raise after logging
     else:                                               # otherwise, launch WebUI
         from interface.webui.webui import run_webui     # load WebUI
-        run_webui(args)                                 # launch WebUI — server starts instantly, boots in background
+        try:
+            run_webui(args)                             # launch WebUI — server starts instantly, boots in background
+        except SystemExit:                              # silent-killer trap: SystemExit in the main thread
+            log.exception("[main] SystemExit escaped the session loop")  # logs WHO raised it, full origin traceback
+            raise                                       # preserve original exit behavior
+        except BaseException:                           # any other fatal escape
+            log.exception("[main] fatal error escaped the session loop")  # full traceback to aiko.log
+            raise                                       # re-raise after logging
 
 
 if __name__ == "__main__":

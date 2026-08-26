@@ -634,6 +634,7 @@ class AikoThink:
             log.info("[route] intent=%s", intent)
 
             if intent == "greeting":
+                log.info("[route] greeting dispatch → chat(skip_memory=True)")
                 return self.chat(
                     user_input,
                     token_callback=token_callback,
@@ -1346,6 +1347,7 @@ class AikoThink:
 
     def chat(self, user_input: str, token_callback=None, _skip_search: bool = True, _history_label: str | None = None, mem_kb_future=None, *, skip_memory: bool = False, store_turn: bool = True, query_vec: np.ndarray | None = None, websearch_net: bool = True) -> str:
         """Standard chat: persona plus optional memory/KB context."""
+        log.info("[chat] enter skip_memory=%s store_turn=%s input=%r", skip_memory, store_turn, user_input[:50])
         speak = self._get_speak()
         if speak and speak.is_playing():
             speak.stop()
@@ -1463,6 +1465,7 @@ class AikoThink:
 
         # Stream response — core system message first, history, then the
         # volatile context system message right before the newest user turn.
+        log.info("[chat] calling LLM stream (model=%s)", self._llm_model)
         raw_response = self._stream_response(
             trimmed,
             system=core_system,
@@ -1470,7 +1473,9 @@ class AikoThink:
             token_callback=token_callback,
             emit=_CHAT_STREAM_EMIT,
         )
+        log.info("[chat] stream returned len=%s", len(raw_response or ""))
         raw_response = self._finalize_response(user_input, raw_response, token_callback, already_emitted=_CHAT_STREAM_EMIT)
+        log.info("[chat] finalize done")
         
         # Store
         with self._history_lock:
@@ -1698,6 +1703,7 @@ class AikoThink:
         tts_sentence_buffer = []
 
         try:
+            log.info("[stream] POST %s model=%s", self._client.base_url, self._llm_model)
             stream = self._client.chat.completions.create(
                 model=self._llm_model, messages=all_messages, stream=True,
                 max_tokens=max_tokens,
@@ -1712,6 +1718,7 @@ class AikoThink:
                     "top_k":          int(os.getenv("TOP_K", 40)),
                 },
             )
+            log.info("[stream] connected, consuming chunks")
             for chunk in stream:
                 delta = chunk.choices[0].delta if chunk.choices else None
                 token = (delta.content or "") if delta else ""
