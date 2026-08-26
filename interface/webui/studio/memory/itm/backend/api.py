@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import threading
+from collections import OrderedDict
 from pathlib import Path
 from typing import Any
 
@@ -35,8 +36,9 @@ SHARED_DIR = Path(__file__).resolve().parents[3] / "shared"
 app.mount("/static", StaticFiles(directory=str(FRONTEND_DIR), html=True), name="itm-frontend")
 app.mount("/shared", StaticFiles(directory=str(SHARED_DIR), html=True), name="studio-shared")
 
-_stores_by_user: dict[str, object] = {}
+_stores_by_user: "OrderedDict[str, object]" = OrderedDict()
 _store_lock = threading.Lock()
+_STORE_CACHE_MAX = 10
 
 
 def _get_store(user_id: str | None = None):
@@ -51,9 +53,21 @@ def _get_store(user_id: str | None = None):
                 from cognition.memory.schema import _memory_db_path_for_user
                 import os
 
+                # Evict oldest entry if at capacity
+                if len(_stores_by_user) >= _STORE_CACHE_MAX:
+                    evict_user, evict_store = _stores_by_user.popitem(last=False)
+                    try:
+                        evict_store.close()
+                    except Exception:
+                        pass
+
                 embed_cache = os.getenv("EMBED_CACHE_PATH") or None
                 store = EpisodicStore(_memory_db_path_for_user(uid), user_id=uid, embed_cache=embed_cache)
                 _stores_by_user[uid] = store
+    else:
+        # Move to end (LRU: mark as recently used)
+        with _store_lock:
+            _stores_by_user.move_to_end(uid)
     return store
 
 
