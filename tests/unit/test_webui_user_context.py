@@ -6,6 +6,7 @@ import queue
 import pytest
 
 from interface.webui.webui import AikoWeb
+from interface.webui.studio.session_binding import _relative_path
 from system.userspace import current_display_name, current_user_id, reset_current_display_name, reset_current_user_id
 
 
@@ -78,3 +79,12 @@ def test_get_input_uses_queued_identity_not_shared_state(monkeypatch):
     assert web.get_input() == "hello"
     assert current_user_id() == "bob"
     assert current_display_name() == "Bobby"
+
+
+def test_studio_api_path_is_relative_to_its_mount():
+    """Mounted studio middleware must recognize its /api routes."""
+    assert _relative_path({
+        "path": "/studio/memory/ltm/api/graph",
+        "root_path": "/studio/memory/ltm",
+    }) == "/api/graph"
+    assert _relative_path({"path": "/api/graph", "root_path": ""}) == "/api/graph"
