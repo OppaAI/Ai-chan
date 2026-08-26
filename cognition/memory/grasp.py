@@ -544,6 +544,40 @@ def set_static_anchor_tokens(tokens: set[str] | list[str] | None, identity: str 
     buf.set_static_anchor(tokens)
 
 
+# Small stopword set for anchor building — content words only want to anchor
+# relevance (grasp._TOKEN_RE already enforces [a-z0-9_]{3+}; CJK never matches,
+# so Japanese persona keywords are a known v1 limitation).
+_GRASP_ANCHOR_STOP = frozenset({
+    "the", "and", "for", "are", "but", "not", "you", "all", "any", "can",
+    "her", "was", "one", "our", "out", "day", "get", "has", "him", "his",
+    "how", "man", "new", "now", "old", "see", "two", "way", "who", "its",
+    "did", "that", "this", "with", "from", "they", "have", "will", "your",
+    "what", "when", "where", "which", "their", "there", "these", "those",
+    "about", "would", "could", "should", "please", "always", "never",
+    "aiko", "chan", "user", "assistant", "http", "https", "www", "com",
+})
+
+
+def build_anchor_tokens(*texts: str, limit: int = 64) -> list[str]:
+    """Frequency-ranked content tokens from the given texts, capped at
+    ``limit`` (~30-80 discriminates well; more flattens relevance scoring).
+
+    Sources should be identity-stable text — persona/SOUL content, pinned
+    memories — so ``score_relevance_to_anchor`` keeps turns that touch who
+    Aiko is and what persistently matters resident longer in the buffer.
+    """
+    counts: dict[str, int] = {}
+    for text in texts:
+        if not text:
+            continue
+        for tok in _TOKEN_RE.findall(text.lower()):
+            if tok in _GRASP_ANCHOR_STOP:
+                continue
+            counts[tok] = counts.get(tok, 0) + 1
+    ranked = sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))
+    return [word for word, _ in ranked[: max(0, limit)]]
+
+
 def record_turn(
     user: str,
     assistant: str,

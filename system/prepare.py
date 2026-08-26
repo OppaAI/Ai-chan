@@ -63,6 +63,32 @@ def run_post_auth(uid: str, *, memorize=None, think=None) -> None:
     except Exception:
         log.exception("[prepare] post-login memory cleanup failed")
 
+    # Static anchor for Grasp relevance scoring — persona + pinned memories
+    # become the identity tokens that keep relevant turns resident longer in
+    # working memory (activates the previously-dead relevance factor).
+    if memorize is not None:
+        try:
+            texts: list[str] = []
+            try:
+                texts.append(memorize.persona_context() or "")
+            except Exception:
+                pass
+            try:
+                for m in memorize.get_all():
+                    if m.get("pinned"):
+                        texts.append(m.get("memory") or m.get("text") or "")
+            except Exception:
+                pass
+            from cognition.memory.grasp import build_anchor_tokens, set_static_anchor_tokens
+            anchor = build_anchor_tokens(*texts)
+            if anchor:
+                set_static_anchor_tokens(anchor)
+                log.info("[prepare] Grasp static anchor set (%d tokens)", len(anchor))
+            else:
+                log.info("[prepare] Grasp static anchor empty — no persona/pinned text yet")
+        except Exception:
+            log.exception("[prepare] failed to set Grasp static anchor")
+
     # Playbook seeding — user-scoped playbook definitions under USER_SPACE_ROOT/<uid>/.
     try:
         from agentic.graph_engine import ensure_playbooks
