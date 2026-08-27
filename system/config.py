@@ -57,7 +57,7 @@ except ImportError:  # pragma: no cover - lightweight fallback for minimal tooli
 try:
     from dotenv import dotenv_values          # for .env parsing
 except ImportError:  # pragma: no cover - optional dependency fallback
-    def dotenv_values(*_args: Any, **_kwargs: Any) -> dict[str, str | None]:  # type: ignore[no-redef]
+    def dotenv_values(*_args: Any, **_kwargs: Any) -> dict[str, str | None]:  # type: ignore[no-redef, misc]
         return {}
 
 _LOADED = False

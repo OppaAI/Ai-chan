@@ -1723,6 +1723,45 @@ class AikoThink:
             speak.feed(text)
             speak.play_async()
 
+    @staticmethod
+    def _messages_without_system(all_messages: list[dict]) -> list[dict]:
+        """Fallback for chat templates that reject `system` role (Jinja: Only user, assistant and tool roles are supported).
+
+        Merges every system message into the next user turn (or appends as user
+        if no user follows) so the prompt content is preserved without the
+        system role. Used as automatic retry when llama.cpp returns 500 with
+        'got system'.
+        """
+        out: list[dict] = []
+        pending: list[str] = []
+        for m in all_messages:
+            role = m.get("role")
+            content = m.get("content") or ""
+            if role == "system":
+                if content.strip():
+                    pending.append(content)
+                continue
+            if pending:
+                prefix = "\n\n".join(pending)
+                pending = []
+                if role == "user":
+                    m = {"role": "user", "content": prefix + "\n\n" + content}
+                else:
+                    # Flush system block as a user turn before an assistant/tool turn
+                    out.append({"role": "user", "content": prefix})
+            out.append(m)
+        if pending:
+            out.append({"role": "user", "content": "\n\n".join(pending)})
+        # Ensure at least one user turn exists
+        if not out:
+            out = [{"role": "user", "content": "\n\n".join(pending)}]
+        return out
+
+    @staticmethod
+    def _is_system_role_error(exc: Exception) -> bool:
+        msg = str(exc)
+        return "Only user, assistant and tool roles are supported" in msg and "got system" in msg
+
     def _stream_response(self, messages: list[dict], system: str = "", token_callback=None, emit: bool = True, system_tail: str = "") -> str:
         full_response = []
         max_tokens = _BASE_PREDICT * _REASONING_SCALE if self._reasoning else _BASE_PREDICT
@@ -1809,6 +1848,58 @@ class AikoThink:
                         speak.feed_speech_stream(sentence)
         except Exception as e:
             log.error(f"LLM stream failed: {e}")
+            # Auto-retry without system role if template rejects it (ministral-type Jinja)
+            if self._is_system_role_error(e):
+                try:
+                    alt_messages = self._messages_without_system(all_messages)
+                    log.warning("LLM stream system-role rejected; retrying with %d user-merged messages", len(alt_messages))
+                    self.last_usage["prompt_messages"] = alt_messages
+                    # Retry stream with converted messages
+                    stream2 = self._client.chat.completions.create(
+                        model=self._llm_model, messages=alt_messages, stream=True,
+                        max_tokens=max_tokens,
+                        temperature=float(os.getenv("TEMPERATURE", 0.72)),
+                        top_p=float(os.getenv("TOP_P", 0.90)),
+                        stop=LLM_STOP_SEQUENCES,
+                        timeout=LLM_TIMEOUT,
+                        extra_body={
+                            "cache_prompt": _LLM_CACHE_PROMPT,
+                            "repeat_penalty": float(os.getenv("REPEAT_PENALTY", 1.15)),
+                            "repeat_last_n":  int(os.getenv("REPEAT_LAST_N", 64)),
+                            "top_k":          int(os.getenv("TOP_K", 40)),
+                        },
+                    )
+                    full_response = []
+                    token_buffer = []
+                    tts_sentence_buffer = []
+                    sentence_buffer = ""
+                    for chunk in stream2:
+                        delta = chunk.choices[0].delta if chunk.choices else None
+                        token = (delta.content or "") if delta else ""
+                        if emit and token_callback and token and not karaoke_text:
+                            token_buffer.append(token)
+                        full_response.append(token)
+                        if emit and speak and token:
+                            sentence_buffer += token
+                            sentences, sentence_buffer = split_stream_sentences(sentence_buffer)
+                            tts_sentence_buffer.extend(sentences)
+                    text2 = "".join(full_response).strip()
+                    if text2:
+                        self.last_usage["completion_text"] = text2
+                        if emit and speak and sentence_buffer.strip():
+                            tts_sentence_buffer.append(sentence_buffer)
+                        if emit and token_callback and token_buffer:
+                            for bt in token_buffer:
+                                token_callback(bt)
+                        if emit and speak and tts_sentence_buffer:
+                            for s in tts_sentence_buffer:
+                                speak.feed_speech_stream(s)
+                        stream_success = True
+                        text = text2
+                        # Mark success so we skip fallback
+                        log.info("LLM stream retry without system role succeeded")
+                except Exception as e2:
+                    log.error(f"LLM stream retry without system also failed: {e2}")
         finally:
             if speak and emit:
                 speak.stop_speech_stream()
@@ -1832,10 +1923,10 @@ class AikoThink:
 
     def _fallback_completion(self, messages: list[dict], max_tokens: int, reason: str) -> str:
         """Try one non-streaming completion before surfacing the LLM error in chat."""
-        try:
+        def _try_once(msgs: list[dict]) -> str | None:
             resp = self._client.chat.completions.create(
                 model=self._llm_model,
-                messages=messages,
+                messages=msgs,
                 stream=False,
                 max_tokens=max_tokens,
                 temperature=float(os.getenv("TEMPERATURE", 0.72)),
@@ -1844,20 +1935,51 @@ class AikoThink:
                 timeout=LLM_TIMEOUT,
                 extra_body={"cache_prompt": _LLM_CACHE_PROMPT},
             )
-            text = (resp.choices[0].message.content or "").strip()
-            if text:
+            txt = (resp.choices[0].message.content or "").strip()
+            if txt:
                 usage = getattr(resp, "usage", None)
                 self.last_usage.update({
-                    "completion_text": text,
+                    "completion_text": txt,
                     "prompt_tokens": getattr(usage, "prompt_tokens", None),
                     "completion_tokens": getattr(usage, "completion_tokens", None),
                     "total_tokens": getattr(usage, "total_tokens", None),
                 })
+            return txt
+
+        try:
+            text = _try_once(messages)
+            if text:
                 log.warning("%s; recovered with non-streaming completion", reason)
                 return text
+            # Empty but system role present — retry as user-merged (some templates return empty instead of 500)
+            if any(m.get("role") == "system" for m in messages):
+                try:
+                    alt_empty = self._messages_without_system(messages)
+                    log.warning("Non-streaming empty with system role; retrying without system (%d msgs)", len(alt_empty))
+                    self.last_usage["prompt_messages"] = alt_empty
+                    text_retry = _try_once(alt_empty)
+                    if text_retry:
+                        log.warning("%s; recovered with non-streaming (no-system) after empty", reason)
+                        return text_retry
+                except Exception as e_empty:
+                    log.debug("No-system retry after empty failed: %s", e_empty)
             reason = f"{reason}; non-streaming completion was also empty"
         except Exception as e:
-            reason = f"{reason}; non-streaming fallback failed: {e}"
+            # System-role template error — retry with merged user messages
+            if self._is_system_role_error(e):
+                try:
+                    alt = self._messages_without_system(messages)
+                    log.warning("Fallback system-role rejected; retrying non-streaming with %d user-merged messages", len(alt))
+                    self.last_usage["prompt_messages"] = alt
+                    text2 = _try_once(alt)
+                    if text2:
+                        log.warning("%s; recovered with non-streaming (no-system) completion", reason)
+                        return text2
+                    reason = f"{reason}; non-streaming (no-system) also empty"
+                except Exception as e2:
+                    reason = f"{reason}; non-streaming fallback failed: {e} | retry failed: {e2}"
+            else:
+                reason = f"{reason}; non-streaming fallback failed: {e}"
 
         log.error(reason)
         return f"[LLM error] {reason}"

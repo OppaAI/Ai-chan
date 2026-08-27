@@ -123,9 +123,56 @@ async def fetch_kp_index(client: httpx.AsyncClient) -> Optional[float]:
         resp = await client.get(KP_INDEX_URL, timeout=15)
         resp.raise_for_status()
         rows = resp.json()
-        if len(rows) < 2:
+        if not rows:
             return None
-        return float(rows[-1][1])
+        # NOAA has changed the payload format over time:
+        #  - Old: list-of-lists with header row, e.g. [["time_tag","kp",...], ["2024-...", 2.0]]
+        #  - New: list-of-dicts with "Kp" field, e.g. [{"time_tag":"2026-...","Kp":2.67,...}]
+        # Handle both (and case variants) without raising KeyError:1.
+        last = rows[-1]
+        if isinstance(last, dict):
+            for key in ("Kp", "kp", "KP", "kP", "Kp_index", "kp_index"):
+                if key in last:
+                    try:
+                        return float(last[key])
+                    except (TypeError, ValueError):
+                        continue
+            # Dict but Kp under different casing or nested? Try case-insensitive.
+            for k, v in last.items():
+                if k.lower() == "kp":
+                    try:
+                        return float(v)
+                    except (TypeError, ValueError):
+                        continue
+            # No Kp field — maybe wrapped payload {"data": [...]} or empty
+            return None
+        if isinstance(last, (list, tuple)):
+            # Old header format: header may still be present at rows[0]
+            # If payload is list-of-lists, last[1] is Kp.
+            if len(last) > 1:
+                try:
+                    return float(last[1])  # type: ignore[index]
+                except (TypeError, ValueError, KeyError, IndexError):
+                    pass
+            # Fallback: scan last row for first float-like value
+            for v in last:
+                try:
+                    fv = float(v)  # type: ignore[arg-type]
+                    # Kp is 0-9, so reasonable sanity check
+                    if 0 <= fv <= 9:
+                        return fv
+                except (TypeError, ValueError):
+                    continue
+            return None
+        # Unexpected top-level type (e.g. dict wrapping {"kp":...})
+        if isinstance(rows, dict):
+            for key in ("Kp", "kp", "KP"):
+                if key in rows:
+                    try:
+                        return float(rows[key])  # type: ignore[index]
+                    except (TypeError, ValueError):
+                        continue
+        return None
     except Exception:
         logger.exception("Kp index fetch failed")
         return None
