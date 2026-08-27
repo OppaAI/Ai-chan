@@ -45,7 +45,6 @@ dependencies = [
     "pysqlcipher3==1.2.0",
     "mcp>=1.29.0",
     "fastmcp>=3.4.6",
-    "onnxruntime-gpu>=1.27.0",
 ]
 
 [project.optional-dependencies]
@@ -79,5 +78,5 @@ line-length = 200
 target-version = "py312"
 
 [tool.ruff.lint]
-select = ["E", "F", "W"]
+select = ["E", "F", "W", "UP", "SIM", "B"]
 ignore = ["E402"]  # main.py intentionally imports after load_config() runs

@@ -72,14 +72,14 @@ import warnings                               # for filtering out the warning me
 warnings.filterwarnings("ignore", category=FutureWarning, module="transformers")
 
 import argparse                               # for parsing CLI arguments
-import sys                                    # for assigning exit code
+import sys  # noqa: F401                       # for assigning exit code (kept for compatibility; main() now returns int via raise SystemExit)
 import os as _os                              # for intercepting hard exits
 import traceback as _tb                       # for logging exit origins
 
 _real_os_exit = _os._exit                     # keep the real hard-exit handle
 
 
-def _setup_exit_logging(log):
+def _setup_exit_logging(log) -> None:  # type: ignore[no-untyped-def]
     """Apply os._exit() wrapper for diagnostic logging (only if AIKO_TRACE_EXIT=1)."""
     if _os.environ.get("AIKO_TRACE_EXIT") != "1":
         return
@@ -96,7 +96,7 @@ def _setup_exit_logging(log):
     _os._exit = _logged_os_exit               # patch applied; any code saving _os._exit before this bypasses logging
 
 
-def _run_trapped(log, label, fn):
+def _run_trapped(log, label, fn) -> None:  # type: ignore[no-untyped-def]
     """Run a function with fatal-error logging; re-raise on exception."""
     try:
         fn()
@@ -116,16 +116,55 @@ def parse_args() -> argparse.Namespace:
                    help="show memory hits each turn, and enable verbose console logging (sets LOG_CONSOLE=1, LOG_LEVEL=DEBUG)")
     p.add_argument("--cli",       action="store_true",            # launch in CLI
                    help="use the plain no-curses CLI instead of the WebUI — for local testing only")
-    p.add_argument("--clear-mem", action="store_true",            # wipe out all memory and exit
+    g = p.add_mutually_exclusive_group()      # prevent conflicting exits (industrial: --clear-mem vs --logout)
+    g.add_argument("--clear-mem", action="store_true",            # wipe out all memory and exit
                    help="WARNING: irreversibly wipes all stored memories, then exits")
-    p.add_argument("--logout",   action="store_true",             # logout user session
+    g.add_argument("--logout",   action="store_true",             # logout user session
                    help="clear stored CLI auth token and exit")
     p.add_argument("--name",     type=str, default="",            # for use in CLI mode without OAuth setup
                    help="set display name (CLI mode only, ignored with GitHub OAuth)")
-    return p.parse_args()                                         # return namespace of the arguments
+    p.add_argument("--version", action="version", version="%(prog)s 0.1.5")  # for industrial CLI --version
+    args = p.parse_args()                                         # return namespace of the arguments
+    if args.name and not args.cli:            # validate display name only meaningful in CLI (industrial: early fail)
+        p.error("--name requires --cli")
+    return args
 
 
-def main():
+def _handle_clear_mem(log) -> int:  # type: ignore[no-untyped-def]
+    """Handle --clear-mem branch (extracted to reduce main() complexity C901)."""
+    try:
+        confirm = input("WARNING: This will permanently erase all memories. Continue? [y/N]: ").strip().lower()  # prompt for user confirm memory wiping
+    except (EOFError, KeyboardInterrupt):           # Ctrl-D or Ctrl-C during prompt
+        print("\nAborted.")                         # quiet abort message
+        return 0                                 # exit code 0
+    if confirm != "y":                              # anything other than explicit 'y' aborts
+        print("Aborted memory clear.")              # user-facing message
+        return 0                                 # exit code 0 (user chose to abort, not an error)
+    log.info("Clearing all memories...")            # log success info
+    from cognition.memory.memorize import AikoMemorize  # deferred — heavy memory stack, only needed for --clear-mem
+
+    def do_wipe():
+        """Initialize memory system and clear all stored memories."""
+        mem = AikoMemorize()                        # load memory system
+        mem.clear()                                 # wipe out memory
+
+    _run_trapped(log, "memory wipe (--clear-mem)", do_wipe)
+    log.info("Memory cleared.")                     # log completion
+    return 0                                     # exit code 0
+
+
+def _handle_logout(log) -> int:  # type: ignore[no-untyped-def]
+    """Handle --logout branch (extracted to reduce main() complexity)."""
+    try:
+        from interface.cli.cli import handle_logout  # load CLI logout handler (may fail if CLI deps missing)
+    except ImportError as e:
+        log.error("Could not load CLI logout handler (missing dependencies?): %s", e)
+        return 1
+    _run_trapped(log, "handle_logout()", handle_logout)
+    return 0                                     # exit code 0
+
+
+def main() -> int:
     """Primary entry point for the Aiko-chan application."""
     # Parse args FIRST — --debug needs to set LOG_CONSOLE/LOG_LEVEL in the
     # environment before system.log's root logger is configured below.
@@ -147,34 +186,10 @@ def main():
     _setup_exit_logging(log)
 
     if args.clear_mem:                                  # if clear memory argument set
-        try:
-            confirm = input("WARNING: This will permanently erase all memories. Continue? [y/N]: ").strip().lower()  # prompt for user confirm memory wiping
-        except (EOFError, KeyboardInterrupt):           # Ctrl-D or Ctrl-C during prompt
-            print("\nAborted.")                         # quiet abort message
-            sys.exit(0)                                 # exit code 0
-        if confirm != "y":                              # anything other than explicit 'y' aborts
-            print("Aborted memory clear.")              # user-facing message
-            sys.exit(0)                                 # exit code 0 (user chose to abort, not an error)
-        log.info("Clearing all memories...")            # log success info
-        from cognition.memory.memorize import AikoMemorize  # deferred — heavy memory stack, only needed for --clear-mem
-
-        def do_wipe():
-            """Initialize memory system and clear all stored memories."""
-            mem = AikoMemorize()                        # load memory system
-            mem.clear()                                 # wipe out memory
-
-        _run_trapped(log, "memory wipe (--clear-mem)", do_wipe)
-        log.info("Memory cleared.")                     # log completion
-        sys.exit(0)                                     # exit code 0
+        return _handle_clear_mem(log)
 
     if args.logout:                                     # if logout argument set
-        try:
-            from interface.cli.cli import handle_logout  # load CLI logout handler (may fail if CLI deps missing)
-        except ImportError as e:
-            log.error("Could not load CLI logout handler (missing dependencies?): %s", e)
-            sys.exit(1)
-        _run_trapped(log, "handle_logout()", handle_logout)
-        sys.exit(0)                                     # exit code 0
+        return _handle_logout(log)
 
     try:                                                # one shared fatal-error trap for both front ends:
         if args.cli:                                    # SystemExit in the main thread exits SILENTLY (no traceback),
@@ -195,7 +210,8 @@ def main():
     except Exception:                                   # any other fatal error (not BaseException to avoid catching asyncio cancels)
         log.exception("[main] fatal error escaped the session loop")  # full traceback to aiko.log
         raise                                           # re-raise after logging
+    return 0
 
 
 if __name__ == "__main__":
-    main()                                              # start the entry point
+    raise SystemExit(main())                                              # start the entry point
