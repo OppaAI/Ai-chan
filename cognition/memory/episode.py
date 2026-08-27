@@ -602,7 +602,6 @@ class EpisodicStore:
             item = self._embed_queue.get()
             try:
                 if item is None:
-                    self._embed_queue.task_done()
                     return
                 storage_id, trace = item
                 vec = list(self._embedder.embed([trace]))[0]
