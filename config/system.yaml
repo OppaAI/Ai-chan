@@ -61,6 +61,7 @@ CATCHUP_MAX_LOOKBACK_DAYS: "7"  # Maximum days back the scheduler scans for miss
 
 # -- Logging --
 LOG_LEVEL: "INFO"  # Python log level; options: DEBUG, INFO, WARNING, ERROR, CRITICAL.
+LOG_ROTATE_MODE: "size"  # "size" rotates at LOG_MAX_BYTES (default); "time" rotates daily via LOG_ROTATE_WHEN/LOG_ROTATE_INTERVAL. Size fits Aiko's constrained Jetson storage better than calendar-based rotation.
 LOG_MAX_BYTES: "5242880"  # Maximum size of logs/aiko.log before rotation.
 LOG_BACKUP_COUNT: "3"  # Number of rotated log files to keep.
 DB_SIZE_TTL: "1.0"  # Seconds to cache memory DB size in health/vitals display.
