@@ -72,13 +72,28 @@ import warnings                               # for filtering out the warning me
 warnings.filterwarnings("ignore", category=FutureWarning, module="transformers")
 
 import argparse                               # for parsing CLI arguments
-import sys  # noqa: F401                       # for assigning exit code (kept for compatibility; main() now returns int via raise SystemExit)
 import os as _os                              # for intercepting hard exits
 import traceback as _tb                       # for logging exit origins
+from importlib.metadata import PackageNotFoundError, version as _pkg_version  # for --version, single source of truth
 
 _real_os_exit = _os._exit                     # keep the real hard-exit handle
 
 __all__ = ["parse_args", "main"]              # external API — internal defs keep leading _
+
+
+def _resolve_version() -> str:
+    """Read the installed package version from pyproject.toml metadata.
+
+    Avoids hardcoding the version string a second time in argparse (which
+    drifts from pyproject.toml the moment one of the two is bumped and the
+    other isn't). Falls back to a placeholder if the package metadata isn't
+    installed/discoverable (e.g. running straight from a checkout without
+    `pip install -e .`).
+    """
+    try:
+        return _pkg_version("Aiko-chan")       # must match [project].name in pyproject.toml
+    except PackageNotFoundError:
+        return "0.0.0-dev"
 
 
 def _setup_exit_logging(log) -> None:  # type: ignore[no-untyped-def]
@@ -125,7 +140,7 @@ def parse_args() -> argparse.Namespace:
                    help="clear stored CLI auth token and exit")
     p.add_argument("--name",     type=str, default="",            # for use in CLI mode without OAuth setup
                    help="set display name (CLI mode only, ignored with GitHub OAuth)")
-    p.add_argument("--version", action="version", version="%(prog)s 0.1.5")  # for industrial CLI --version
+    p.add_argument("--version", action="version", version=f"%(prog)s {_resolve_version()}")  # reads pyproject.toml via importlib.metadata
     args = p.parse_args()                                         # return namespace of the arguments
     if args.name and not args.cli:            # validate display name only meaningful in CLI (industrial: early fail)
         p.error("--name requires --cli")
