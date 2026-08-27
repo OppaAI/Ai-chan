@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import logging
 import os
+import sys
 import threading
 from contextlib import contextmanager
 from logging.handlers import RotatingFileHandler
