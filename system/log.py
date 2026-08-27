@@ -1,6 +1,14 @@
 """
 system/log.py
+
 Central logger for Aiko-chan.
+
+Usage:
+    from system.log import get_logger
+    log = get_logger(__name__)
+    log.info("Ready.")
+    log.warning("Something looks off.")
+    log.error("Something broke.")
 
 All modules import get_logger() and use it instead of print().
 Output goes to logs/aiko.log only (file) by default. Set LOG_CONSOLE=1
@@ -21,11 +29,11 @@ Controlled by LOG_ROTATE_MODE, either "size" (default) or "time":
   size mode (default):
     - LOG_MAX_BYTES     bytes before rotating aiko.log      (default 5 MiB)
     - LOG_BACKUP_COUNT  how many rotated backups to KEEP    (default 3)
-    Rotation happens the moment a write would push aiko.log past
-    LOG_MAX_BYTES. The current file is renamed aiko.log.1 (existing .1
-    becomes .2, etc). Once more than LOG_BACKUP_COUNT backups exist, the
-    oldest is deleted automatically on the next rotation — nothing else
-    to run, no separate prune step needed.
+  Rotation happens the moment a write would push aiko.log past
+  LOG_MAX_BYTES. The current file is renamed aiko.log.1 (existing .1
+  becomes .2, etc). Once more than LOG_BACKUP_COUNT backups exist, the
+  oldest is deleted automatically on the next rotation — nothing else
+  to run, no separate prune step needed.
 
   time mode:
     - LOG_ROTATE_WHEN      rotation cadence, e.g. "midnight", "D", "H"
@@ -33,38 +41,53 @@ Controlled by LOG_ROTATE_MODE, either "size" (default) or "time":
     - LOG_ROTATE_INTERVAL  how many of the above units between rotations
                            (default 1 -> every day)
     - LOG_BACKUP_COUNT     how many rotated backups to KEEP (default 3)
-    Same pruning behavior as size mode, just triggered by wall-clock time
-    instead of file size: aiko.log.YYYY-MM-DD accumulates one entry per
-    day, and anything older than LOG_BACKUP_COUNT days is deleted the
-    next time a rotation fires. Rotation is checked on the first log call
-    after the interval has passed, not on a background timer — if the
-    boundary is crossed while the process is not logging, rotation occurs
-    on the next write (whether the process remained running or restarted).
+  Same pruning behavior as size mode, just triggered by wall-clock time
+  instead of file size: aiko.log.YYYY-MM-DD accumulates one entry per
+  day, and anything older than LOG_BACKUP_COUNT days is deleted the
+  next time a rotation fires. Rotation is checked on the first log call
+  after the interval has passed, not on a background timer — if the
+  boundary is crossed while the process is not logging, rotation occurs
+  on the next write (whether the process remained running or restarted).
 
   The error-only tail file (aiko.error.log) always rotates by size
   (1 MiB, 2 backups) regardless of LOG_ROTATE_MODE, since it's meant to
   stay small and fast to scan, not to track calendar history.
 
-Usage:
-    from system.log import get_logger
-    log = get_logger(__name__)
-    log.info("Ready.")
-    log.warning("Something looks off.")
-    log.error("Something broke.")
-"""
-from __future__ import annotations
+This module only resolves LOG_LEVEL / LOG_CONSOLE at first get_logger()
+call (not at import time), so main.py's --debug can flip the environment
+before the root logger is configured — see main.py's module docstring for
+why import-time resolution would be too late.
 
-import logging
-import os
-import sys
-import threading
-from contextlib import contextmanager
-from logging.handlers import RotatingFileHandler, TimedRotatingFileHandler
+Flow:
+
+                                      get_logger(__name__)
+                                              │
+                                              ▼
+                                         _setup()  (once, thread-safe)
+                                              │
+                 ┌────────────────┼────────────────┼─────────────────┐
+                 ▼                ▼                ▼                 ▼
+           RotatingFileHandler  RotatingFileHandler  StreamHandler  (LOG_CONSOLE=1)
+            aiko.log (size/time)  aiko.error.log     stdout
+                 │                │                  │
+                 ▼                ▼                  ▼
+            delay=True until first log; rotation per LOG_ROTATE_MODE
+"""
+from __future__ import annotations            # evaluates type annotations later
+
+# Public libraries
+import logging                                # for root logger configuration
+import os                                     # for reading LOG_* environment variables
+import sys                                    # for stderr fallback before logger exists
+import threading                              # for thread-safe one-time setup
+from contextlib import contextmanager         # for silent_stderr() helper
+from logging.handlers import RotatingFileHandler, TimedRotatingFileHandler  # for file rotation
+from pathlib import Path                      # for log directory resolution (py312 modern)
 
 # ── config ────────────────────────────────────────────────────────────────────
-LOG_DIR        = os.path.join(os.path.dirname(os.path.dirname(__file__)), "logs")
-LOG_FILE       = os.path.join(LOG_DIR, "aiko.log")
-ERROR_LOG_FILE = os.path.join(LOG_DIR, "aiko.error.log")
+LOG_DIR        = Path(__file__).resolve().parents[1] / "logs"  # logs/ at repo root
+LOG_FILE       = LOG_DIR / "aiko.log"        # main rotating log file
+ERROR_LOG_FILE = LOG_DIR / "aiko.error.log"  # error-only tail file
 
 _VALID_LEVELS = logging.getLevelNamesMapping()  # py3.11+
 
@@ -101,7 +124,8 @@ _init_lock   = threading.Lock()
 
 # ── setup ─────────────────────────────────────────────────────────────────────
 
-def _make_main_handler(log_level: str, log_max_bytes: int, log_backup_count: int):
+
+def _make_main_handler(log_level: str, log_max_bytes: int, log_backup_count: int) -> RotatingFileHandler | TimedRotatingFileHandler:
     """Build the main rotating file handler per LOG_ROTATE_MODE (size|time)."""
     mode = os.getenv("LOG_ROTATE_MODE", "size").strip().lower()
 
@@ -113,7 +137,7 @@ def _make_main_handler(log_level: str, log_max_bytes: int, log_backup_count: int
             print(f"[log] invalid LOG_ROTATE_WHEN={when!r}, defaulting to 'midnight'", file=sys.stderr)
             when = "midnight"
         interval = _int_env("LOG_ROTATE_INTERVAL", 1)
-        handler = TimedRotatingFileHandler(
+        handler: RotatingFileHandler | TimedRotatingFileHandler = TimedRotatingFileHandler(
             LOG_FILE,
             when=when,
             interval=interval,
@@ -163,7 +187,7 @@ def _setup() -> None:
 
         # Let this module's configured levels decide what gets emitted. A previous
         # process-wide disable() call can otherwise make the file logger look dead.
-        logging.disable(logging.NOTSET)
+        logging.disable(logging.NOTSET)  # resets prior disable() — intentional per module note
 
         root = logging.getLogger()
         root.setLevel(log_level)
@@ -209,7 +233,14 @@ def get_logger(name: str) -> logging.Logger:
 
 @contextmanager
 def silent_stderr():
-    """Redirect fd 2 to /dev/null — silences C-library noise (ALSA, ONNX, PyAudio)."""
+    """Redirect fd 2 to /dev/null — silences C-library noise (ALSA, ONNX, PyAudio).
+
+    NOT thread-safe: globally mutes fd 2 for all threads while active.
+    Use only outside request threads (e.g. during boot model loads), not
+    per-turn inside WebUI handlers — otherwise concurrent callers stomp
+    each other's real_stderr_fd. For per-call suppression prefer
+    contextlib.redirect_stderr() which is thread-local.
+    """
     devnull_fd = os.open(os.devnull, os.O_WRONLY)
     try:
         real_stderr_fd = os.dup(2)
