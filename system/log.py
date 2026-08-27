@@ -15,6 +15,33 @@ Log level is controllable via LOG_LEVEL in .env, or set programmatically
 back to INFO with a one-line warning printed to stderr (the logger
 doesn't exist yet at that point).
 
+── Rotation & pruning ──────────────────────────────────────────────────────
+Controlled by LOG_ROTATE_MODE, either "size" (default) or "time":
+
+  size mode (default):
+    - LOG_MAX_BYTES     bytes before rotating aiko.log      (default 5 MiB)
+    - LOG_BACKUP_COUNT  how many rotated backups to KEEP    (default 3)
+    Rotation happens the moment a write would push aiko.log past
+    LOG_MAX_BYTES. The current file is renamed aiko.log.1 (existing .1
+    becomes .2, etc). Once more than LOG_BACKUP_COUNT backups exist, the
+    oldest is deleted automatically on the next rotation — nothing else
+    to run, no separate prune step needed.
+
+  time mode:
+    - LOG_ROTATE_WHEN      rotation cadence, e.g. "midnight", "D", "H"
+                           (default "midnight" — once per day)
+    - LOG_ROTATE_INTERVAL  how many of the above units between rotations
+                           (default 1 -> every day)
+    - LOG_BACKUP_COUNT     how many rotated backups to KEEP (default 3)
+    Same pruning behavior as size mode, just triggered by wall-clock time
+    instead of file size: aiko.log.YYYY-MM-DD accumulates one entry per
+    day, and anything older than LOG_BACKUP_COUNT days is deleted the
+    next time a rotation fires.
+
+  The error-only tail file (aiko.error.log) always rotates by size
+  (1 MiB, 2 backups) regardless of LOG_ROTATE_MODE, since it's meant to
+  stay small and fast to scan, not to track calendar history.
+
 Usage:
     from system.log import get_logger
     log = get_logger(__name__)
@@ -29,7 +56,7 @@ import os
 import sys
 import threading
 from contextlib import contextmanager
-from logging.handlers import RotatingFileHandler
+from logging.handlers import RotatingFileHandler, TimedRotatingFileHandler
 
 # ── config ────────────────────────────────────────────────────────────────────
 LOG_DIR        = os.path.join(os.path.dirname(os.path.dirname(__file__)), "logs")
@@ -71,6 +98,36 @@ _init_lock   = threading.Lock()
 
 # ── setup ─────────────────────────────────────────────────────────────────────
 
+def _make_main_handler(log_level: str, log_max_bytes: int, log_backup_count: int):
+    """Build the main rotating file handler per LOG_ROTATE_MODE (size|time)."""
+    mode = os.getenv("LOG_ROTATE_MODE", "size").strip().lower()
+
+    if mode == "time":
+        when = os.getenv("LOG_ROTATE_WHEN", "midnight")
+        interval = _int_env("LOG_ROTATE_INTERVAL", 1)
+        handler = TimedRotatingFileHandler(
+            LOG_FILE,
+            when=when,
+            interval=interval,
+            backupCount=log_backup_count,
+            encoding="utf-8",
+            delay=True,
+        )
+    else:
+        if mode != "size":
+            print(f"[log] invalid LOG_ROTATE_MODE={mode!r}, defaulting to 'size'", file=sys.stderr)
+        handler = RotatingFileHandler(
+            LOG_FILE,
+            maxBytes=log_max_bytes,
+            backupCount=log_backup_count,
+            encoding="utf-8",
+            delay=True,
+        )
+
+    handler.setLevel(log_level)
+    return handler
+
+
 def _setup() -> None:
     """Configure root logger once. Subsequent calls are no-ops.
 
@@ -105,20 +162,15 @@ def _setup() -> None:
 
         fmt = logging.Formatter(_FORMAT, datefmt=_DATE_FMT)
 
-        # Main file handler — rotating, never pollutes stdout.
-        # delay=True: don't create/touch aiko.log until something is actually logged.
-        fh = RotatingFileHandler(
-            LOG_FILE,
-            maxBytes=log_max_bytes,
-            backupCount=log_backup_count,
-            encoding="utf-8",
-            delay=True,
-        )
-        fh.setLevel(log_level)
+        # Main file handler — rotating (size or time, see module docstring),
+        # never pollutes stdout. delay=True: don't create/touch aiko.log
+        # until something is actually logged.
+        fh = _make_main_handler(log_level, log_max_bytes, log_backup_count)
         fh.setFormatter(fmt)
         root.addHandler(fh)
 
         # Error-only tail file — small, fast to scan after a bad session.
+        # Always size-based regardless of LOG_ROTATE_MODE (see docstring).
         err_fh = RotatingFileHandler(
             ERROR_LOG_FILE,
             maxBytes=1 * 1024 * 1024,
@@ -150,8 +202,12 @@ def get_logger(name: str) -> logging.Logger:
 @contextmanager
 def silent_stderr():
     """Redirect fd 2 to /dev/null — silences C-library noise (ALSA, ONNX, PyAudio)."""
-    devnull_fd      = os.open(os.devnull, os.O_WRONLY)
-    real_stderr_fd  = os.dup(2)
+    devnull_fd = os.open(os.devnull, os.O_WRONLY)
+    try:
+        real_stderr_fd = os.dup(2)
+    except OSError:
+        os.close(devnull_fd)
+        raise
     try:
         os.dup2(devnull_fd, 2)
         yield
