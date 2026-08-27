@@ -1,33 +1,69 @@
-"""Configuration bootstrap for Aiko.
+"""
+system/config.py
+
+Configuration bootstrap for Aiko.
+
+Usage:
+    from system.config import load_config, load_yaml
+    load_config()  # once at startup
+    data = load_yaml("memory.yaml")
+
 Loads non-secret defaults from category YAML files and local values from an
 age-encrypted .env.age. Real process environment variables win over both, and
 YAML wins over stale .env constants while .env still fills in secrets or
 deployment-specific gaps.
-"""
-from __future__ import annotations
 
-import io
-import json
-import os
-import subprocess
-import threading
-from pathlib import Path
-from typing import Any
+Precedence is:
+    1. Real process environment variables, unless override=True.
+    2. Non-secret YAML constants from config/*.yaml.
+    3. Values from .env.age that YAML did not already define.
+
+This module only resolves YAML/.env.age at load_config() call (not at import
+time), so main.py can call it once near startup before any subsystem init
+— see main.py's module docstring for why import-time resolution would be
+too late.
+
+Flow:
+
+                                      load_config()
+                                           │
+              ┌────────────────┼────────────────┼─────────────────┐
+              ▼                ▼                ▼                 ▼
+         config/*.yaml    .env.age (age)    .env (fallback)   os.environ
+              │                │                │                 │
+              ▼                ▼                ▼                 ▼
+         _flatten+_stringify → os.environ (if not in original_env / override)
+                                           │
+                                           ▼
+                                      _LOADED = True  (guarded by _load_lock)
+"""
+from __future__ import annotations            # evaluates type annotations later
+
+# Public libraries
+import io                                     # for in-memory age decrypt buffer
+import json                                   # for list stringify + JSON YAML fallback
+import os                                     # for os.environ precedence
+import subprocess                             # for age decrypt subprocess
+import threading                              # for thread-safe one-time load
+from pathlib import Path                      # for config/state path resolution
+from typing import Any                        # for YAML value types
 
 try:
-    import yaml
+    import yaml                               # for YAML parsing (preferred)
 except ImportError:  # pragma: no cover - lightweight fallback for minimal tooling envs
     yaml = None
 
 
 try:
-    from dotenv import dotenv_values
+    from dotenv import dotenv_values          # for .env parsing
 except ImportError:  # pragma: no cover - optional dependency fallback
-    def dotenv_values(*_args, **_kwargs):
+    def dotenv_values(*_args: Any, **_kwargs: Any) -> dict[str, str | None]:  # type: ignore[no-redef]
         return {}
 
 _LOADED = False
 _load_lock = threading.Lock()
+
+__all__ = ["load_config", "load_yaml"]        # external API — internal defs keep leading _
 
 # Timeout for the `age` decrypt subprocess. If the binary hangs (bad
 # identity file, unexpected passphrase prompt, etc.) this turns a silent
@@ -99,10 +135,7 @@ def _load_yaml_mapping(path: Path) -> dict[str, Any]:
                 break
         body = "\n".join(lines[start:])
         stripped = body.lstrip()
-        if stripped.startswith("{") or stripped.startswith("["):
-            data = json.loads(body)
-        else:
-            data = _simple_yaml_load(text)
+        data = json.loads(body) if stripped.startswith(("{", "[")) else _simple_yaml_load(text)  # merge startswith tuple (py312)
     return data or {}
 
 
@@ -144,10 +177,8 @@ def _decrypt_env(enc_path: Path, identity_path: Path) -> dict[str, str]:
     if not enc_path.exists():
         return {}
     if not identity_path.exists():
-        raise FileNotFoundError(
-            f"age identity file not found: {identity_path}. "
-            "Set AGE_KEY to point at it, or place .env.age's key there."
-        )
+        msg = f"age identity file not found: {identity_path}. Set AGE_KEY to point at it, or place .env.age's key there."  # for FileNotFoundError
+        raise FileNotFoundError(msg)
     try:
         result = subprocess.run(
             ["age", "-d", "-i", str(identity_path), str(enc_path)],
@@ -170,7 +201,8 @@ def _decrypt_env(enc_path: Path, identity_path: Path) -> dict[str, str]:
         raise RuntimeError(
             f"failed to decrypt {enc_path}: {exc.stderr.decode(errors='replace')}"
         ) from exc
-    return dict(dotenv_values(stream=io.StringIO(result.stdout.decode(errors="replace"))))
+    vals = dotenv_values(stream=io.StringIO(result.stdout.decode(errors="replace")))
+    return {k: v for k, v in vals.items() if v is not None}
 
 
 def load_config(*, override: bool = False) -> None:

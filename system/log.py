@@ -89,6 +89,8 @@ LOG_DIR        = Path(__file__).resolve().parents[1] / "logs"  # logs/ at repo r
 LOG_FILE       = LOG_DIR / "aiko.log"        # main rotating log file
 ERROR_LOG_FILE = LOG_DIR / "aiko.error.log"  # error-only tail file
 
+__all__ = ["get_logger", "silent_stderr", "LOG_DIR", "LOG_FILE", "ERROR_LOG_FILE"]  # external API — internal defs keep leading _
+
 _VALID_LEVELS = logging.getLevelNamesMapping()  # py3.11+
 
 

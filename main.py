@@ -78,6 +78,8 @@ import traceback as _tb                       # for logging exit origins
 
 _real_os_exit = _os._exit                     # keep the real hard-exit handle
 
+__all__ = ["parse_args", "main"]              # external API — internal defs keep leading _
+
 
 def _setup_exit_logging(log) -> None:  # type: ignore[no-untyped-def]
     """Apply os._exit() wrapper for diagnostic logging (only if AIKO_TRACE_EXIT=1)."""
