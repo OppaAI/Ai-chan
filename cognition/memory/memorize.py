@@ -1390,6 +1390,7 @@ class _MemoryBackend:
             log.debug("session anchor prep skipped: %s", _sess_exc)
 
         def final_score(mem_id: str) -> float:
+            """Compute reciprocal rank fusion score with recency and access boosts."""
             knn = rank_knn.get(mem_id, 0)
             fts = rank_fts.get(mem_id, 0)
             graph = rank_graph.get(mem_id, 0)
@@ -1781,9 +1782,11 @@ class _MemoryBackend:
                 }
 
     def get_all(self, user_id: str) -> list[dict]:
+        """Return all memories for a user as a list."""
         return list(self.iter_all(user_id=user_id))
 
     def get_since(self, since: datetime, user_id: str | None = None) -> list[dict]:
+        """Return all memories created after the given datetime."""
         user_id = user_id or self._user_id
         with self._db_lock:
             rows = self._conn.execute(
@@ -1797,6 +1800,7 @@ class _MemoryBackend:
         return [dict(r) for r in rows]
 
     def get_between(self, start: datetime, end: datetime, user_id: str | None = None, limit: int = 0) -> list[dict]:
+        """Return memories created within a datetime range, optionally limited."""
         user_id = user_id or self._user_id
         sql = """
             SELECT * FROM memories
@@ -1812,6 +1816,7 @@ class _MemoryBackend:
         return [dict(r) for r in rows]
       
     def get_by_id(self, mem_id: str, user_id: str | None = None) -> dict | None:
+        """Return a single memory by ID, or None if not found."""
         uid = user_id  # require user_id from caller for safety
         with self._db_lock:
             row = self._conn.execute(
@@ -1826,6 +1831,7 @@ class _MemoryBackend:
         return dict(row) if row else None
 
     def find_by_supersedes(self, mem_id: str, user_id: str | None = None) -> list[dict]:
+        """Return all memories that supersede the given memory ID."""
         with self._db_lock:
             rows = self._conn.execute(
                 """
@@ -1864,6 +1870,7 @@ class _MemoryBackend:
             self._invalidate_entity_importance(user_id["user_id"])
 
     def delete_all(self, user_id: str) -> None:
+        """Delete all memories and vectors for a user."""
         with self._db_lock:
             self._conn.execute(
                 "DELETE FROM memories_vec WHERE id IN (SELECT id FROM memories WHERE user_id = ?)",
@@ -2044,6 +2051,7 @@ class AikoMemorize:
         self._conn.commit()
 
     def switch_user(self, user_id: str) -> None:
+        """Switch to a different user's memory store after draining pending writes."""
         with self._user_switch_lock:
             # Drain any pending writes first. If a write is still in flight when
             # we close the connection and reassign self._mem below, the
@@ -2513,10 +2521,12 @@ class AikoMemorize:
         return scene_id
 
     def list_scenes(self, user_id: str | None = None, limit: int = SCENE_CONTEXT_LIMIT) -> list[dict]:
+        """Return recent scenes (long-running episodes) for a user."""
         user_id = self._resolve_user_id(user_id)
         return self._mem.list_scenes(user_id, limit=limit)
 
     def scene_members(self, scene_id: str, user_id: str | None = None, limit: int = SCENE_MEMBER_LIMIT) -> list[dict]:
+        """Return memories that are members of a given scene."""
         user_id = self._resolve_user_id(user_id)
         return self._mem.scene_members(scene_id, user_id, limit=limit)
 
@@ -3387,21 +3397,21 @@ class AikoMemorize:
         _all_mems: list[dict] | None = None,
         _pinned_ids: set[str] | None = None,
     ) -> dict:
-        # Lazy guest boot: pruning a throwaway tempfile DB that was never
-        # written to is pure waste — and touching self._mem here would
-        # materialize it. No backend open yet + guest identity → no-op.
-        if self._mem_backend is None and (user_id or self.get_user_id()) == "guest":
-            return {"pruned": 0, "skipped": "guest (no store open)"}
         """
         Prune decayed memories below threshold score.
         Grace period (default 35 days) protects newly created memories.
         Pinned memories are unconditionally kept.
 
-        _all_mems: internal — when called from dream(), the already-fetched
+        _all_mems: internal - when called from dream(), the already-fetched
         memory list is passed through here to avoid a redundant get_all() scan.
 
         Returns dict: {deleted, kept, failed, candidates (dry_run only)}.
         """
+        # Lazy guest boot: pruning a throwaway tempfile DB that was never
+        # written to is pure waste — and touching self._mem here would
+        # materialize it. No backend open yet + guest identity → no-op.
+        if self._mem_backend is None and (user_id or self.get_user_id()) == "guest":
+            return {"pruned": 0, "skipped": "guest (no store open)"}
         user_id = self._resolve_user_id(user_id)
         source = [_all_mems] if _all_mems is not None else self._iter_memory_batches(user_id)
 
@@ -3634,6 +3644,7 @@ class AikoMemorize:
         }
 
     def optimize(self) -> None:
+        """Run SQLite PRAGMA optimize to rebuild query planner statistics."""
         with self._mem._db_lock:
             try:
                 self._conn.execute("PRAGMA optimize")
@@ -3689,6 +3700,7 @@ class AikoMemorize:
         return self._mem.get_between(start, end, user_id=user_id)
       
     def get_lineage(self, mem_id: str, user_id: str | None = None) -> dict:
+        """Return the full supersession lineage chain for a memory."""
         from cognition.memory.lineage import walk_supersession_lineage
         uid = user_id or self.get_user_id()
         store = self._mem

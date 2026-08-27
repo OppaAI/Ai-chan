@@ -496,18 +496,21 @@ class ProactiveIdleRunner:
         self._thread: threading.Thread | None = None
 
     def start(self) -> None:
+        """Start the proactive message thread if enabled."""
         if PROACTIVE_FIRST_IDLE_MAX_SECONDS <= 0:
             return
         self._thread = threading.Thread(target=self._loop, name="aiko-proactive", daemon=True)
         self._thread.start()
 
     def stop(self) -> None:
+        """Stop the proactive message thread and wait for it to finish."""
         self._stop.set()
         self._wakeup.set()
         if self._thread and self._thread.is_alive():
             self._thread.join(timeout=2.0)
 
     def touch(self) -> None:
+        """Record user activity and reset the idle timer."""
         with self._lock:
             self._last_activity = time.monotonic()
             self._next_checkin_after = self._random_first_idle_delay()
@@ -517,6 +520,7 @@ class ProactiveIdleRunner:
         self._wakeup.set()
 
     def set_enabled(self, enabled: bool) -> None:
+        """Enable or disable proactive messages and reset the idle timer."""
         with self._lock:
             self._enabled = enabled
             self._last_activity = time.monotonic()
@@ -527,6 +531,7 @@ class ProactiveIdleRunner:
         self._wakeup.set()
 
     def is_enabled(self) -> bool:
+        """Return whether proactive messages are currently enabled."""
         with self._lock:
             return self._enabled
 
@@ -898,6 +903,7 @@ def run_session(ui, args) -> None:
     _sentence_buf: list[str] = []
 
     def token_cb(token):
+        """Handle each streaming token from the LLM response."""
         nonlocal last_stream_draw, _sentence_buf
         now = time.monotonic()
         stripped = token.rstrip("\r\n") if token else ""

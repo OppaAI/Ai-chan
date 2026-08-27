@@ -124,6 +124,7 @@ def quick_studying(
     model: str | None = None,
     embedder=None,
 ) -> str:
+    """Perform quick research on a topic with a limited number of rounds."""
     return deep_research(topic, client=client, model=model, embedder=embedder,
                           max_rounds=QUICK_STUDY_MAX_ROUNDS, tool_mode=True)
 
@@ -283,6 +284,7 @@ class _HostRateLimiter:
         self._lock = threading.Lock()
 
     def wait(self, url: str) -> None:
+        """Enforce minimum interval between requests to the same host."""
         host = urlparse(url).hostname or ""
         if not host or self._min_interval <= 0:
             return
@@ -346,16 +348,19 @@ class _ScratchStore:
         self._conn.commit()
 
     def has_page(self, url: str) -> bool:
+        """Check if a page URL has already been fetched."""
         with self._lock:
             row = self._conn.execute("SELECT 1 FROM pages WHERE url = ?", (url,)).fetchone()
         return row is not None
 
     def get_page_text(self, url: str) -> str | None:
+        """Retrieve the cached text content for a URL."""
         with self._lock:
             row = self._conn.execute("SELECT text FROM pages WHERE url = ?", (url,)).fetchone()
         return row[0] if row else None
 
     def save_page(self, url: str, text: str) -> None:
+        """Store fetched page text for a URL."""
         with self._lock:
             self._conn.execute(
                 "INSERT OR REPLACE INTO pages (url, text, fetched_at) VALUES (?, ?, ?)",
@@ -364,6 +369,7 @@ class _ScratchStore:
             self._conn.commit()
 
     def save_chunk(self, url: str, chunk: str, chunk_hash: str, embedding: list[float] | None, query: str) -> None:
+        """Store a text chunk with its embedding and source query."""
         embedding_json = json.dumps(embedding) if embedding is not None else None
         with self._lock:
             try:
@@ -376,6 +382,7 @@ class _ScratchStore:
                 log.debug("deep_study: duplicate chunk_hash, skipping")
 
     def all_chunks(self, limit: int = 0, desc: bool = False) -> list[tuple[str, str, list[float] | None]]:
+        """Return all stored chunks with their URLs and embeddings."""
         sql = "SELECT url, chunk, embedding FROM chunks"
         if desc:
             sql += " ORDER BY id DESC"
@@ -390,11 +397,13 @@ class _ScratchStore:
         return out
 
     def chunk_count(self) -> int:
+        """Return the total number of stored chunks."""
         with self._lock:
             row = self._conn.execute("SELECT COUNT(*) FROM chunks").fetchone()
         return row[0] if row else 0
 
     def close_and_delete(self) -> None:
+        """Close the scratch database and delete the file."""
         try:
             self._conn.close()
         except Exception:
@@ -789,10 +798,12 @@ class _DeepStudySessionManager:
         self._stop_event: threading.Event | None = None
 
     def is_running(self) -> bool:
+        """Check if a deep study session is currently active."""
         with self._lock:
             return self._thread is not None and self._thread.is_alive()
 
     def start(self, memorize, client=None, model=None, topic: str | None = None, user_id: str | None = None) -> None:
+        """Start a deep study session on a topic in a background thread."""
         with self._lock:
             if self._thread is not None and self._thread.is_alive():
                 log.info("[deep_study_window] start requested but a session is already running — skipping.")
@@ -836,6 +847,7 @@ class _DeepStudySessionManager:
         thread.start()
 
     def stop(self, memorize=None) -> None:
+        """Signal the active deep study session to stop gracefully."""
         with self._lock:
             stop_event = self._stop_event
         if stop_event is not None:

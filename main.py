@@ -159,6 +159,7 @@ def main():
         from cognition.memory.memorize import AikoMemorize  # deferred — heavy memory stack, only needed for --clear-mem
 
         def do_wipe():
+            """Initialize memory system and clear all stored memories."""
             mem = AikoMemorize()                        # load memory system
             mem.clear()                                 # wipe out memory
 

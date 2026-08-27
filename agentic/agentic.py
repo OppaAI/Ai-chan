@@ -623,6 +623,7 @@ class TaskState:
     failures: list[ToolResult] = field(default_factory=list)
 
     def record(self, result: ToolResult) -> None:
+        """Record a tool execution result and update agent state."""
         try:
             from cognition.memory.edge_state import for_identity
             from system.userspace import current_user_id
@@ -646,6 +647,7 @@ class TaskState:
             self.failures.append(result)
 
     def summary(self) -> str:
+        """Generate a JSON summary of the agentic plan execution."""
         payload = {
             "goal": self.goal,
             "completed_tools": [s for s in self.steps if s["ok"]],
@@ -699,6 +701,7 @@ def _bootstrap_tool_registry() -> None:
 
 @tool(TOOLS["final_answer"])
 def final_answer(answer: str) -> str:
+    """Return the final answer from the agentic workflow."""
     return answer
 
 
