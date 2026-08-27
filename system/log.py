@@ -36,7 +36,10 @@ Controlled by LOG_ROTATE_MODE, either "size" (default) or "time":
     Same pruning behavior as size mode, just triggered by wall-clock time
     instead of file size: aiko.log.YYYY-MM-DD accumulates one entry per
     day, and anything older than LOG_BACKUP_COUNT days is deleted the
-    next time a rotation fires.
+    next time a rotation fires. Rotation is checked on the first log call
+    after the interval has passed, not on a background timer — if the
+    process isn't running or isn't logging when the boundary is crossed,
+    rotation simply happens on the next write after restart instead.
 
   The error-only tail file (aiko.error.log) always rotates by size
   (1 MiB, 2 backups) regardless of LOG_ROTATE_MODE, since it's meant to
@@ -104,6 +107,11 @@ def _make_main_handler(log_level: str, log_max_bytes: int, log_backup_count: int
 
     if mode == "time":
         when = os.getenv("LOG_ROTATE_WHEN", "midnight")
+        _valid_when = {"S", "M", "H", "D", "MIDNIGHT",
+                       "W0", "W1", "W2", "W3", "W4", "W5", "W6"}
+        if when.upper() not in _valid_when:
+            print(f"[log] invalid LOG_ROTATE_WHEN={when!r}, defaulting to 'midnight'", file=sys.stderr)
+            when = "midnight"
         interval = _int_env("LOG_ROTATE_INTERVAL", 1)
         handler = TimedRotatingFileHandler(
             LOG_FILE,
