@@ -46,8 +46,8 @@ Flow:
   AikoMemorize()    handle_logout()    run_cli(args)  run_webui(args)
      .clear()            │                │                 │
         │                ▼                ▼                 ▼
-        ▼           sys.exit(0)   boot inside      AikoWeb(defer_servers=True)
-   sys.exit(0)                    run_session(),    boot runs to completion,
+        ▼           SystemExit(0)  boot inside      AikoWeb(defer_servers=True)
+   SystemExit(0)                   run_session(),    boot runs to completion,
                                     then turn loop    THEN server opens; post-auth
                                                       init via system/prepare.py
 
