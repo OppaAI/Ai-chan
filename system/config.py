@@ -10,6 +10,7 @@ import io
 import json
 import os
 import subprocess
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -26,6 +27,12 @@ except ImportError:  # pragma: no cover - optional dependency fallback
         return {}
 
 _LOADED = False
+_load_lock = threading.Lock()
+
+# Timeout for the `age` decrypt subprocess. If the binary hangs (bad
+# identity file, unexpected passphrase prompt, etc.) this turns a silent
+# boot-time hang into a fast, diagnosable failure.
+_AGE_TIMEOUT_SECONDS = 10
 
 
 def _strip_comment(line: str) -> str:
@@ -52,10 +59,16 @@ def _simple_yaml_load(text: str) -> dict[str, Any]:
             continue
         stripped = line.strip()
         if stripped.startswith("-") and current_key:
+            existing = data.get(current_key)
             if current_key in pending_empty:
                 data[current_key] = []
                 pending_empty.discard(current_key)
-            data.setdefault(current_key, []).append(stripped[1:].strip().strip('"\''))
+            elif not isinstance(existing, list):
+                # Malformed/mixed YAML (scalar followed by a "- item" line
+                # under the same key) — don't crash the whole config load
+                # over a hand-edited typo; start a fresh list instead.
+                data[current_key] = []
+            data[current_key].append(stripped[1:].strip().strip('"\''))
             continue
         if ":" not in line:
             continue
@@ -140,17 +153,24 @@ def _decrypt_env(enc_path: Path, identity_path: Path) -> dict[str, str]:
             ["age", "-d", "-i", str(identity_path), str(enc_path)],
             capture_output=True,
             check=True,
+            timeout=_AGE_TIMEOUT_SECONDS,
         )
     except FileNotFoundError as exc:
         raise RuntimeError(
             "the 'age' binary was not found on PATH; install it "
             "(e.g. `sudo apt install age`)"
         ) from exc
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError(
+            f"decrypting {enc_path} timed out after {_AGE_TIMEOUT_SECONDS}s "
+            "(age may be waiting on an unexpected prompt, or the identity "
+            "file/binary is misbehaving)"
+        ) from exc
     except subprocess.CalledProcessError as exc:
         raise RuntimeError(
             f"failed to decrypt {enc_path}: {exc.stderr.decode(errors='replace')}"
         ) from exc
-    return dict(dotenv_values(stream=io.StringIO(result.stdout.decode())))
+    return dict(dotenv_values(stream=io.StringIO(result.stdout.decode(errors="replace"))))
 
 
 def load_config(*, override: bool = False) -> None:
@@ -165,70 +185,79 @@ def load_config(*, override: bool = False) -> None:
     while preserving .env.age as the local place for tokens, keys, URLs,
     DSNs, and other deployment-specific values whose names may not follow a
     strict pattern.
+
+    Thread-safe: guarded by _load_lock so concurrent callers can't both
+    pass the _LOADED check and run the full load twice. Currently called
+    once, synchronously, near the top of main() before any other thread
+    exists — this guard is here so that stays true if that ever changes.
     """
     global _LOADED
     if _LOADED and not override:
         return
 
-    root = Path(__file__).resolve().parent.parent
-    original_env = set(os.environ)
+    with _load_lock:
+        if _LOADED and not override:  # re-check inside the lock
+            return
 
-    config_dir = root / "config"
-    if config_dir.exists():
-        index_path = config_dir / "index.yaml"
-        if index_path.exists():
-            index_data = _load_yaml_mapping(index_path)
-            config_names = index_data.get("configs", [])
-            if not isinstance(config_names, list):
-                raise ValueError(f"{index_path} configs must be a list")
-            paths = [config_dir / str(name) for name in config_names]
-        else:
-            paths = sorted(
-                path for path in config_dir.glob("*.y*ml")
-                if path.name != "index.yaml"
-            )
-        for path in paths:
-            if not path.exists():
-                raise FileNotFoundError(f"Configured YAML file not found: {path}")
-            data = _load_yaml_mapping(path)
-            if not isinstance(data, dict):
-                raise ValueError(f"{path} must contain a YAML mapping")
-            for key, value in _flatten(data).items():
-                # Empty YAML values mean "unset": allow code defaults or
-                # .env.age/deployment secrets to provide the value instead of
-                # exporting an empty string.
-                if value is None or (isinstance(value, str) and value == ""):
-                    continue
-                if override or key not in original_env:
-                    os.environ[key] = _stringify(value)
+        root = Path(__file__).resolve().parent.parent
+        original_env = set(os.environ)
 
-    # --- Secrets: encrypted .env.age (preferred) with plaintext .env fallback ---
-    # AGE_KEY / ENV_AGE_PATH may be bare filenames (e.g. from identity.yaml);
-    # resolve them under USER_STATE_ROOT unless they're already absolute,
-    # so an explicit absolute override (env var or YAML) still wins outright.
-    state_root = Path(os.environ.get("USER_SPACE_ROOT", str(Path.home() / ".aiko"))).expanduser()
+        config_dir = root / "config"
+        if config_dir.exists():
+            index_path = config_dir / "index.yaml"
+            if index_path.exists():
+                index_data = _load_yaml_mapping(index_path)
+                config_names = index_data.get("configs", [])
+                if not isinstance(config_names, list):
+                    raise ValueError(f"{index_path} configs must be a list")
+                paths = [config_dir / str(name) for name in config_names]
+            else:
+                paths = sorted(
+                    path for path in config_dir.glob("*.y*ml")
+                    if path.name != "index.yaml"
+                )
+            for path in paths:
+                if not path.exists():
+                    raise FileNotFoundError(f"Configured YAML file not found: {path}")
+                data = _load_yaml_mapping(path)
+                if not isinstance(data, dict):
+                    raise ValueError(f"{path} must contain a YAML mapping")
+                for key, value in _flatten(data).items():
+                    # Empty YAML values mean "unset": allow code defaults or
+                    # .env.age/deployment secrets to provide the value instead of
+                    # exporting an empty string.
+                    if value is None or (isinstance(value, str) and value == ""):
+                        continue
+                    if override or key not in original_env:
+                        os.environ[key] = _stringify(value)
 
-    def _resolve_under(base: Path, value: str) -> Path:
-        candidate = Path(value).expanduser()
-        return candidate if candidate.is_absolute() else base / candidate
+        # --- Secrets: encrypted .env.age (preferred) with plaintext .env fallback ---
+        # AGE_KEY / ENV_AGE_PATH may be bare filenames (e.g. from identity.yaml);
+        # resolve them under USER_SPACE_ROOT unless they're already absolute,
+        # so an explicit absolute override (env var or YAML) still wins outright.
+        state_root = Path(os.environ.get("USER_SPACE_ROOT", str(Path.home() / ".aiko"))).expanduser()
 
-    identity_path = _resolve_under(state_root, os.environ.get("AGE_KEY", "age-key.txt"))
-    enc_path = _resolve_under(state_root, os.environ.get("ENV_AGE_PATH", ".env.age"))
+        def _resolve_under(base: Path, value: str) -> Path:
+            candidate = Path(value).expanduser()
+            return candidate if candidate.is_absolute() else base / candidate
 
-    if enc_path.exists():
-        for key, value in _decrypt_env(enc_path, identity_path).items():
-            if not key or value is None:
-                continue
-            if override or key not in os.environ:
-                os.environ[key] = value
-    else:
-        # Dev-machine fallback only — should not exist on the Jetson deployment.
-        env_path = root / ".env"
-        if env_path.exists():
-            for key, value in dotenv_values(env_path).items():
+        identity_path = _resolve_under(state_root, os.environ.get("AGE_KEY", "age-key.txt"))
+        enc_path = _resolve_under(state_root, os.environ.get("ENV_AGE_PATH", ".env.age"))
+
+        if enc_path.exists():
+            for key, value in _decrypt_env(enc_path, identity_path).items():
                 if not key or value is None:
                     continue
                 if override or key not in os.environ:
                     os.environ[key] = value
+        else:
+            # Dev-machine fallback only — should not exist on the Jetson deployment.
+            env_path = root / ".env"
+            if env_path.exists():
+                for key, value in dotenv_values(env_path).items():
+                    if not key or value is None:
+                        continue
+                    if override or key not in os.environ:
+                        os.environ[key] = value
 
-    _LOADED = True
+        _LOADED = True
