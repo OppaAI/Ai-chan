@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Aiko Log Studio</title><link rel="stylesheet" href="static/style.css">
+</head>
+<body>
+  <header><div><h1>Aiko Log Studio</h1><p>Read-only viewer for <code>logs/aiko.log</code></p></div><button id="refresh">Refresh</button></header>
+  <main>
+    <form id="filters">
+      <label>From <input type="date" name="date_from"></label>
+      <label>To <input type="date" name="date_to"></label>
+      <label>Levels <select id="levels" name="level" multiple></select></label>
+      <label>Components <select id="components" name="component" multiple></select></label>
+      <label>Last entries <input type="number" name="last" min="1" max="10000" placeholder="All"></label>
+      <button type="submit">Apply filters</button><button type="reset">Clear</button>
+    </form>
+    <p id="status" role="status">Loading log…</p>
+    <section id="entries" aria-live="polite"></section>
+  </main>
+  <template id="entry-template"><article><time></time><span class="level"></span><span class="component"></span><pre></pre></article></template>
+  <script src="static/script.js"></script>
+</body>
+</html>
