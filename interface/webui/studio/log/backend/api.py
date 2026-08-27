@@ -79,7 +79,9 @@ def entries(
         timestamp = datetime.strptime(record["timestamp"], "%Y-%m-%d %H:%M:%S.%f")
         return ((not start or timestamp >= start) and (not end or timestamp <= end) and (not levels or record["level"] in levels) and (not components or record["component"] in components))
     filtered = [record for record in records if matches(record)]
-    if last:
+    if last is None:
+        filtered = filtered[-_MAX_ENTRIES:]
+    else:
         filtered = filtered[-last:]
     return {"entries": filtered, "count": len(filtered), "total": len(records)}
 

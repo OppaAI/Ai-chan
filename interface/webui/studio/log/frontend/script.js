@@ -3,6 +3,7 @@ const form = document.querySelector('#filters');
 const status = document.querySelector('#status');
 const entries = document.querySelector('#entries');
 const template = document.querySelector('#entry-template');
+let refreshGeneration = 0;
 
 function addOptions(id, values) {
   const select = document.querySelector(id);
@@ -17,12 +18,13 @@ async function loadOptions() {
   addOptions('#components', data.components);
 }
 
-async function loadEntries() {
+async function loadEntries(generation) {
   const params = new URLSearchParams(new FormData(form));
   [...params.entries()].filter(([, value]) => !value).forEach(([key]) => params.delete(key));
   status.textContent = 'Loading log…';
   const response = await fetch(`${apiBase}/entries?${params}`);
   const data = await response.json();
+  if (generation !== refreshGeneration) return;
   if (!response.ok) throw new Error(data.detail || 'Could not load log entries');
   entries.replaceChildren(...data.entries.map(entry => {
     const fragment = template.content.cloneNode(true);
@@ -38,10 +40,16 @@ async function loadEntries() {
 }
 
 async function refresh(loadFilters = false) {
-  try { if (loadFilters) await loadOptions(); await loadEntries(); }
-  catch (error) { status.textContent = error.message; }
+  const generation = ++refreshGeneration;
+  try {
+    if (loadFilters) await loadOptions();
+    await loadEntries(generation);
+  }
+  catch (error) {
+    if (generation === refreshGeneration) status.textContent = error.message;
+  }
 }
 form.addEventListener('submit', event => { event.preventDefault(); refresh(); });
 form.addEventListener('reset', () => setTimeout(refresh));
-document.querySelector('#refresh').addEventListener('click', refresh);
+document.querySelector('#refresh').addEventListener('click', () => refresh());
 refresh(true);
