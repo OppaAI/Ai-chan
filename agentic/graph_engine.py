@@ -178,6 +178,7 @@ def _semantic_trigger_matrix(embedder, semantic_triggers: list[Any]):
 
 @dataclass(frozen=True, slots=True)
 class PlanNode:
+    """A single node in an execution graph with dependencies and control flow."""
     id: str
     tool: str
     args: dict[str, Any]
@@ -197,6 +198,7 @@ class PlanNode:
 
 @dataclass(frozen=True, slots=True)
 class PlanGraph:
+    """A directed graph of tool nodes representing an agentic workflow."""
     id: str
     name: str
     goal: str
@@ -208,6 +210,7 @@ class PlanGraph:
 
 @dataclass(frozen=True, slots=True)
 class NodeResult:
+    """Result of executing a single node in the graph."""
     node_id: str
     tool: str
     ok: bool
@@ -218,6 +221,7 @@ class NodeResult:
     checkpoint_state: str = "{}"
 
     def summary(self, max_chars: int = 700) -> str:
+        """Return a compact one-line summary of the node result."""
         status = "ok" if self.ok else self.error_type or "failed"
         body = re.sub(r"\s+", " ", self.content or "").strip()[:max_chars]
         return f"{self.node_id}:{self.tool}[{status}] {body}".strip()
@@ -258,19 +262,23 @@ class GraphState:
     runtime: dict[str, Any] = field(default_factory=dict, repr=False)
 
     def get(self, key: str, default: Any = None) -> Any:
+        """Get a value from graph state by key."""
         return self.data.get(key, default)
 
     def set(self, key: str, value: Any, reducer: str | None = None) -> None:
+        """Set a value in graph state using the specified or default reducer strategy."""
         strategy = reducer or self.reducers.get(key, REDUCER_REPLACE)
         current = self.data.get(key)
         self.data[key] = _apply_reducer(current, value, strategy)
 
     def inc_visit(self, node_id: str) -> None:
+        """Increment the visit count for a node."""
         visits = self.get("_node_visits", {})
         visits[node_id] = visits.get(node_id, 0) + 1
         self.set("_node_visits", visits)
 
     def iteration(self) -> int:
+        """Increment and return the current iteration count."""
         iter_count = self.get("_iteration", 0)
         self.set("_iteration", iter_count + 1)
         return iter_count + 1
@@ -321,6 +329,7 @@ def _safe_state_dict(state: GraphState) -> dict[str, Any]:
 
 @dataclass(frozen=True, slots=True)
 class GraphRunResult:
+    """Complete result of executing a graph workflow including all node results."""
     graph: PlanGraph
     results: tuple[NodeResult, ...]
     final_answer: str
@@ -333,6 +342,7 @@ class GraphRunResult:
 
     @property
     def steps(self) -> list[dict[str, Any]]:
+        """Return a simplified list of tool execution steps."""
         return [
             {
                 "tool": r.tool,
@@ -345,10 +355,12 @@ class GraphRunResult:
 
     @property
     def total_tokens(self) -> int:
+        """Return the sum of output tokens across all node results."""
         return sum((r.usage or {}).get("output_tokens", 0) for r in self.results)
 
     @property
     def total_cost(self) -> float:
+        """Estimate the total cost based on input and output tokens."""
         inputs = sum((r.usage or {}).get("input_tokens", 0) for r in self.results)
         outputs = sum((r.usage or {}).get("output_tokens", 0) for r in self.results)
         return (inputs / 1e6) * GRAPH_COST_PER_1M_INPUT + (outputs / 1e6) * GRAPH_COST_PER_1M_OUTPUT
@@ -854,6 +866,7 @@ def _default_playbook_definitions() -> list[dict[str, Any]]:
 
 
 def load_playbooks() -> list[dict[str, Any]]:
+    """Load all available playbooks from defaults and registered graphs."""
     by_id: dict[str, dict[str, Any]] = {}
     for p in _default_playbooks():
         pid = p.get("id")
@@ -1108,6 +1121,7 @@ def _is_email_request(prompt: str) -> bool:
 
 
 def plan_from_master(user_input: str, cap_ids: list[str] | None = None, embedder=None) -> PlanGraph | None:
+    """Select the best matching playbook graph for the user input via semantic scoring."""
     if not GRAPH_AGENT_ENABLED:
         return None
     plans = load_playbooks()
@@ -1888,6 +1902,7 @@ def _verify_goal(goal: str, results: tuple[NodeResult, ...],
 
 def execute_graph(graph: PlanGraph, embedder=None, llm_client=None,
                    llm_model: str | None = None, run_id: str | None = None) -> GraphRunResult:
+    """Execute a graph workflow and return the complete result with goal verification."""
     result = _execute_graph_inner(graph, embedder=embedder, llm_client=llm_client,
                                    llm_model=llm_model, run_id=run_id)
     score, reasons = _verify_goal(graph.goal, result.results, embedder=embedder,
@@ -2047,6 +2062,7 @@ def _record_goal_engram(goal: str, score: float, reasons: list[str],
 def run_schema_agent(user_input: str, cap_ids: list[str] | None = None, embedder=None,
                      llm_client=None, llm_model: str | None = None,
                      run_id: str | None = None) -> GraphRunResult | None:
+    """Plan and execute a graph workflow from user input, returning the result or None."""
     graph = plan_from_master(user_input, cap_ids=cap_ids, embedder=embedder)
     if graph is None:
         return None
@@ -2186,6 +2202,7 @@ from agentic.registry import TOOLS, register_tool_schema, tool
 
 @tool(TOOLS["list_playbooks"])
 def list_playbooks() -> str:
+    """List all available playbooks as JSON."""
     return list_playbooks_json()
 
 

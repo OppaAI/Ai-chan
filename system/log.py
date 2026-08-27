@@ -38,8 +38,8 @@ Controlled by LOG_ROTATE_MODE, either "size" (default) or "time":
     day, and anything older than LOG_BACKUP_COUNT days is deleted the
     next time a rotation fires. Rotation is checked on the first log call
     after the interval has passed, not on a background timer — if the
-    process isn't running or isn't logging when the boundary is crossed,
-    rotation simply happens on the next write after restart instead.
+    boundary is crossed while the process is not logging, rotation occurs
+    on the next write (whether the process remained running or restarted).
 
   The error-only tail file (aiko.error.log) always rotates by size
   (1 MiB, 2 backups) regardless of LOG_ROTATE_MODE, since it's meant to

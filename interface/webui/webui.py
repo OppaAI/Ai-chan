@@ -127,6 +127,7 @@ def _make_ssl_context(hostname: str, host_ip: str) -> ssl.SSLContext | None:
 
 
 class AikoWeb:
+    """Browser-based WebUI backend for Aiko-chan."""
     def __init__(self, no_voice: bool = False, debug: bool = False, boot_result: BootResult | None = None, defer_servers: bool = False):
         self._no_voice     = no_voice
         self._debug        = debug
@@ -517,6 +518,7 @@ class AikoWeb:
         )
 
     def has_remote_listener(self) -> bool:
+        """Check if any browser clients are currently connected."""
         with self._clients_lock:
             return bool(self._clients)
 
@@ -549,28 +551,35 @@ class AikoWeb:
         return cls._BOOT_LABELS
 
     def step_loading(self, key: str, detail: str = "") -> None:
+        """Broadcast a boot step loading event to connected clients."""
         labels = self._ensure_boot_labels()
         self._broadcast({"type": "step", "key": key, "state": "loading", "label": labels.get(key, key), "detail": detail})
 
     def step_done(self, key: str, detail: str = "") -> None:
+        """Broadcast a boot step completion event to connected clients."""
         labels = self._ensure_boot_labels()
         self._broadcast({"type": "step", "key": key, "state": "done",    "label": labels.get(key, key), "detail": detail})
 
     def step_skip(self, key: str, detail: str = "") -> None:
+        """Broadcast a boot step skip event to connected clients."""
         labels = self._ensure_boot_labels()
         self._broadcast({"type": "step", "key": key, "state": "skip",    "label": labels.get(key, key), "detail": detail})
 
     def step_error(self, key: str, detail: str = "") -> None:
+        """Broadcast a boot step error event to connected clients."""
         labels = self._ensure_boot_labels()
         self._broadcast({"type": "step", "key": key, "state": "error",   "label": labels.get(key, key), "detail": detail})
 
     def status_finish(self) -> None:
+        """Broadcast phase transition to chat mode."""
         self._broadcast({"type": "phase", "value": "chat"})
 
     def add_message(self, sender: str, text: str) -> None:
+        """Broadcast a complete chat message to the current user."""
         self._broadcast_to_current_user({"type": "chat", "sender": sender, "text": text})
 
     def stream_token(self, token: str) -> None:
+        """Stream a single LLM token or special status marker to the current user."""
         if token.startswith("__THINKING__"):
             self._broadcast_to_current_user({"type": "tool", "status": "thinking…"})
             self._broadcast_to_current_user({"type": "pose", "name": "thinking", "active": True})
@@ -643,6 +652,7 @@ class AikoWeb:
         self._broadcast_to_current_user({"type": "token", "text": token})
 
     def stream_commit(self) -> None:
+        """Commit the streamed response and reset turn state."""
         with self._lock:
             if self._stats["turn_start"] is not None:
                 elapsed = time.time() - self._stats["turn_start"]
@@ -659,6 +669,7 @@ class AikoWeb:
         self._push_vitals()
 
     def turn_start(self) -> None:
+        """Mark the start of a new turn and reset turn metrics."""
         uid = current_user_id()
         with self._lock:
             self._stats["turn_start"] = time.time()
@@ -689,14 +700,17 @@ class AikoWeb:
         })
 
     def update_stats(self, key: str, value) -> None:
+        """Update a statistics value and broadcast vitals to clients."""
         with self._lock:
             self._stats[key] = value
         self._push_vitals()
 
     def set_expression(self, name: str, intensity: float = 1.0) -> None:
+        """Broadcast an avatar expression change to the current user."""
         self._broadcast_to_current_user({"type": "expression", "name": name, "intensity": intensity})
 
     def set_viseme(self, viseme: str, weight: float = 1.0) -> None:
+        """Broadcast a lip-sync viseme to the current user."""
         self._broadcast_to_current_user({"type": "viseme", "viseme": viseme, "weight": weight})
 
     def get_input(self) -> str:
@@ -728,6 +742,7 @@ class AikoWeb:
                     self._push_vitals()
 
     def get_voice_input(self, listen, speak=None, wait_fn=None):
+        """Capture voice input from browser microphone via WebSocket audio streaming."""
         result_holder = [None]
         done_event    = threading.Event()
         # Track the accepted user identity from the first frame
@@ -867,6 +882,7 @@ class AikoWeb:
         return (raw or "", {})
 
     def spin_loop(self, stop_event: threading.Event) -> None:
+        """Idle loop that periodically pushes vitals until stopped."""
         while not stop_event.is_set():
             self._push_vitals()
             stop_event.wait(0.25)

@@ -94,6 +94,13 @@ try:
 except ImportError as e:
     log.warning(f"Could not mount Spec studio: {e}")
 
+# Log Studio
+try:
+    from interface.webui.studio.log.backend.api import app as log_studio_app
+    app.mount("/studio/log", log_studio_app)
+except ImportError as e:
+    log.warning(f"Could not mount Log studio: {e}")
+
 # ── cookie signing ────────────────────────────────────────────────────────────
 # SECRET_KEY signs the session cookie so it can't be forged or edited client-side.
 # Generate one with: python -c "import secrets; print(secrets.token_hex(32))"

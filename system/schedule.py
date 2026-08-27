@@ -560,6 +560,7 @@ def _default_schedule_graphs(user_id: str | None = None) -> list[dict]:
 
 
 def ensure_schedule_graphs(user_id: str | None = None) -> None:
+    """Initialize schedule graphs file with defaults if it exists, or create it if missing."""
     path = schedule_graphs_path(user_id=user_id)
     if path.exists():
         graphs = _read_schedule_graphs(user_id=user_id)
