@@ -46,7 +46,7 @@ IMGBB_UPLOAD_TIMEOUT: "30"  # Seconds before ImgBB image upload calls time out.
 # -- Bluesky two-way reply monitor --
 # Handle / app password: BLUESKY_HANDLE + BLUESKY_APP_PASS in .env only.
 # Trigger defaults to Hi {AI_NAME}; mention is @ + BLUESKY_HANDLE.
-BLUESKY_REPLY_MONITOR_INTERVAL_SECONDS: "60"
+BLUESKY_REPLY_MONITOR_INTERVAL_SECONDS: "30"
 BLUESKY_REPLY_BEEP_ENABLED: "1"
 BLUESKY_MEMORY_ENABLED: "1"
 BLUESKY_INTERACTION_MEMORY_ENABLED: "1"

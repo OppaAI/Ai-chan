@@ -216,7 +216,7 @@ def start_social_monitor_daemon(interval_seconds: int | None = None, only: str |
     """
     def _interval(env_key: str, label: str) -> int:
         try:
-            return max(60, int(os.getenv(env_key, str(_DEFAULT_INTERVAL))))
+            return max(30, int(os.getenv(env_key, str(_DEFAULT_INTERVAL))))
         except ValueError:
             log.warning(
                 "[%s_daemon] Invalid %s=%r, using default %ds",
