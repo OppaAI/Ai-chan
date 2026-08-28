@@ -522,8 +522,18 @@ try:
     _ENTITY_ALIASES_RAW: dict[str, str] = json.loads(os.getenv("ENTITY_ALIAS_JSON", "{}"))
 except (TypeError, ValueError, json.JSONDecodeError):
     _ENTITY_ALIASES_RAW = {}
+# Built-in owner aliases: raw github id and Threads handle both map to OppaAI
+# so github_205369547 / oppa.ai.bot never become separate graph hubs.
+_BUILTIN_ALIASES: dict[str, str] = {
+    "github_205369547": "OppaAI",
+    "oppa.ai.bot": "OppaAI",
+    "oppa.ai": "OppaAI",
+    "@oppa.ai.bot": "OppaAI",
+}
+# Env aliases override builtins
 _ENTITY_ALIASES: dict[str, str] = {
-    str(k).casefold(): str(v) for k, v in _ENTITY_ALIASES_RAW.items() if str(k).strip() and str(v).strip()
+    **{str(k).casefold(): str(v) for k, v in _BUILTIN_ALIASES.items()},
+    **{str(k).casefold(): str(v) for k, v in _ENTITY_ALIASES_RAW.items() if str(k).strip() and str(v).strip()},
 }
 
 

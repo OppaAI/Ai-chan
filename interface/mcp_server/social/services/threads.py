@@ -116,12 +116,31 @@ def _requested_memory(text: str, context: list[dict] | None = None) -> tuple[str
     return "", ""
 
 
+_OWNER_ALIASES = {"github_205369547", "oppa.ai.bot", "oppa.ai", "oppaai"}
+
+def _is_owner_author(author: str, owner: str) -> bool:
+    """Owner check with built-in aliases (github id ↔ Threads handle → OppaAI)."""
+    a = (author or "").strip().lstrip("@").casefold()
+    o = (owner or "").strip().lstrip("@").casefold()
+    if not a:
+        return False
+    if not o:
+        # No THREADS_USERNAME configured (tests/headless) → any alias counts as owner
+        return a in _OWNER_ALIASES
+    if a == o:
+        return True
+    # Both known OppaAI aliases → treat as same owner
+    if a in _OWNER_ALIASES and o in _OWNER_ALIASES:
+        return True
+    return False
+
+
 def _save_requested_memory(reply: dict, memorize, context: list[dict] | None = None) -> tuple[bool, str]:
     if memorize is None or env("THREADS_MEMORY_ENABLED", "1").strip().lower() not in {"1", "true", "yes", "on"}:
         return False, ""
     author = str(reply.get("username") or "").lstrip("@").casefold()
     owner = platform_username("THREADS_USERNAME").casefold()
-    if not author or not owner or author != owner:
+    if not _is_owner_author(author, owner):
         return False, ""
     kind, memory = _requested_memory(reply.get("text") or "", context)
     if not memory or _contains_sensitive_value(memory):
@@ -157,7 +176,7 @@ def _save_interaction_memory(reply: dict, reply_text: str, memorize) -> bool:
         return False
     author = str(reply.get("username") or "").lstrip("@").casefold()
     owner = platform_username("THREADS_USERNAME").casefold()
-    if not author or not owner or author != owner:
+    if not _is_owner_author(author, owner):
         return False
     comment = _redact_sensitive_text(str(reply.get("text") or "").strip())
     response = _redact_sensitive_text(str(reply_text or "").strip())

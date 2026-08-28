@@ -88,6 +88,54 @@ def _owner_user_id() -> str | None:
     return candidates[0] if len(candidates) == 1 else None
 
 
+def _resolve_owner_display_name(uid: str) -> str | None:
+    """Prefer GitHub login from auth_token.json, then profile/USER.md, else uid.
+
+    Ensures memories for github_205369547 / oppa.ai.bot are attributed to
+    OppaAI rather than the raw provider id.
+    """
+    # 1) auth_token.json (OAuth login = OppaAI)
+    try:
+        import json as _json
+
+        token_path = Path.home() / ".aiko" / "auth_token.json"
+        if token_path.is_file():
+            data = _json.loads(token_path.read_text(encoding="utf-8"))
+            user = data.get("user") or {}
+            # match id or fallback to single-owner token
+            try:
+                from system.userspace import normalize_user_id
+
+                expected = normalize_user_id("github", user.get("id")) if user.get("id") else None
+                if expected == uid or uid is None:
+                    login = (user.get("login") or "").strip()
+                    if login:
+                        return login
+                # single-owner box: trust token login regardless of uid mismatch
+                login = (user.get("login") or "").strip()
+                if login and uid == _owner_user_id():
+                    return login
+            except Exception:
+                login = (user.get("login") or "").strip()
+                if login:
+                    return login
+    except Exception:
+        pass
+    # 2) profile/USER.md via owner_display_name()
+    try:
+        from interface.mcp_server.social.services.identity import owner_display_name
+
+        name = owner_display_name().strip()
+        if name and name.casefold() not in {"owner", "guest"}:
+            return name
+    except Exception:
+        pass
+    # 3) hardcoded owner for this box
+    if uid == "github_205369547":
+        return "OppaAI"
+    return None
+
+
 def _fallback_owner_memorize():
     """Return a monitor-owned AikoMemorize bound to the owner's store.
 
@@ -97,6 +145,15 @@ def _fallback_owner_memorize():
     with _FALLBACK_LOCK:
         mem = _FALLBACK_MEMORIZE["ref"]
         if mem is not None:
+            # Ensure cached instance has correct display_name (migration from
+            # pre-alias code where it was github_205369547)
+            try:
+                if mem.get_display_name() in {"github_205369547", "oppa.ai.bot", "oppa.ai"}:
+                    disp = _resolve_owner_display_name(mem.get_user_id())
+                    if disp:
+                        mem.set_display_name(disp)
+            except Exception:
+                pass
             return mem
         uid = _owner_user_id()
         if not uid:
@@ -106,11 +163,19 @@ def _fallback_owner_memorize():
 
             mem = AikoMemorize(silent=True)
             mem.switch_user(uid)
+            # Bind display_name so future _save_interaction_memory / extraction
+            # emit "OppaAI ..." not "github_205369547 ..." / "oppa.ai.bot ..."
+            disp = _resolve_owner_display_name(uid)
+            if disp:
+                try:
+                    mem.set_display_name(disp)
+                except Exception:
+                    pass
         except Exception:
             log.exception("[monitor_daemon] Owner-store fallback bind failed for %s", uid)
             return None
         _FALLBACK_MEMORIZE["ref"] = mem
-        log.info("[monitor_daemon] Headless recall bound to owner store %s", uid)
+        log.info("[monitor_daemon] Headless recall bound to owner store %s display=%s", uid, mem.get_display_name())
         return mem
 
 
