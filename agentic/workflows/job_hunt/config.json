@@ -147,5 +147,21 @@
     ],
     "note": "Uses the public Greenhouse Job Board API. Override board_tokens with GREENHOUSE_BOARD_TOKENS for additional companies."
   },
-  "max_greenhouse_posts": 10
+  "max_greenhouse_posts": 10,
+  "lever_source": {
+    "enabled": true,
+    "api_url": "https://github.com/lever/postings-api",
+    "base_url": "https://api.lever.co/v0/postings",
+    "company_tokens": [],
+    "note": "Uses the public Lever postings API. Set company_tokens or LEVER_COMPANY_TOKENS to enable specific companies."
+  },
+  "ashby_source": {
+    "enabled": true,
+    "api_url": "https://developers.ashbyhq.com/docs/posting-api",
+    "base_url": "https://api.ashbyhq.com/posting-api/job-board",
+    "company_tokens": [],
+    "note": "Uses the public Ashby job-board posting API. Set company_tokens or ASHBY_ORG_TOKENS to enable specific orgs."
+  },
+  "max_lever_posts": 10,
+  "max_ashby_posts": 10
 }

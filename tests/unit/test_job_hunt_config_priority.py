@@ -151,3 +151,71 @@ def test_fetch_one_greenhouse_board_uses_rss_style_config(monkeypatch, tmp_path)
     assert info["matched_count"] == 1
     assert postings[0]["_source_name"] == "greenhouse_0"
     assert (tmp_path / "fetch_2026-08-28_greenhouse_0.jsonl").exists()
+
+
+def test_job_board_tokens_parse_lever_and_ashby_urls():
+    from agentic.workflows.job_hunt.toolset import _job_board_tokens
+
+    cfg = {
+        "lever_source": {"company_tokens": ["https://jobs.lever.co/acme/role-id"]},
+        "ashby_source": {"company_tokens": ["https://jobs.ashbyhq.com/example/role-id"]},
+    }
+
+    assert _job_board_tokens(cfg, "lever_source", ("NOPE",)) == ["acme"]
+    assert _job_board_tokens(cfg, "ashby_source", ("NOPE",)) == ["example"]
+
+
+def test_extract_linkedin_digest_cards_from_email_image_shape():
+    from agentic.workflows.job_hunt.toolset import _extract_jobs_from_cleaned_email
+
+    body = """
+Your job alert for System Engineer
+Systems Engineer - Infrastructure Operations
+Electronic Arts (EA) · Vancouver, BC (Hybrid)
+Actively recruiting
+AI Solutions Engineer
+Thales · Ottawa, ON (Hybrid)
+Actively recruiting
+System Administrator
+Insight Global · Vancouver, BC (Hybrid)
+CA$91K-CA$113K / year
+"""
+
+    jobs = _extract_jobs_from_cleaned_email(body, sender="jobs-noreply@linkedin.com", subject="Your job alert", config={})
+
+    assert len(jobs) >= 3
+    assert jobs[0]["title"] == "Systems Engineer - Infrastructure Operations"
+    assert jobs[0]["organization"] == "Electronic Arts (EA)"
+    assert jobs[0]["location"] == "Vancouver, BC (Hybrid)"
+    assert jobs[2]["salary"] == "CA$91K-CA$113K / year"
+
+
+def test_extract_glassdoor_digest_cards_from_email_image_shape():
+    from agentic.workflows.job_hunt.toolset import _extract_jobs_from_cleaned_email
+
+    body = """
+Jobs for Aiko
+W3Global 3.8 ★
+QA tester (Manual/Functional)
+Vancouver
+$50K - $54K (Employer Est.)
+Easy Apply
+Goodly Foods
+Quality Assurance Technician
+Vancouver
+$19 - $20 (Employer Est.)
+3d
+WorkSafeBC 3.5 ★
+Support Analyst I
+Richmond
+$32 - $40 (Employer Est.)
+5d
+"""
+
+    jobs = _extract_jobs_from_cleaned_email(body, sender="alerts@glassdoor.com", subject="Jobs for Aiko", config={})
+
+    assert len(jobs) >= 3
+    assert jobs[0]["title"] == "QA tester (Manual/Functional)"
+    assert jobs[0]["organization"] == "W3Global 3.8 ★"
+    assert jobs[0]["location"] == "Vancouver"
+    assert jobs[1]["salary"] == "$19 - $20 (Employer Est.)"
