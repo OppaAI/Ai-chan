@@ -12,6 +12,7 @@ Graph flow (gen_job_post):
 
 Fetch details:
   - RSS: date_range_days before cache write; job_keywords after
+  - Greenhouse: Job Board API updated_at date before cache write; job_keywords after
   - Email: subject keywords + date range before cache; domain + keywords after;
     full_body → cleaned markdown (links preserved) → structured job extraction
 
@@ -800,6 +801,113 @@ def fetch_today_jobs_from_rss(config: dict[str, Any] | None = None, filter_keywo
     return kept
 
 
+def _greenhouse_board_tokens(config: dict[str, Any]) -> list[str]:
+    """Configured Greenhouse Job Board tokens.
+
+    Env override accepts comma-separated board tokens or full board/API URLs.
+    """
+    source_cfg = config.get("greenhouse_source") if isinstance(config.get("greenhouse_source"), dict) else {}
+    raw = os.getenv("GREENHOUSE_BOARD_TOKENS", "").strip() or os.getenv("JOB_HUNT_GREENHOUSE_BOARD_TOKENS", "").strip()
+    values = raw.split(",") if raw else source_cfg.get("board_tokens", config.get("greenhouse_board_tokens", []))
+    if isinstance(values, str):
+        values = [values]
+    tokens: list[str] = []
+    for value in values or []:
+        token = str(value).strip().rstrip("/")
+        if not token:
+            continue
+        if "/boards/" in token:
+            token = token.split("/boards/", 1)[1].split("/", 1)[0]
+        elif "boards.greenhouse.io/" in token:
+            token = token.split("boards.greenhouse.io/", 1)[1].split("/", 1)[0]
+        if token and token not in tokens:
+            tokens.append(token)
+    return tokens
+
+
+def _greenhouse_salary(job: dict[str, Any]) -> str:
+    ranges = job.get("pay_input_ranges") or []
+    parts: list[str] = []
+    for pay in ranges if isinstance(ranges, list) else []:
+        if not isinstance(pay, dict):
+            continue
+        currency = str(pay.get("currency_type") or "").strip()
+        title = str(pay.get("title") or "").strip()
+        min_cents = pay.get("min_cents")
+        max_cents = pay.get("max_cents")
+        if isinstance(min_cents, int) and isinstance(max_cents, int):
+            amount = f"{currency} {min_cents / 100:,.0f}-{max_cents / 100:,.0f}".strip()
+        else:
+            amount = str(pay.get("blurb") or "").strip()
+        if amount:
+            parts.append(f"{title}: {amount}" if title else amount)
+    return "; ".join(parts)
+
+
+def fetch_today_jobs_from_greenhouse(config: dict[str, Any] | None = None, filter_keywords: bool = True, filter_date: bool = True) -> list[dict]:
+    """Fetch configured Greenhouse Job Board API boards, keeping recent tech postings."""
+    config = config or _job_config()
+    source_cfg = config.get("greenhouse_source") if isinstance(config.get("greenhouse_source"), dict) else {}
+    tokens = _greenhouse_board_tokens(config)
+    keywords = [kw.casefold() for kw in _cfg(config, "job_keywords", "JOB_KEYWORDS", [], "list")] if filter_keywords else []
+    today = local_now().date()
+    max_days = _cfg(config, "date_range_days", "JOB_HUNT_DATE_RANGE_DAYS", 1, "int")
+    base_url = str(source_cfg.get("base_url") or "https://boards-api.greenhouse.io/v1/boards").rstrip("/")
+    kept: list[dict] = []
+    seen_ids: set[str] = set()
+
+    log.info("[job_hunt] fetch_today_jobs_from_greenhouse: boards=%d, keywords=%d, max_days=%d, filter_date=%s",
+             len(tokens), len(keywords), max_days, filter_date)
+
+    for token in tokens:
+        url = f"{base_url}/{token}/jobs?content=true&pay_transparency=true"
+        try:
+            resp = _http_get_with_tls_fallback(
+                url,
+                timeout=30,
+                headers={"User-Agent": "Aiko-chan Greenhouse job API/1.0", "Accept": "application/json"},
+            )
+            resp.raise_for_status()
+            data = resp.json()
+        except Exception as e:
+            log.warning("Lane D Greenhouse fetch failed for board %s: %s", token, e)
+            continue
+
+        for job in data.get("jobs", []) if isinstance(data, dict) else []:
+            if not isinstance(job, dict):
+                continue
+            posted = _parse_rss_datetime(str(job.get("first_published") or job.get("updated_at") or ""))
+            if filter_date and (not posted or posted.date() < today - timedelta(days=max_days - 1)):
+                continue
+            summary = _strip_html(str(job.get("content") or ""), config=config)
+            title = re.sub(r"\s+", " ", str(job.get("title") or "")).strip()
+            if not _has_any_keyword(f"{title} {summary}", keywords):
+                continue
+            link = str(job.get("absolute_url") or f"https://boards.greenhouse.io/{token}/jobs/{job.get('id', '')}").strip()
+            guid = f"greenhouse:{token}:{job.get('id') or link}"
+            link_key, guid_key = _dedupe_key(link, guid)
+            if link_key in seen_ids or guid_key in seen_ids:
+                continue
+            seen_ids.update({link_key, guid_key})
+            location = job.get("location") if isinstance(job.get("location"), dict) else {}
+            kept.append({
+                "title": title or "Untitled role",
+                "organization": str(job.get("company_name") or token).strip(),
+                "url": link,
+                "guid": guid,
+                "summary": summary,
+                "location": str(location.get("name") or "").strip(),
+                "employment_type": "",
+                "salary": _greenhouse_salary(job),
+                "experience": "",
+                "close_date": str(job.get("application_deadline") or "").strip(),
+                "posted_date": posted.isoformat() if posted else "",
+                "source_feed": url,
+                "source": "greenhouse",
+            })
+    return kept
+
+
 def _read_email_messages(max_results: int, folder: str = "inbox", unread: bool = True) -> list[dict]:
     """Call the already-registered read_email MCP bridge tool."""
     try:
@@ -1330,6 +1438,11 @@ def _job_email_msg_cache_path(date_str: str, msg_idx: int) -> Path:
     return _job_cache_dir() / f"fetch_{date_str}_email_{msg_idx}.jsonl"
 
 
+def _job_greenhouse_cache_path(date_str: str, board_idx: int) -> Path:
+    """Path to Greenhouse board cache JSONL: fetch_YYYY-MM-DD_greenhouse_<idx>.jsonl"""
+    return _job_cache_dir() / f"fetch_{date_str}_greenhouse_{board_idx}.jsonl"
+
+
 def _job_merged_cache_path(date_str: str) -> Path:
     """Path to merged cache JSONL: merge_YYYY-MM-DD.jsonl"""
     return _job_cache_dir() / f"merge_{date_str}.jsonl"
@@ -1351,8 +1464,12 @@ def _job_write_rss_cache(date_str: str, feed_idx: int, postings: list[dict[str, 
 
 def _job_read_rss_cache(date_str: str, feed_idx: int) -> list[dict[str, Any]]:
     """Read RSS postings from JSONL."""
+    return _job_read_jsonl_cache(_job_rss_cache_path(date_str, feed_idx))
+
+
+def _job_read_jsonl_cache(path: Path) -> list[dict[str, Any]]:
+    """Read plain JSONL postings from a cache path."""
     try:
-        path = _job_rss_cache_path(date_str, feed_idx)
         if not path.exists():
             return []
         postings = []
@@ -1364,6 +1481,19 @@ def _job_read_rss_cache(date_str: str, feed_idx: int) -> list[dict[str, Any]]:
         return postings
     except (OSError, json.JSONDecodeError):
         return []
+
+
+def _job_write_jsonl_cache(path: Path, postings: list[dict[str, Any]], label: str) -> None:
+    """Write plain JSONL postings to a cache path."""
+    try:
+        if not postings:
+            log.warning("[job_hunt] skipping %s cache for %s (empty after date filter)", label, path.name)
+            return
+        lines = [json.dumps(p, ensure_ascii=False) for p in postings]
+        path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        log.info("[job_hunt] wrote %d %s postings to %s", len(postings), label, path.name)
+    except OSError as e:
+        log.warning("job_hunt: failed to write %s cache %s: %s", label, path.name, e)
 
 
 def _job_write_email_msg_cache(date_str: str, msg_idx: int, raw_message: dict[str, Any], posting: dict[str, Any] | None) -> None:
@@ -1472,8 +1602,8 @@ def clear_job_fetch_cache(date_str: str | None = None) -> None:
 def process_and_merge_job_cache(date_str: str | None = None, config: dict[str, Any] | None = None) -> str:
     """STEP 2: Process all cached RSS and email jobs for a date.
 
-    Reads all fetch_*_rss_*.jsonl and fetch_*_email_*.jsonl files,
-    filters by job_keywords, ensures cleaned_summary on email postings,
+    Reads all fetch_*_rss_*.jsonl, fetch_*_greenhouse_*.jsonl, and
+    fetch_*_email_*.jsonl files, filters by job_keywords, ensures cleaned_summary on email postings,
     formats with post_fields, writes merge_DATE.jsonl.
     """
     if date_str is None:
@@ -1499,6 +1629,17 @@ def process_and_merge_job_cache(date_str: str | None = None, config: dict[str, A
                         rss_jobs.append(json.loads(line))
         except (OSError, json.JSONDecodeError) as e:
             log.warning("[job_hunt] failed to read RSS cache %s: %s", rss_file.name, e)
+
+    greenhouse_jobs: list[dict] = []
+    for greenhouse_file in sorted(cache_dir.glob(f"fetch_{date_str}_greenhouse_*.jsonl")):
+        try:
+            with open(greenhouse_file, encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if line:
+                        greenhouse_jobs.append(json.loads(line))
+        except (OSError, json.JSONDecodeError) as e:
+            log.warning("[job_hunt] failed to read Greenhouse cache %s: %s", greenhouse_file.name, e)
 
     email_jobs: list[dict] = []
     for email_file in sorted(cache_dir.glob(f"fetch_{date_str}_email_*.jsonl")):
@@ -1527,16 +1668,19 @@ def process_and_merge_job_cache(date_str: str | None = None, config: dict[str, A
         return _has_any_keyword(f"{title} {summary}", keywords)
 
     filtered_rss = [j for j in rss_jobs if has_keywords(j)]
+    filtered_greenhouse = [j for j in greenhouse_jobs if has_keywords(j)]
     filtered_email = [j for j in email_jobs if has_keywords(j)]
 
-    log.info("[job_hunt] STEP 2: filtered RSS %d → %d, email %d → %d",
-             len(rss_jobs), len(filtered_rss), len(email_jobs), len(filtered_email))
+    log.info("[job_hunt] STEP 2: filtered RSS %d → %d, Greenhouse %d → %d, email %d → %d",
+             len(rss_jobs), len(filtered_rss), len(greenhouse_jobs), len(filtered_greenhouse), len(email_jobs), len(filtered_email))
 
     merged_jobs: list[dict] = []
     seen_urls: set[str] = set()
     rss_count = 0
+    greenhouse_count = 0
     email_count = 0
     hit_rss_limit = False
+    hit_greenhouse_limit = False
     hit_email_limit = False
 
     for job in filtered_rss:
@@ -1556,6 +1700,25 @@ def process_and_merge_job_cache(date_str: str | None = None, config: dict[str, A
             pass
         merged_jobs.append(enriched)
         rss_count += 1
+
+    max_greenhouse_posts = _cfg(config, "max_greenhouse_posts", "JOB_HUNT_MAX_GREENHOUSE_POSTS", max_rss_posts, "int")
+    for job in filtered_greenhouse:
+        if greenhouse_count >= max_greenhouse_posts:
+            hit_greenhouse_limit = True
+            break
+        url_key = str(job.get("url", "")).strip().casefold()
+        if url_key and url_key in seen_urls:
+            continue
+        if url_key:
+            seen_urls.add(url_key)
+        enriched = dict(job)
+        enriched.setdefault("source_type", "greenhouse")
+        try:
+            enriched["formatted_post"] = format_job_post(enriched, config=config)
+        except Exception:
+            pass
+        merged_jobs.append(enriched)
+        greenhouse_count += 1
 
     for job in filtered_email:
         if email_count >= max_email_posts:
@@ -1595,15 +1758,20 @@ def process_and_merge_job_cache(date_str: str | None = None, config: dict[str, A
         "rss_processed": rss_count,
         "rss_cap": max_rss_posts,
         "hit_rss_limit": hit_rss_limit,
+        "greenhouse_total": len(greenhouse_jobs),
+        "greenhouse_filtered": len(filtered_greenhouse),
+        "greenhouse_processed": greenhouse_count,
+        "greenhouse_cap": max_greenhouse_posts,
+        "hit_greenhouse_limit": hit_greenhouse_limit,
         "email_total": len(email_jobs),
         "email_filtered": len(filtered_email),
         "email_processed": email_count,
         "email_cap": max_email_posts,
         "hit_email_limit": hit_email_limit,
         "merged_total": len(merged_jobs),
-        "deduplicated_count": (rss_count + email_count) - len(merged_jobs),
+        "deduplicated_count": (rss_count + greenhouse_count + email_count) - len(merged_jobs),
         "proceed_to_step3": proceed_to_step3,
-        "summary": f"Processed {rss_count} RSS + {email_count} email jobs (caps: {max_rss_posts}/{max_email_posts})",
+        "summary": f"Processed {rss_count} RSS + {greenhouse_count} Greenhouse + {email_count} email jobs (caps: {max_rss_posts}/{max_greenhouse_posts}/{max_email_posts})",
     }
     log.info("[job_hunt] STEP 2 complete: %d total jobs → %s",
              len(merged_jobs), "PROCEED TO STEP 3" if proceed_to_step3 else "NO JOBS")
@@ -1688,6 +1856,77 @@ def _fetch_one_rss_feed(
             "status": "error",
             "error": str(e)[:100],
         }, f"rss_{feed_idx}"
+
+
+def _fetch_one_greenhouse_board(
+    date_str: str,
+    config: dict[str, Any],
+    can_reuse: bool,
+    board_idx: int,
+    board_token: str,
+) -> tuple[list[dict], dict, str | None]:
+    """Fetch or read-cache a single Greenhouse Job Board API board."""
+    cap = _cfg(config, "max_greenhouse_posts", "JOB_HUNT_MAX_GREENHOUSE_POSTS", _cfg(config, "max_rss_posts", "JOB_HUNT_MAX_RSS_POSTS", 10, "int"), "int")
+    keywords = [kw.casefold() for kw in _cfg(config, "job_keywords", "JOB_KEYWORDS", [], "list")]
+
+    def _filter_by_keyword_then_cap(items: list[dict]) -> list[dict]:
+        items = [
+            p for p in items
+            if _has_any_keyword(f"{p.get('title', '')} {p.get('summary', '')}", keywords)
+        ]
+        return items[:cap]
+
+    cache_path = _job_greenhouse_cache_path(date_str, board_idx)
+    if can_reuse and _cache_is_fresh_simple(date_str, config):
+        cached = _job_read_jsonl_cache(cache_path)
+        if cached:
+            filtered = _filter_by_keyword_then_cap(cached)
+            for p in filtered:
+                p["_source_idx"] = board_idx
+                p["_source_type"] = "greenhouse"
+                p["_source_name"] = f"greenhouse_{board_idx}"
+            return filtered, {
+                "type": "greenhouse",
+                "index": board_idx,
+                "board_token": board_token,
+                "raw_count": len(cached),
+                "filtered_count": len(cached),
+                "matched_count": len(filtered),
+                "status": "cached",
+            }, None
+
+    try:
+        log.info("[job_hunt] processing Greenhouse board %d: %s", board_idx, board_token)
+        cfg = dict(config)
+        cfg["greenhouse_board_tokens"] = [board_token]
+        postings = fetch_today_jobs_from_greenhouse(cfg, filter_keywords=False, filter_date=True)
+        raw_count = len(postings)
+        _job_write_jsonl_cache(cache_path, postings, "Greenhouse")
+        filtered = _filter_by_keyword_then_cap(postings)
+        for p in filtered:
+            p["_source_idx"] = board_idx
+            p["_source_type"] = "greenhouse"
+            p["_source_name"] = f"greenhouse_{board_idx}"
+        return filtered, {
+            "type": "greenhouse",
+            "index": board_idx,
+            "board_token": board_token,
+            "raw_count": raw_count,
+            "filtered_count": raw_count,
+            "matched_count": len(filtered),
+            "status": "ok",
+        }, None
+    except Exception as e:
+        log.error("[job_hunt] Greenhouse board %d failed: %s", board_idx, e)
+        return [], {
+            "type": "greenhouse",
+            "index": board_idx,
+            "board_token": board_token,
+            "raw_count": 0,
+            "filtered_count": 0,
+            "status": "error",
+            "error": str(e)[:100],
+        }, f"greenhouse_{board_idx}"
 
 
 def _fetch_email_branch(date_str: str, config: dict[str, Any], can_reuse: bool) -> tuple[list[dict], list[dict], list[str]]:
@@ -1779,6 +2018,9 @@ def fetch_rss_and_email_into_state(plan_json: str, *, state=None) -> str:
         "bool",
     )
     include_email = include_email and enable_email_source
+    greenhouse_cfg = config.get("greenhouse_source", {}) if isinstance(config.get("greenhouse_source"), dict) else {}
+    include_greenhouse = _cfg(greenhouse_cfg, "enabled", "JOB_HUNT_GREENHOUSE_ENABLED", True, "bool")
+    greenhouse_tokens = _greenhouse_board_tokens(config) if include_greenhouse else []
 
     plan = _safe_json_loads(plan_json) if isinstance(plan_json, str) else (plan_json or {})
 
@@ -1788,8 +2030,8 @@ def fetch_rss_and_email_into_state(plan_json: str, *, state=None) -> str:
     feeds = _cfg(config, "rss_feeds", "TECH_JOB_RSS_FEEDS", [], "list")
 
     log.info(
-        "[job_hunt] fetch_rss_and_email_into_state: feeds=%d include_email=%s max_results=%d",
-        len(feeds), include_email, max_results,
+        "[job_hunt] fetch_rss_and_email_into_state: feeds=%d greenhouse_boards=%d include_email=%s max_results=%d",
+        len(feeds), len(greenhouse_tokens), include_email, max_results,
     )
 
     all_postings: list[dict] = []
@@ -1800,6 +2042,10 @@ def fetch_rss_and_email_into_state(plan_json: str, *, state=None) -> str:
         f"rss_{i}": (_fetch_one_rss_feed, date_str, config, can_reuse, i, url)
         for i, url in enumerate(feeds)
     }
+    tasks.update({
+        f"greenhouse_{i}": (_fetch_one_greenhouse_board, date_str, config, can_reuse, i, token)
+        for i, token in enumerate(greenhouse_tokens)
+    })
     if include_email:
         tasks["email"] = (_fetch_email_branch, date_str, config, can_reuse)
 

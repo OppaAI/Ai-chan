@@ -137,5 +137,15 @@
   "email": {
     "enabled": false
   },
-  "social": []
+  "social": [],
+  "greenhouse_source": {
+    "enabled": true,
+    "api_url": "https://www.greenhouse.com/api",
+    "base_url": "https://boards-api.greenhouse.io/v1/boards",
+    "board_tokens": [
+      "greenhouse"
+    ],
+    "note": "Uses the public Greenhouse Job Board API. Override board_tokens with GREENHOUSE_BOARD_TOKENS for additional companies."
+  },
+  "max_greenhouse_posts": 10
 }

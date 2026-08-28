@@ -109,3 +109,45 @@ def test_email_extraction_clears_sender_placeholder_org(_user_env):
     )
     assert jobs, "expected at least one extracted job"
     assert jobs[0]["organization"] == ""
+
+
+
+def test_greenhouse_board_tokens_parse_config_and_urls():
+    from agentic.workflows.job_hunt.toolset import _greenhouse_board_tokens
+
+    cfg = {
+        "greenhouse_source": {
+            "board_tokens": [
+                "greenhouse",
+                "https://boards.greenhouse.io/exampleco",
+                "https://boards-api.greenhouse.io/v1/boards/acme/jobs?content=true",
+            ]
+        }
+    }
+
+    assert _greenhouse_board_tokens(cfg) == ["greenhouse", "exampleco", "acme"]
+
+
+def test_fetch_one_greenhouse_board_uses_rss_style_config(monkeypatch, tmp_path):
+    from agentic.workflows.job_hunt import toolset
+
+    monkeypatch.setattr(toolset, "_job_cache_dir", lambda: tmp_path)
+    monkeypatch.setattr(toolset, "_cache_is_fresh_simple", lambda date_str, config: False)
+    monkeypatch.setattr(toolset, "fetch_today_jobs_from_greenhouse", lambda cfg, filter_keywords, filter_date: [
+        {"title": "Software Engineer", "summary": "Python APIs", "url": "https://example.test/1"},
+        {"title": "Store Manager", "summary": "Retail", "url": "https://example.test/2"},
+    ])
+
+    postings, info, failure = toolset._fetch_one_greenhouse_board(
+        "2026-08-28",
+        {"job_keywords": ["software"], "max_rss_posts": 10},
+        False,
+        0,
+        "greenhouse",
+    )
+
+    assert failure is None
+    assert info["type"] == "greenhouse"
+    assert info["matched_count"] == 1
+    assert postings[0]["_source_name"] == "greenhouse_0"
+    assert (tmp_path / "fetch_2026-08-28_greenhouse_0.jsonl").exists()
