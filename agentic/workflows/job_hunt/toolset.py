@@ -697,15 +697,17 @@ def enrich_posting_fields_with_llm(
 
 
 def fetch_today_jobs_from_rss(config: dict[str, Any] | None = None, filter_keywords: bool = True, filter_date: bool = True, filter_dedup: bool = True) -> list[dict]:
-    """Fetch configured RSS feeds, keeping postings from the last N days.
-
-    Args:
-        config: Job hunt config dict
-        filter_keywords: If True, apply keyword filter. If False, skip keyword filter.
-        filter_date: If True, apply date filter (reject stale entries before they're
-            returned — used to keep the on-disk cache free of stale postings).
-            If False, return all entries regardless of date.
-        filter_dedup: If True, apply deduplication. If False, skip dedup (for raw cache).
+    """
+    Fetch configured RSS feeds and return job postings that match the selected filters.
+    
+    Parameters:
+    	config (dict[str, Any] | None): Job hunt configuration. When omitted, the active configuration is loaded.
+    	filter_keywords (bool): Whether to apply configured keyword filtering.
+    	filter_date (bool): Whether to exclude postings older than the configured date range.
+    	filter_dedup (bool): Whether to exclude postings already recorded in the deduplication ledger.
+    
+    Returns:
+    	list[dict]: Normalized job postings accepted from the configured feeds.
     """
     config = config or _job_config()
     feeds = _cfg(config, "rss_feeds", "TECH_JOB_RSS_FEEDS", [], "list")
@@ -802,9 +804,14 @@ def fetch_today_jobs_from_rss(config: dict[str, Any] | None = None, filter_keywo
 
 
 def _greenhouse_board_tokens(config: dict[str, Any]) -> list[str]:
-    """Configured Greenhouse Job Board tokens.
-
-    Env override accepts comma-separated board tokens or full board/API URLs.
+    """
+    Extracts unique Greenhouse board tokens from configuration or environment overrides.
+    
+    Parameters:
+    	config (dict[str, Any]): Configuration containing Greenhouse board settings.
+    
+    Returns:
+    	list[str]: Unique normalized Greenhouse board tokens.
     """
     source_cfg = config.get("greenhouse_source") if isinstance(config.get("greenhouse_source"), dict) else {}
     raw = os.getenv("GREENHOUSE_BOARD_TOKENS", "").strip() or os.getenv("JOB_HUNT_GREENHOUSE_BOARD_TOKENS", "").strip()
@@ -826,6 +833,15 @@ def _greenhouse_board_tokens(config: dict[str, Any]) -> list[str]:
 
 
 def _greenhouse_salary(job: dict[str, Any]) -> str:
+    """
+    Formats compensation ranges from a Greenhouse job record.
+    
+    Parameters:
+    	job (dict[str, Any]): Greenhouse job data containing compensation ranges.
+    
+    Returns:
+    	str: Semicolon-separated compensation ranges, including titles when available.
+    """
     ranges = job.get("pay_input_ranges") or []
     parts: list[str] = []
     for pay in ranges if isinstance(ranges, list) else []:
@@ -845,7 +861,17 @@ def _greenhouse_salary(job: dict[str, Any]) -> str:
 
 
 def fetch_today_jobs_from_greenhouse(config: dict[str, Any] | None = None, filter_keywords: bool = True, filter_date: bool = True) -> list[dict]:
-    """Fetch configured Greenhouse Job Board API boards, keeping recent tech postings."""
+    """
+    Fetch recent job postings from configured Greenhouse Job Board API boards.
+    
+    Parameters:
+    	config (dict[str, Any] | None): Optional job-hunt configuration.
+    	filter_keywords (bool): Whether to retain only postings matching configured job keywords.
+    	filter_date (bool): Whether to retain only postings within the configured date range.
+    
+    Returns:
+    	list[dict]: Normalized, deduplicated Greenhouse job postings.
+    """
     config = config or _job_config()
     source_cfg = config.get("greenhouse_source") if isinstance(config.get("greenhouse_source"), dict) else {}
     tokens = _greenhouse_board_tokens(config)
@@ -909,7 +935,17 @@ def fetch_today_jobs_from_greenhouse(config: dict[str, Any] | None = None, filte
 
 
 def _job_board_tokens(config: dict[str, Any], source_key: str, env_keys: tuple[str, ...]) -> list[str]:
-    """Configured third-party job-board tokens, accepting tokens or full URLs."""
+    """
+    Resolve unique job-board tokens from environment or configuration values, accepting tokens and full posting URLs.
+    
+    Parameters:
+    	config (dict[str, Any]): Job-hunt configuration.
+    	source_key (str): Configuration key for the job-board source.
+    	env_keys (tuple[str, ...]): Environment variables checked for token values.
+    
+    Returns:
+    	list[str]: Unique normalized job-board tokens.
+    """
     source_cfg = config.get(source_key) if isinstance(config.get(source_key), dict) else {}
     raw = ""
     for env_key in env_keys:
@@ -933,7 +969,17 @@ def _job_board_tokens(config: dict[str, Any], source_key: str, env_keys: tuple[s
 
 
 def fetch_today_jobs_from_lever(config: dict[str, Any] | None = None, filter_keywords: bool = True, filter_date: bool = True) -> list[dict]:
-    """Fetch configured Lever postings API companies, keeping recent tech postings."""
+    """
+    Fetch configured Lever job postings and normalize their relevant details.
+    
+    Parameters:
+        config (dict[str, Any] | None): Optional job-hunt configuration.
+        filter_keywords (bool): Whether to keep postings matching configured job keywords.
+        filter_date (bool): Whether to keep postings within the configured date range.
+    
+    Returns:
+        list[dict]: Normalized Lever postings that pass the enabled filters.
+    """
     config = config or _job_config()
     source_cfg = config.get("lever_source") if isinstance(config.get("lever_source"), dict) else {}
     tokens = _job_board_tokens(config, "lever_source", ("LEVER_COMPANY_TOKENS", "JOB_HUNT_LEVER_COMPANY_TOKENS"))
@@ -973,7 +1019,17 @@ def fetch_today_jobs_from_lever(config: dict[str, Any] | None = None, filter_key
 
 
 def fetch_today_jobs_from_ashby(config: dict[str, Any] | None = None, filter_keywords: bool = True, filter_date: bool = True) -> list[dict]:
-    """Fetch configured Ashby job-board API orgs, keeping recent tech postings."""
+    """
+    Fetch configured Ashby job-board postings that match the selected filters.
+    
+    Parameters:
+        config (dict[str, Any] | None): Optional job-hunt configuration.
+        filter_keywords (bool): Whether to apply configured job keywords.
+        filter_date (bool): Whether to keep postings within the configured date range.
+    
+    Returns:
+        list[dict]: Normalized Ashby job postings.
+    """
     config = config or _job_config()
     source_cfg = config.get("ashby_source") if isinstance(config.get("ashby_source"), dict) else {}
     tokens = _job_board_tokens(config, "ashby_source", ("ASHBY_ORG_TOKENS", "JOB_HUNT_ASHBY_ORG_TOKENS"))
@@ -1013,7 +1069,17 @@ def fetch_today_jobs_from_ashby(config: dict[str, Any] | None = None, filter_key
 
 
 def _read_email_messages(max_results: int, folder: str = "inbox", unread: bool = True) -> list[dict]:
-    """Call the already-registered read_email MCP bridge tool."""
+    """
+    Read email messages through the registered email bridge.
+    
+    Parameters:
+    	max_results (int): Maximum number of messages to retrieve.
+    	folder (str): Mail folder to search.
+    	unread (bool): Whether to restrict results to unread messages.
+    
+    Returns:
+    	list[dict]: Unique email messages, or an empty list if retrieval fails or the bridge is unavailable.
+    """
     try:
         from agentic.registry import registry
         import inspect
@@ -1083,7 +1149,15 @@ def _is_boilerplate_line(line: str) -> bool:
 
 
 def _looks_like_job_title(line: str) -> bool:
-    """Heuristic: line looks like a job title rather than prose/boilerplate."""
+    """
+    Determine whether a line resembles a job title.
+    
+    Parameters:
+        line (str): Text to evaluate.
+    
+    Returns:
+        bool: `true` if the line resembles a job title, `false` otherwise.
+    """
     if not line or len(line) < 10 or len(line) > 180:
         return False
     if _is_boilerplate_line(line):
@@ -1112,7 +1186,18 @@ def _is_generic_category(label: str) -> bool:
 
 
 def _split_company_location(line: str) -> tuple[str, str]:
-    """Split digest detail lines like 'Company · Vancouver, BC (Hybrid)'."""
+    """
+    Split a digest detail line into company and location components.
+    
+    Parameters:
+        line (str): Detail line containing a company and location separated by a
+            centered dot or hyphen.
+    
+    Returns:
+        tuple[str, str]: The company and location when both are identified;
+            otherwise, an empty company and the original text when it contains
+            recognizable location information.
+    """
     text = re.sub(r"\s+", " ", line or "").strip(" -–•·")
     if not text:
         return "", ""
@@ -1123,7 +1208,20 @@ def _split_company_location(line: str) -> tuple[str, str]:
 
 
 def _extract_digest_cards(cleaned: str, *, sender: str = "", subject: str = "", msg_id: str = "", date_str: str = "", config: dict[str, Any] | None = None) -> list[dict]:
-    """Extract LinkedIn/Glassdoor-style job cards when job links are absent or unhelpful."""
+    """
+    Extract job postings from LinkedIn- or Glassdoor-style email recommendation cards.
+    
+    Parameters:
+    	cleaned (str): Cleaned email content containing job card information.
+    	sender (str): Email sender address.
+    	subject (str): Email subject.
+    	msg_id (str): Message identifier used to generate stable posting identifiers.
+    	date_str (str): Posting date to associate with extracted jobs.
+    	config (dict[str, Any] | None): Optional configuration for limiting retained email content.
+    
+    Returns:
+    	list[dict]: Job postings extracted from recognizable cards, or an empty list when no cards qualify.
+    """
     config = config or {}
     max_summary = _cfg(config, "max_email_chars", "JOB_HUNT_MAX_EMAIL_CHARS", 15000, "int")
     lines = []
@@ -1206,12 +1304,19 @@ def _extract_jobs_from_cleaned_email(
     date_str: str = "",
     config: dict[str, Any] | None = None,
 ) -> list[dict]:
-    """Extract one or more job postings from cleaned (MD/plain) email body.
-
-    This is the main path used for both single-job and promotional emails.
-    It prefers real job-board URLs (including markdown links produced by
-    _strip_html / markitdown) and pairs them with nearby title candidates
-    instead of just taking the first body line as the "title".
+    """
+    Extract job postings from cleaned email content.
+    
+    Parameters:
+        cleaned (str): Markdown or plain-text email body.
+        sender (str): Email sender used as a fallback organization.
+        subject (str): Email subject used as a fallback title.
+        msg_id (str): Message identifier used to generate posting identifiers.
+        date_str (str): Posting date to assign to extracted jobs.
+        config (dict[str, Any] | None): Optional extraction configuration.
+    
+    Returns:
+        list[dict]: Extracted job postings, or an empty list when no valid posting is found.
     """
     if not cleaned or len(cleaned) < 20:
         return []
@@ -1628,7 +1733,16 @@ def _job_rss_cache_path(date_str: str, feed_idx: int) -> Path:
 
 
 def _job_email_msg_cache_path(date_str: str, msg_idx: int) -> Path:
-    """Path to single email message cache JSONL: fetch_YYYY-MM-DD_email_<idx>.jsonl"""
+    """
+    Builds the cache path for an individual email message.
+    
+    Parameters:
+    	date_str (str): Date associated with the cached messages.
+    	msg_idx (int): Zero-based message index.
+    
+    Returns:
+    	Path: Path to the email message cache JSONL file.
+    """
     return _job_cache_dir() / f"fetch_{date_str}_email_{msg_idx}.jsonl"
 
 
@@ -1696,7 +1810,15 @@ def _job_write_jsonl_cache(path: Path, postings: list[dict[str, Any]], label: st
 
 
 def _job_write_email_msg_cache(date_str: str, msg_idx: int, raw_message: dict[str, Any], posting: dict[str, Any] | None) -> None:
-    """Write single email message to JSONL with match status."""
+    """
+    Cache an email message and its associated posting match as a JSONL record.
+    
+    Parameters:
+        date_str (str): Date used to identify the email cache.
+        msg_idx (int): Index used to identify the message cache entry.
+        raw_message (dict[str, Any]): Email metadata and content to cache.
+        posting (dict[str, Any] | None): Extracted posting, or None when no posting matched.
+    """
     try:
         path = _job_email_msg_cache_path(date_str, msg_idx)
         full_body = (
@@ -1799,11 +1921,15 @@ def clear_job_fetch_cache(date_str: str | None = None) -> None:
 # ── STEP 2: Process and merge RSS + email caches into structured output ─────
 
 def process_and_merge_job_cache(date_str: str | None = None, config: dict[str, Any] | None = None) -> str:
-    """STEP 2: Process all cached RSS and email jobs for a date.
-
-    Reads all fetch_*_rss_*.jsonl, fetch_*_greenhouse_*.jsonl, and
-    fetch_*_email_*.jsonl files, filters by job_keywords, ensures cleaned_summary on email postings,
-    formats with post_fields, writes merge_DATE.jsonl.
+    """
+    Process cached job postings for a date and write a filtered, deduplicated merge file.
+    
+    Parameters:
+        date_str (str | None): Date to process in ``YYYY-MM-DD`` format; defaults to the local date.
+        config (dict[str, Any] | None): Optional job-hunt configuration override.
+    
+    Returns:
+        str: JSON-encoded processing summary containing source counts, limits, merge path, and continuation status.
     """
     if date_str is None:
         date_str = local_now().strftime("%Y-%m-%d")
@@ -1865,6 +1991,15 @@ def process_and_merge_job_cache(date_str: str | None = None, config: dict[str, A
             log.warning("[job_hunt] failed to read email cache %s: %s", email_file.name, e)
 
     def has_keywords(job: dict) -> bool:
+        """
+        Determine whether a job posting matches any configured keyword.
+        
+        Parameters:
+            job (dict): Job posting data containing title and summary fields.
+        
+        Returns:
+            bool: `true` if the title or summary contains a configured keyword, `false` otherwise.
+        """
         title = str(job.get("title", "")).casefold()
         summary = str(job.get("summary", "") or job.get("cleaned_summary", "")).casefold()
         return _has_any_keyword(f"{title} {summary}", keywords)
@@ -2010,7 +2145,18 @@ def _fetch_one_rss_feed(
     feed_idx: int,
     feed_url: str,
 ) -> tuple[list[dict], dict, str | None]:
-    """Fetch or read-cache a single RSS feed."""
+    """
+    Fetch date-qualified postings from one RSS feed, using a fresh cache when permitted.
+    
+    Parameters:
+    	date_str (str): Date used to select and cache feed results.
+    	can_reuse (bool): Whether a fresh cached result may be used.
+    	feed_idx (int): Index identifying the feed.
+    	feed_url (str): RSS feed URL.
+    
+    Returns:
+    	tuple[list[dict], dict, str | None]: Filtered postings, source statistics, and an error identifier when fetching fails.
+    """
     rss_cap = _cfg(config, "max_rss_posts", "JOB_HUNT_MAX_RSS_POSTS", 10, "int")
     keywords = [kw.casefold() for kw in _cfg(config, "job_keywords", "JOB_KEYWORDS", [], "list")]
 
@@ -2090,11 +2236,34 @@ def _fetch_one_api_board(
     token: str,
     fetcher,
 ) -> tuple[list[dict], dict, str | None]:
-    """Fetch or read-cache a single API-backed job board."""
+    """
+    Fetch postings for one API-backed job board, using fresh cached results when available.
+    
+    Parameters:
+    	date_str (str): Date associated with the fetch and cache.
+    	config (dict[str, Any]): Job-hunt configuration.
+    	can_reuse (bool): Whether a fresh cache may be used.
+    	source (str): API source identifier.
+    	idx (int): Index of the board within the configured source list.
+    	token (str): Board or organization token.
+    	fetcher: Callable that retrieves postings for the configured board.
+    
+    Returns:
+    	tuple[list[dict], dict, str | None]: Filtered postings, source statistics, and an error identifier when processing fails.
+    """
     cap = _cfg(config, f"max_{source}_posts", f"JOB_HUNT_MAX_{source.upper()}_POSTS", _cfg(config, "max_rss_posts", "JOB_HUNT_MAX_RSS_POSTS", 10, "int"), "int")
     keywords = [kw.casefold() for kw in _cfg(config, "job_keywords", "JOB_KEYWORDS", [], "list")]
 
     def _filter_by_keyword_then_cap(items: list[dict]) -> list[dict]:
+        """
+        Filter postings by configured keywords and limit the result count.
+        
+        Parameters:
+        	items (list[dict]): Postings to filter and limit.
+        
+        Returns:
+        	list[dict]: Matching postings, capped at the configured maximum.
+        """
         filtered = [p for p in items if _has_any_keyword(f"{p.get('title', '')} {p.get('summary', '')}", keywords)]
         return filtered[:cap]
 
@@ -2139,11 +2308,32 @@ def _fetch_one_greenhouse_board(
     board_idx: int,
     board_token: str,
 ) -> tuple[list[dict], dict, str | None]:
-    """Fetch or read-cache a single Greenhouse Job Board API board."""
+    """
+    Fetch postings for one Greenhouse board, reusing a fresh cache when available.
+    
+    Parameters:
+    	date_str (str): Date associated with the fetch and cache entry.
+    	config (dict[str, Any]): Job-hunt configuration.
+    	can_reuse (bool): Whether a fresh cached result may be used.
+    	board_idx (int): Index identifying the Greenhouse board.
+    	board_token (str): Greenhouse board token.
+    
+    Returns:
+    	tuple[list[dict], dict, str | None]: Filtered postings, source statistics, and a failure identifier when processing fails; otherwise, the failure identifier is `None`.
+    """
     cap = _cfg(config, "max_greenhouse_posts", "JOB_HUNT_MAX_GREENHOUSE_POSTS", _cfg(config, "max_rss_posts", "JOB_HUNT_MAX_RSS_POSTS", 10, "int"), "int")
     keywords = [kw.casefold() for kw in _cfg(config, "job_keywords", "JOB_KEYWORDS", [], "list")]
 
     def _filter_by_keyword_then_cap(items: list[dict]) -> list[dict]:
+        """
+        Filter postings by configured keywords and limit the result count.
+        
+        Parameters:
+        	items (list[dict]): Postings to filter and cap.
+        
+        Returns:
+        	list[dict]: Matching postings up to the configured limit.
+        """
         items = [
             p for p in items
             if _has_any_keyword(f"{p.get('title', '')} {p.get('summary', '')}", keywords)
@@ -2204,7 +2394,17 @@ def _fetch_one_greenhouse_board(
 
 
 def _fetch_email_branch(date_str: str, config: dict[str, Any], can_reuse: bool) -> tuple[list[dict], list[dict], list[str]]:
-    """Fetch email job alerts."""
+    """
+    Fetch email job postings, reusing fresh cached results when permitted.
+    
+    Parameters:
+    	date_str (str): Date used to locate cached email results.
+    	config (dict[str, Any]): Job-hunt configuration.
+    	can_reuse (bool): Whether fresh cached results may be used.
+    
+    Returns:
+    	tuple[list[dict], list[dict], list[str]]: Postings, source processing information, and identifiers for sources that failed.
+    """
     email_cap = _cfg(config, "max_email_posts", "JOB_HUNT_MAX_EMAIL_POSTS", 10, "int")
     email_idx = 0
     postings: list[dict] = []
@@ -2281,7 +2481,16 @@ def _fetch_email_branch(date_str: str, config: dict[str, Any], can_reuse: bool) 
 
 
 def fetch_rss_and_email_into_state(plan_json: str, *, state=None) -> str:
-    """STEP 1: Fetch all RSS and email job listings with per-source caching into state."""
+    """
+    Fetch job listings from configured RSS, API, and email sources.
+    
+    Parameters:
+    	plan_json (str): JSON-encoded run plan containing optional result limits.
+    	state: Optional workflow state updated with the fetched postings and source information.
+    
+    Returns:
+    	str: JSON summary containing the number of postings found, source details, overall status, and result limit.
+    """
     config = _job_config()
     include_email = _cfg(config, "include_email", "JOB_HUNT_INCLUDE_EMAIL", True, "bool")
     enable_email_source = _cfg(
