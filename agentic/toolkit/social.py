@@ -284,6 +284,7 @@ A1_TEASER_MAX_CHARS = _int_env("A1_TEASER_MAX_CHARS", 280)
 A1_HUGO_REPO = os.getenv("AIKO_DEV_GITHUB_REPO", os.getenv("GITHUB_REPO", ""))
 A1_HUGO_BRANCH = os.getenv("AIKO_DEV_GITHUB_BRANCH", os.getenv("GITHUB_BRANCH", "main"))
 A1_HUGO_CONTENT_PATH = os.getenv("AIKO_DEV_HUGO_CONTENT_PATH", "content/posts")
+A1_HUGO_IMAGES_PATH = os.getenv("AIKO_DEV_HUGO_IMAGES_PATH", os.getenv("HUGO_IMAGES_PATH", "static/images"))
 WEEKLY_AUTODRAFT = os.getenv("WEEKLY_SOCIAL_AUTODRAFT", "1").lower() in {"1", "true", "yes", "on"}
 WEEKLY_AUTOPOST = os.getenv("WEEKLY_SOCIAL_AUTOPOST", "0").lower() in {"1", "true", "yes", "on"}
 
@@ -311,7 +312,10 @@ def _fetch_latest_patreon_post() -> dict[str, Any] | None:
     headers = {"Authorization": f"Bearer {token}"}
     url = custom_url or f"https://www.patreon.com/api/oauth2/v2/campaigns/{campaign_id}/posts"
     params = None if custom_url else {
-        "fields[post]": "title,content,published_at,url,embed_data,embed_url",
+        "fields[post]": "title,content,published_at,url,embed_data,embed_url,post_type",
+        "fields[images]": "url,image_url,download_url,width,height",
+        "fields[post_file]": "file_name,download_url,url,mime_type",
+        "include": "images,post_file",
         "sort": "-published_at",
         "page[count]": "50",
     }
@@ -347,6 +351,46 @@ def _fetch_latest_patreon_post() -> dict[str, Any] | None:
         embed = attrs.get("embed_data") or attrs.get("embed") or {}
         if isinstance(embed, dict):
             image_url = embed.get("thumbnail_url") or embed.get("url") or ""
+        # collect all image urls: embed thumbnail + images from included + <img> in body
+        image_urls: list[str] = []
+        if image_url:
+            image_urls.append(image_url)
+        # included images / post_files from Patreon API (when include=images,post_file)
+        try:
+            included = payload.get("included") or []
+            # map id -> url for images/post_files if item has relationships
+            rel_data = []
+            rels = item.get("relationships") or {}
+            for key in ("images", "post_file", "images_media"):
+                data = (rels.get(key) or {}).get("data")
+                if isinstance(data, list):
+                    rel_data.extend(data)
+                elif isinstance(data, dict):
+                    rel_data.append(data)
+            rel_ids = {str(x.get("id")) for x in rel_data if x.get("id")}
+            for inc in included:
+                if str(inc.get("id")) in rel_ids or not rel_ids:
+                    inc_type = str(inc.get("type") or "")
+                    inc_attrs = inc.get("attributes") or {}
+                    if inc_type in {"images", "image", "post_file", "media"}:
+                        for k in ("url", "image_url", "download_url", "full", "large"):
+                            v = inc_attrs.get(k)
+                            if isinstance(v, str) and v.startswith("http") and v not in image_urls:
+                                image_urls.append(v)
+                                break
+                        # fallback: any http string in attributes
+                        if len(image_urls) == 0 or image_urls[-1] not in str(inc_attrs):
+                            for v in inc_attrs.values():
+                                if isinstance(v, str) and v.startswith("http") and v not in image_urls and any(v.lower().endswith(ext) for ext in (".png", ".jpg", ".jpeg", ".webp", ".gif")):
+                                    image_urls.append(v)
+        except Exception:
+            pass
+        # fallback: parse <img src> from body HTML
+        for m in re.findall(r'<img[^>]+src=["\']([^"\']+)["\']', body or "", re.IGNORECASE):
+            if m.startswith("http") and m not in image_urls:
+                image_urls.append(m)
+        # dedupe, keep order
+        image_urls = list(dict.fromkeys(image_urls))
         return {
             "id": item.get("id") or attrs.get("id") or title,
             "title": title,
@@ -354,6 +398,7 @@ def _fetch_latest_patreon_post() -> dict[str, Any] | None:
             "url": attrs.get("url") or attrs.get("patreon_url") or "",
             "published_at": attrs.get("published_at") or attrs.get("created_at") or datetime.now(timezone.utc).isoformat(),
             "image_url": image_url,
+            "image_urls": image_urls,
         }
     except Exception as e:
         log.error("Lane A1 Patreon fetch failed: %s", e)
@@ -437,6 +482,79 @@ def _download_a1_image(post: dict[str, Any], draft_dir: Path) -> Path | None:
         log.warning("Lane A1 Patreon image download failed: %s", e)
         return None
 
+
+def _download_a1_images(post: dict[str, Any], draft_dir: Path) -> list[Path]:
+    """Download all Patreon images into draft_dir/images/ (images-only lane).
+
+    Videos are intentionally ignored — use YouTube links per owner instruction.
+    """
+    urls: list[str] = []
+    raw = post.get("image_urls")
+    if isinstance(raw, list):
+        urls.extend([str(u).strip() for u in raw if str(u).strip().startswith("http")])
+    fallback = str(post.get("image_url") or "").strip()
+    if fallback and fallback not in urls:
+        urls.insert(0, fallback)
+    urls = list(dict.fromkeys(urls))
+    if not urls:
+        return []
+    out: list[Path] = []
+    images_dir = draft_dir / "images"
+    images_dir.mkdir(parents=True, exist_ok=True)
+    for idx, url in enumerate(urls):
+        try:
+            resp = requests.get(url, timeout=30)
+            resp.raise_for_status()
+            content_type = resp.headers.get("content-type", "")
+            # skip videos
+            if "video" in content_type.lower():
+                log.warning("Lane A1 skipping video content_type %r for %s", content_type, url[:120])
+                continue
+            ext = mimetypes.guess_extension(content_type.split(";", 1)[0].strip()) or Path(url.split("?", 1)[0]).suffix or ".png"
+            ext = ext.lower()
+            if ext not in {".png", ".jpg", ".jpeg", ".webp", ".gif"}:
+                # guess from url suffix if mime unknown but url looks like image
+                url_ext = Path(url.split("?", 1)[0]).suffix.lower()
+                if url_ext in {".png", ".jpg", ".jpeg", ".webp", ".gif"}:
+                    ext = url_ext
+                else:
+                    log.warning("Lane A1 image has unsupported type %r; skipping %s", content_type, url[:120])
+                    continue
+            p = images_dir / f"image_{idx:02d}{ext}"
+            p.write_bytes(resp.content)
+            out.append(p)
+        except Exception as e:
+            log.warning("Lane A1 image download failed for %s: %s", url[:120], e)
+            continue
+    return out
+
+
+def _push_a1_hugo_images(slug: str, image_paths: list[Path]) -> list[dict[str, Any]]:
+    """Upload images to aiko-dev static/images/<slug>/ via GitHub contents API."""
+    if not image_paths:
+        return []
+    token = os.getenv("AIKO_DEV_GITHUB_TOKEN", os.getenv("GITHUB_TOKEN", ""))
+    repo = A1_HUGO_REPO
+    if not token or not repo:
+        return [{"ok": False, "error": "missing token/repo for image upload"}]
+    headers = {"Authorization": f"Bearer {token}", "Accept": "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28"}
+    results: list[dict[str, Any]] = []
+    for p in image_paths:
+        try:
+            b64 = base64.b64encode(p.read_bytes()).decode()
+            gif_path = f"{A1_HUGO_IMAGES_PATH.rstrip('/')}/{slug}/{p.name}"
+            base = f"https://api.github.com/repos/{repo}/contents/{gif_path}"
+            existing = requests.get(base, headers=headers, params={"ref": A1_HUGO_BRANCH}, timeout=15)
+            sha = existing.json().get("sha") if existing.status_code == 200 else None
+            payload: dict[str, Any] = {"message": f"feat(aiko-dev): add image {slug}/{p.name}", "content": b64, "branch": A1_HUGO_BRANCH}
+            if sha:
+                payload["sha"] = sha
+            resp = requests.put(base, headers=headers, json=payload, timeout=30)
+            results.append({"ok": 200 <= resp.status_code < 300, "path": gif_path, "status_code": resp.status_code, "response": resp.text[:500]})
+        except Exception as e:
+            results.append({"ok": False, "path": str(p), "error": str(e)})
+    return results
+
 def generate_weekly_draft(memorize: AikoMemorize, *, force: bool = False, now: datetime | None = None) -> dict[str, Any]:
     """Create a Lane A1 Patreon dev-post syndication draft bundle."""
     post = _fetch_latest_patreon_post()
@@ -454,8 +572,18 @@ def generate_weekly_draft(memorize: AikoMemorize, *, force: bool = False, now: d
     (draft_dir / "full_post.md").write_text(str(post.get("body") or "").strip() + "\n", encoding="utf-8")
     (draft_dir / "teaser.txt").write_text(teaser + "\n", encoding="utf-8")
     (draft_dir / "hugo.md").write_text(hugo, encoding="utf-8")
-    image_path = _download_a1_image(post, draft_dir)
-    meta = {"success": True, "lane": "A1", "source": "patreon", "patreon_post": post, "hugo_slug": slug, "human_approved": False, "posted": False, "image_path": str(image_path) if image_path else "", "created_at": datetime.now(timezone.utc).isoformat()}
+    # images-only: download all images to draft_dir/images/, keep legacy single image for teaser
+    image_paths = _download_a1_images(post, draft_dir)
+    image_path = image_paths[0] if image_paths else _download_a1_image(post, draft_dir)
+    # also append markdown references to hugo.md so images appear in aiko-dev post
+    if image_paths:
+        rels = "\n".join(f"![image_{i}](/{A1_HUGO_IMAGES_PATH.lstrip('/')}/{slug}/{p.name})" for i, p in enumerate(image_paths))
+        # avoid duplicating if body already contains them
+        if rels not in hugo:
+            hugo_with_images = hugo.rstrip() + "\n\n" + rels + "\n"
+            (draft_dir / "hugo.md").write_text(hugo_with_images, encoding="utf-8")
+            hugo = hugo_with_images
+    meta = {"success": True, "lane": "A1", "source": "patreon", "patreon_post": post, "hugo_slug": slug, "human_approved": False, "posted": False, "image_path": str(image_path) if image_path else "", "image_paths": [str(p) for p in image_paths], "created_at": datetime.now(timezone.utc).isoformat()}
     meta_path.write_text(json.dumps(meta, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     return {"success": True, "draft_dir": str(draft_dir), "meta": meta}
 
@@ -464,6 +592,10 @@ def _read_weekly_draft(draft_dir: Path) -> tuple[str, Path | None, dict[str, Any
     meta = json.loads((draft_dir / "draft.json").read_text(encoding="utf-8"))
     text_path = draft_dir / "teaser.txt"
     text = text_path.read_text(encoding="utf-8").strip() if text_path.exists() else _teaser_for_post(meta.get("patreon_post", {}))
+    # prefer new multi-image layout, fallback to legacy single image
+    for candidate in sorted((draft_dir / "images").glob("image_*.*")) if (draft_dir / "images").exists() else []:
+        if candidate.is_file():
+            return text, candidate, meta
     image_path = draft_dir / "image.png"
     if image_path.exists():
         return text, image_path, meta
@@ -484,7 +616,25 @@ def post_draft(draft_dir: str | Path, providers: tuple[str, ...] | None = None) 
     except Exception as e:
         return {"posted": False, "error": str(e)}
     slug = meta.get("hugo_slug") or _slugify(meta.get("patreon_post", {}).get("title", "aiko-dev-update"))
-    results = [_push_a1_hugo_post(slug, hugo)]
+    # push images first (images-only lane, videos via YouTube links)
+    image_paths: list[Path] = []
+    for key in ("image_paths",):
+        raw = meta.get(key) or []
+        if isinstance(raw, list):
+            for s in raw:
+                p = Path(s)
+                # meta may store absolute draft path; resolve relative to draft_dir if needed
+                if not p.exists():
+                    alt = path / "images" / Path(s).name
+                    if alt.exists():
+                        p = alt
+                if p.exists():
+                    image_paths.append(p)
+    if not image_paths:
+        # fallback: discover on disk
+        image_paths = sorted((path / "images").glob("image_*.*")) if (path / "images").exists() else []
+    image_results = _push_a1_hugo_images(slug, image_paths)
+    results = [*image_results, _push_a1_hugo_post(slug, hugo)]
     full_services = ",".join(providers or A1_FULL_PROVIDERS)
     if full_services:
         results.append(_call_social_mcp("post_social", services=full_services, text=full_body, title=meta.get("patreon_post", {}).get("title", "Aiko dev update")))
