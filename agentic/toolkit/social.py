@@ -103,7 +103,12 @@ def job_post_social_root() -> Path:
     override = os.getenv("JOB_POST_SOCIAL_ROOT")
     if override:
         return Path(override).expanduser().resolve()
-    return (user_workspace_root() / "social" / "job_posts").resolve()
+    # Use per-user state dir directly — do not respect WORKSPACE_ROOT which
+    # is a process-global override for generic workspace tools and would
+    # collapse all users into a single shared jetson/workspace path.
+    from system.userspace import user_state_dir
+
+    return (user_state_dir() / "workspace" / "social" / "job_posts").resolve()
 
 
 def _latest_approved_job_post_draft() -> Path | None:
