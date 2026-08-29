@@ -224,6 +224,15 @@ def _setup() -> None:
             ch.setFormatter(fmt)
             root.addHandler(ch)
 
+        # ── silence noisy polling libraries (telegram getUpdates every ~10s) ──
+        # httpx logs every POST at INFO; with the telegram adapter that is
+        # ~8.6k lines/day of `POST .../getUpdates 200 OK` with zero signal.
+        # Keep them at WARNING so real errors still surface. Re-enable by
+        # running with LOG_LEVEL=DEBUG / --debug.
+        if log_level != "DEBUG":
+            for noisy in ("httpx", "httpx2", "httpcore", "telegram", "telegram.ext"):
+                logging.getLogger(noisy).setLevel(logging.WARNING)
+
         _initialized = True
 
 

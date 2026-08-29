@@ -31,6 +31,7 @@ For comparison vs LangGraph/CrewAI, see ../README.md or docs/graph_comparison.md
 from __future__ import annotations
 
 import contextlib
+import contextvars
 import hashlib
 import inspect
 import json
@@ -1745,9 +1746,13 @@ def _execute_graph_inner(graph: PlanGraph, embedder=None, llm_client=None,
                     _yield(nr)
             if not runnable:
                 continue
+            # Propagate ContextVars (current_user_id, display_name, etc.) to worker threads.
+            # ThreadPoolExecutor does not copy contextvars automatically, so without this
+            # per-user state (e.g. job_hunt config path) falls back to "guest".
+            ctx = contextvars.copy_context()
             future_map = {}
             for node in runnable:
-                future_map[pool.submit(_run_node, node, graph.goal, results, embedder, llm_client, llm_model, extras, state, run_id)] = node
+                future_map[pool.submit(ctx.run, _run_node, node, graph.goal, results, embedder, llm_client, llm_model, extras, state, run_id)] = node
             for fut in as_completed(future_map):
                 node = future_map[fut]
                 try:

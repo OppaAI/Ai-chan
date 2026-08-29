@@ -71,7 +71,7 @@ class TelegramAdapter(AdapterBase):
                     "Hi! I'm Aiko-chan. Just send me a message and we can chat."
                 )
                 return
-            log.info("[telegram] msg from %s: %.60s", display, text)
+            log.debug("[telegram] msg from %s: %.60s", display, text)
             # Do NOT block on session.wait(): this handler runs on PTB's
             # asyncio event loop; blocking it during inference starves the
             # polling loop. The session runs inference on its own thread
