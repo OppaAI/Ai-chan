@@ -153,6 +153,51 @@ def test_fetch_one_greenhouse_board_uses_rss_style_config(monkeypatch, tmp_path)
     assert (tmp_path / "fetch_2026-08-28_greenhouse_0.jsonl").exists()
 
 
+def test_greenhouse_api_workers_isolate_configured_tokens(monkeypatch, tmp_path):
+    from agentic.workflows.job_hunt import toolset
+
+    configured_tokens = ["configured-one", "configured-two"]
+    config = {
+        "greenhouse_source": {"board_tokens": configured_tokens},
+        "job_keywords": ["software"],
+        "max_greenhouse_posts": 10,
+    }
+    received_tokens = []
+
+    def fetcher(cfg, filter_keywords, filter_date, board_tokens=None):
+        received_tokens.append(board_tokens)
+        token = board_tokens[0]
+        return [{
+            "title": "Software Engineer",
+            "summary": f"Role at {token}",
+            "url": f"https://example.test/{token}",
+        }]
+
+    monkeypatch.setenv("GREENHOUSE_BOARD_TOKENS", "environment-one,environment-two")
+    monkeypatch.setattr(toolset, "_job_cache_dir", lambda: tmp_path)
+    monkeypatch.setattr(toolset, "_cache_is_fresh_simple", lambda date_str, cfg: False)
+
+    results = [
+        toolset._fetch_one_api_board(
+            "2026-08-29", config, False, "greenhouse", idx, token, fetcher
+        )
+        for idx, token in enumerate(configured_tokens)
+    ]
+
+    assert received_tokens == [["configured-one"], ["configured-two"]]
+    assert [postings[0]["_source_name"] for postings, _, _ in results] == [
+        "greenhouse_0",
+        "greenhouse_1",
+    ]
+    assert [(info["index"], info["token"]) for _, info, _ in results] == [
+        (0, "configured-one"),
+        (1, "configured-two"),
+    ]
+    assert all(failure is None for _, _, failure in results)
+    assert (tmp_path / "fetch_2026-08-29_greenhouse_0.jsonl").exists()
+    assert (tmp_path / "fetch_2026-08-29_greenhouse_1.jsonl").exists()
+
+
 def test_job_board_tokens_parse_lever_and_ashby_urls():
     from agentic.workflows.job_hunt.toolset import _job_board_tokens
 

@@ -860,7 +860,12 @@ def _greenhouse_salary(job: dict[str, Any]) -> str:
     return "; ".join(parts)
 
 
-def fetch_today_jobs_from_greenhouse(config: dict[str, Any] | None = None, filter_keywords: bool = True, filter_date: bool = True) -> list[dict]:
+def fetch_today_jobs_from_greenhouse(
+    config: dict[str, Any] | None = None,
+    filter_keywords: bool = True,
+    filter_date: bool = True,
+    board_tokens: list[str] | None = None,
+) -> list[dict]:
     """
     Fetch recent job postings from configured Greenhouse Job Board API boards.
     
@@ -868,13 +873,15 @@ def fetch_today_jobs_from_greenhouse(config: dict[str, Any] | None = None, filte
     	config (dict[str, Any] | None): Optional job-hunt configuration.
     	filter_keywords (bool): Whether to retain only postings matching configured job keywords.
     	filter_date (bool): Whether to retain only postings within the configured date range.
+        board_tokens (list[str] | None): Explicit board tokens to fetch. When provided,
+            configuration and environment token resolution is bypassed.
     
     Returns:
     	list[dict]: Normalized, deduplicated Greenhouse job postings.
     """
     config = config or _job_config()
     source_cfg = config.get("greenhouse_source") if isinstance(config.get("greenhouse_source"), dict) else {}
-    tokens = _greenhouse_board_tokens(config)
+    tokens = board_tokens if board_tokens is not None else _greenhouse_board_tokens(config)
     keywords = [kw.casefold() for kw in _cfg(config, "job_keywords", "JOB_KEYWORDS", [], "list")] if filter_keywords else []
     today = local_now().date()
     max_days = _cfg(config, "date_range_days", "JOB_HUNT_DATE_RANGE_DAYS", 1, "int")
@@ -2281,13 +2288,19 @@ def _fetch_one_api_board(
     try:
         log.info("[job_hunt] processing %s board %d: %s", source, idx, token)
         cfg = dict(config)
-        if source == "greenhouse":
-            cfg["greenhouse_board_tokens"] = [token]
-        elif source == "lever":
+        if source == "lever":
             cfg["lever_source_tokens"] = [token]
         elif source == "ashby":
             cfg["ashby_source_tokens"] = [token]
-        postings = fetcher(cfg, filter_keywords=False, filter_date=True)
+        if source == "greenhouse":
+            postings = fetcher(
+                cfg,
+                filter_keywords=False,
+                filter_date=True,
+                board_tokens=[token],
+            )
+        else:
+            postings = fetcher(cfg, filter_keywords=False, filter_date=True)
         raw_count = len(postings)
         _job_write_jsonl_cache(cache_path, postings, source)
         filtered = _filter_by_keyword_then_cap(postings)
