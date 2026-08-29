@@ -313,13 +313,33 @@ def _fetch_latest_patreon_post() -> dict[str, Any] | None:
     params = None if custom_url else {
         "fields[post]": "title,content,published_at,url,embed_data,embed_url",
         "sort": "-published_at",
-        "page[count]": "1",
+        "page[count]": "50",
     }
     try:
-        resp = requests.get(url, headers=headers, params=params, timeout=30)
-        resp.raise_for_status()
-        payload = resp.json()
-        item = (payload.get("data") or [payload])[0]
+        all_posts = []
+        next_url = url
+        current_params = params
+        while next_url:
+            resp = requests.get(next_url, headers=headers, params=current_params, timeout=30)
+            resp.raise_for_status()
+            payload = resp.json()
+            data = payload.get("data")
+            if data and isinstance(data, list):
+                all_posts.extend(data)
+            
+            next_url = payload.get("links", {}).get("next")
+            current_params = None
+            
+        if not all_posts:
+            all_posts = [payload]
+            
+        def get_pub_date(p):
+            attrs = p.get("attributes", p)
+            return attrs.get("published_at") or attrs.get("created_at") or ""
+            
+        all_posts.sort(key=get_pub_date, reverse=True)
+        item = all_posts[0]
+        
         attrs = item.get("attributes", item)
         title = attrs.get("title") or "Aiko dev update"
         body = attrs.get("content") or attrs.get("body") or attrs.get("teaser_text") or ""
