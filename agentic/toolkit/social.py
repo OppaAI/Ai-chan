@@ -311,7 +311,7 @@ def _fetch_latest_patreon_post() -> dict[str, Any] | None:
     headers = {"Authorization": f"Bearer {token}"}
     url = custom_url or f"https://www.patreon.com/api/oauth2/v2/campaigns/{campaign_id}/posts"
     params = None if custom_url else {
-        "fields[post]": "title,content,published_at,url,embed,post_file,teaser_text",
+        "fields[post]": "title,content,published_at,url,embed_data,embed_url,teaser_text",
         "sort": "-published_at",
         "page[count]": "1",
     }
@@ -324,7 +324,7 @@ def _fetch_latest_patreon_post() -> dict[str, Any] | None:
         title = attrs.get("title") or "Aiko dev update"
         body = attrs.get("content") or attrs.get("body") or attrs.get("teaser_text") or ""
         image_url = ""
-        embed = attrs.get("embed") or {}
+        embed = attrs.get("embed_data") or attrs.get("embed") or {}
         if isinstance(embed, dict):
             image_url = embed.get("thumbnail_url") or embed.get("url") or ""
         return {
