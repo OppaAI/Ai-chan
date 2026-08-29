@@ -1968,6 +1968,42 @@ def _job_cache_read_manifest(date_str: str) -> dict[str, Any] | None:
         return None
 
 
+def prune_rejected_job_posts(days: int = 3) -> int:
+    """Delete rejected job-post drafts older than `days` (per-user).
+
+    Scans <job_post_social_root>/rejected/<YYYY-MM-DD>/... and removes
+    whole date directories older than cutoff. Returns count removed.
+    """
+    try:
+        from agentic.toolkit.social import job_post_social_root
+
+        root = job_post_social_root() / "rejected"
+        if not root.is_dir():
+            return 0
+        cutoff = (local_now().date() - timedelta(days=days))
+        removed = 0
+        for date_dir in root.iterdir():
+            if not date_dir.is_dir():
+                continue
+            try:
+                dir_date = datetime.fromisoformat(date_dir.name).date()
+            except (ValueError, TypeError):
+                continue
+            if dir_date < cutoff:
+                import shutil
+
+                try:
+                    shutil.rmtree(date_dir)
+                    removed += 1
+                    log.info("[job_hunt] pruned rejected job posts for %s (older than %d days)", date_dir.name, days)
+                except OSError as e:
+                    log.warning("[job_hunt] failed to prune rejected %s: %s", date_dir, e)
+        return removed
+    except Exception as e:
+        log.warning("[job_hunt] prune_rejected_job_posts failed: %s", e)
+        return 0
+
+
 def clear_job_fetch_cache(date_str: str | None = None) -> None:
     """Delete the day's fetch cache so the next run re-fetches fresh jobs.
 
@@ -1990,6 +2026,11 @@ def clear_job_fetch_cache(date_str: str | None = None) -> None:
                 pass
     if removed:
         log.info("[job_hunt] cleared %d job fetch cache file(s) for %s", removed, date_str)
+    # Keep rejected drafts for 3 days only
+    try:
+        prune_rejected_job_posts(days=3)
+    except Exception:
+        pass
 
 
 # ── STEP 2: Process and merge RSS + email caches into structured output ─────
