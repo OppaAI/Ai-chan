@@ -1373,6 +1373,12 @@ def _extract_jobs_from_cleaned_email(
         if "glassdoor." in low:
             if "joblisting" not in low and "/job/" not in low and "/jobs" not in low:
                 continue
+        # LinkedIn: only /jobs/view/ are real jobs; skip search-results, feed, messaging etc.
+        if "linkedin.com" in low:
+            if "/jobs/search" in low:
+                continue
+            if "/jobs/view/" not in low:
+                continue
         if any(x in low for x in ["privacy", "unsubscribe", "emailsettings", "/about/", "/member/account"]):
             continue
         filtered.append((label, url))
