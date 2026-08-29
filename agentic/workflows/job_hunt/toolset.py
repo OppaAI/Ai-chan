@@ -1361,6 +1361,23 @@ def _extract_jobs_from_cleaned_email(
             seen_u.add(key)
             urls.append(("", url))
 
+    # Filter out non-job URLs (Glassdoor community digests etc.)
+    # Community posts contain /Community/ or /bowl- and are not job listings
+    urls = [(label, url) for label, url in urls if "/Community/" not in url and "/bowl-" not in url]
+    # Further filter: keep only actual job listing URLs, not footer links
+    # (privacy, unsubscribe, email settings etc.)
+    filtered = []
+    for label, url in urls:
+        low = url.lower()
+        # Glassdoor: only jobListing / Job / jobs paths are real jobs
+        if "glassdoor." in low:
+            if "joblisting" not in low and "/job/" not in low and "/jobs" not in low:
+                continue
+        if any(x in low for x in ["privacy", "unsubscribe", "emailsettings", "/about/", "/member/account"]):
+            continue
+        filtered.append((label, url))
+    urls = filtered
+
     # 2) Title candidates from lines
     lines = [ln.strip() for ln in cleaned.splitlines() if ln.strip()]
     title_candidates: list[str] = []
@@ -1403,14 +1420,30 @@ def _extract_jobs_from_cleaned_email(
         for idx, (label, url) in enumerate(urls):
             title = ""
             label_is_generic = label and _is_generic_category(label)
-            
-            if label and _looks_like_job_title(label) and not label_is_generic:
+
+            # Special handling for Glassdoor jobListing URLs where label is
+            # "Company ★RoleLocation$Salary" with missing spaces (e.g. AgentVancouver)
+            if "jobListing" in url and "★" in label:
+                try:
+                    after_star = label.split("★", 1)[1].strip()
+                    if "$" in after_star:
+                        title_part = after_star.split("$")[0].strip()
+                    else:
+                        title_part = after_star[:80].strip()
+                    # Fix concatenated words like AgentVancouver → Agent Vancouver
+                    title_part = re.sub(r"([a-z])([A-Z])", r"\1 \2", title_part)
+                    title_part = re.sub(r"\s+", " ", title_part).strip()
+                    if title_part and not _is_generic_category(title_part) and len(title_part) > 5:
+                        title = title_part[:200]
+                except Exception:
+                    title = ""
+            if not title and label and _looks_like_job_title(label) and not label_is_generic:
                 title = label
-            elif idx < len(title_candidates):
+            elif not title and idx < len(title_candidates):
                 title = title_candidates[idx]
-            elif title_candidates:
+            elif not title and title_candidates:
                 title = title_candidates[0]
-            else:
+            elif not title:
                 title = subject or f"Job listing {idx + 1}"
 
             # If we ended up with a generic category as title, try to extract
@@ -1436,23 +1469,51 @@ def _extract_jobs_from_cleaned_email(
                     continue
 
             org = ""
-            if idx < len(company_from_star):
-                org = company_from_star[idx].strip()
-            if not org:
-                # Try "Title at Company" pattern
-                m = re.search(r"\bat\s+([A-Z][A-Za-z0-9\s&.,\-']{2,60})", title)
-                if m:
-                    org = m.group(1).strip()
-                    title = title[: m.start()].strip(" -–|") or title
-            if not org:
-                org = sender.split("@")[0] if "@" in sender else (sender or "")
-                if _is_sender_placeholder_org(org):
-                    # Digest/alert sender is not the employer — leave empty so the
-                    # LLM fills the real organization from the linked job page.
+            # Special handling for Glassdoor jobListing: extract org/loc from label
+            # Label is "Marriott International 3.9 ★At Your Service AgentVancouver$27..."
+            if "jobListing" in url and "★" in label:
+                try:
+                    before_star = label.split("★", 1)[0].strip()
+                    before_star = re.sub(r"\s*\d+\.\d+\s*$", "", before_star).strip()
+                    if before_star and len(before_star) > 2:
+                        org = before_star[:120].strip()
+                except Exception:
+                    pass
+                # Loc from title/label
+                loc = ""
+                for kw in ("Vancouver", "Toronto", "Montreal", "Ottawa", "Calgary", "Edmonton", "San Francisco", "New York", "Seattle", "Los Angeles", "Austin", "Chicago", "Boston", "California", "Remote", "Hybrid"):
+                    if kw.lower() in title.lower() or kw.lower() in label.lower():
+                        loc = kw
+                        break
+                if not loc:
+                    loc = location_hits[idx % len(location_hits)] if location_hits else ""
+                sal = salary_matches[idx % len(salary_matches)] if salary_matches else ""
+                # If org/loc found via label, skip normal extraction
+                if org or loc:
+                    # keep sal as is, org/loc already set
+                    pass
+                else:
                     org = ""
+                    loc = location_hits[idx % len(location_hits)] if location_hits else ""
+                    sal = salary_matches[idx % len(salary_matches)] if salary_matches else ""
+            else:
+                if idx < len(company_from_star):
+                    org = company_from_star[idx].strip()
+                if not org:
+                    # Try "Title at Company" pattern
+                    m = re.search(r"\bat\s+([A-Z][A-Za-z0-9\s&.,\-']{2,60})", title)
+                    if m:
+                        org = m.group(1).strip()
+                        title = title[: m.start()].strip(" -–|") or title
+                if not org:
+                    org = sender.split("@")[0] if "@" in sender else (sender or "")
+                    if _is_sender_placeholder_org(org):
+                        # Digest/alert sender is not the employer — leave empty so the
+                        # LLM fills the real organization from the linked job page.
+                        org = ""
 
-            loc = location_hits[idx % len(location_hits)] if location_hits else ""
-            sal = salary_matches[idx % len(salary_matches)] if salary_matches else ""
+                loc = location_hits[idx % len(location_hits)] if location_hits else ""
+                sal = salary_matches[idx % len(salary_matches)] if salary_matches else ""
 
             # Prefer a local window of cleaned text around this URL for summary
             pos = cleaned.find(url)
