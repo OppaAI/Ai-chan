@@ -630,6 +630,120 @@ def monitor_bluesky_replies(memorize=None) -> dict:
     }
 
 
+def _now_iso() -> str:
+    """Return current UTC time in ISO 8601 with 'Z' suffix for Bluesky records."""
+    from datetime import datetime, timezone
+    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def _extract_first_url(text: str) -> str:
+    """Return the first http(s) URL in text, or empty string."""
+    m = re.search(r"https?://[^\s]+", text or "")
+    if not m:
+        return ""
+    return m.group(0).rstrip(".,;:!?)]}>'\"")
+
+
+def _build_external_embed(text: str):
+    """Build an AppBskyEmbedExternal card for the first URL in text.
+
+    Fetches the page's Open Graph tags to fill title/description/image
+    so Bluesky renders a link-preview card. Returns None if no URL or
+    the fetch fails.
+    """
+    url = _extract_first_url(text)
+    if not url:
+        return None
+    try:
+        from atproto import models
+        from urllib.parse import urlparse
+        # Fetch OG tags with a short timeout
+        try:
+            resp = get_session().get(
+                url, timeout=10, allow_redirects=True,
+                headers={"User-Agent": "Mozilla/5.0 (compatible; AikoBot/1.0)"},
+            )
+            if resp.status_code != 200:
+                return None
+            html = resp.text[:50000]
+        except Exception:
+            return None
+        def _og(prop: str) -> str:
+            m = re.search(
+                rf'<meta\s+(?:property|name)\s*=\s*["\']{re.escape(prop)}["\']\s+content\s*=\s*["\']([^"\']*)["\']',
+                html, re.IGNORECASE,
+            )
+            if m:
+                from html import unescape
+                return unescape(m.group(1)).strip()
+            return ""
+        title = _og("og:title") or _og("twitter:title") or url
+        description = _og("og:description") or _og("twitter:description") or ""
+        image_url = _og("og:image") or _og("twitter:image") or ""
+        if image_url and not image_url.startswith("http"):
+            parsed = urlparse(url)
+            image_url = f"{parsed.scheme}://{parsed.netloc}{image_url}"
+        # Upload the thumbnail to Bluesky if present
+        thumb_blob = None
+        if image_url:
+            try:
+                img_resp = get_session().get(image_url, timeout=10)
+                if img_resp.status_code == 200 and len(img_resp.content) <= 1000000:
+                    client = _get_client()
+                    if not isinstance(client, dict):
+                        upload = client.upload_blob(img_resp.content)
+                        thumb_blob = upload.blob
+            except Exception:
+                pass
+        # Build embed with or without thumbnail
+        if thumb_blob is not None:
+            external = models.AppBskyEmbedExternal.Main(
+                external=models.AppBskyEmbedExternal.External(
+                    uri=url, title=title[:300],
+                    description=description[:3000],
+                    thumb=thumb_blob,
+                )
+            )
+        else:
+            external = models.AppBskyEmbedExternal.Main(
+                external=models.AppBskyEmbedExternal.External(
+                    uri=url, title=title[:300],
+                    description=description[:3000],
+                )
+            )
+        return external
+    except Exception:
+        return None
+
+
+def _build_link_facets(text: str) -> list:
+    """Build Bluesky richtext link facets for every http(s) URL in text.
+
+    send_post's auto-faceting misses URLs that follow whitespace or
+    newlines. Building them explicitly guarantees the URLs render as
+    clickable links in the Bluesky UI.
+    """
+    try:
+        from atproto import models
+    except ImportError:
+        return []
+    facets = []
+    for m in re.finditer(r"https?://[^\s]+", text):
+        url = m.group(0).rstrip(".,;:!?)]}>'\"")
+        if not url:
+            continue
+        start = m.start()
+        end = start + len(url)
+        try:
+            facets.append(models.AppBskyRichtextFacet.Main(
+                index=models.AppBskyRichtextFacet.ByteSlice(byteStart=start, byteEnd=end),
+                features=[models.AppBskyRichtextFacet.Link(uri=url)],
+            ).model_dump())
+        except Exception:
+            pass
+    return facets
+
+
 def load_tools(mcp):
     @mcp.tool(name="post_bluesky", description="Post text + optional image to Bluesky")
     def post_bluesky(text: str, image_path: Optional[str] = None) -> dict:
@@ -639,7 +753,12 @@ def load_tools(mcp):
         try:
             from atproto import models
         except ImportError:
-            return err("bluesky", "atproto not installed — pip install atproto")
+            return {"ok": False, "provider": "bluesky", "error": "atproto not installed — pip install atproto"}
+        # Build link facets for every http(s) URL in the text so the
+        # Bluesky UI renders them as clickable links (send_post's
+        # auto-faceting misses URLs that follow a newline or trailing text).
+        facets = _build_link_facets(text)
+        embed = None
         try:
             if image_path:
                 p = Path(image_path)
@@ -651,9 +770,11 @@ def load_tools(mcp):
                 embed = models.AppBskyEmbedImages.Main(
                     images=[models.AppBskyEmbedImages.Image(alt="", image=upload.blob)]
                 )
-                post = client.send_post(text=text, embed=embed)
             else:
-                post = client.send_post(text=text)
+                # No image — build an external link card from the first
+                # URL's Open Graph tags so the post shows a preview.
+                embed = _build_external_embed(text)
+            post = client.send_post(text=text, facets=facets, embed=embed)
             return {"ok": True, "provider": "bluesky", "uri": post.uri, "cid": post.cid}
         except Exception as e:
             return {"ok": False, "provider": "bluesky", "error": str(e)}

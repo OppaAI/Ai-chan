@@ -281,9 +281,10 @@ _LLM_CLIENT = OpenAI(base_url=LLM_BASE_URL, api_key="not-needed")
 A1_FULL_PROVIDERS = tuple(p.strip().lower() for p in os.getenv("A1_FULL_PROVIDERS", "").split(",") if p.strip())
 A1_TEASER_PROVIDERS = tuple(p.strip().lower() for p in os.getenv("A1_TEASER_PROVIDERS", "x,bluesky,mastodon,discord,threads").split(",") if p.strip())
 A1_TEASER_MAX_CHARS = _int_env("A1_TEASER_MAX_CHARS", 280)
-# Threads topic tag for the teaser fanout. "AI" is a default that's always
-# valid; users can override with A1_THREADS_TOPIC_TAG.
-A1_THREADS_TOPIC_TAG = os.getenv("A1_THREADS_TOPIC_TAG", "AI").strip() or None
+# Threads topic tag for the teaser fanout. "AI Threads" is the default
+# (it surfaces the post under Threads' AI topic); users can override with
+# A1_THREADS_TOPIC_TAG.
+A1_THREADS_TOPIC_TAG = os.getenv("A1_THREADS_TOPIC_TAG", "AI Threads").strip() or None
 A1_HUGO_REPO = os.getenv("AIKO_DEV_GITHUB_REPO", os.getenv("GITHUB_REPO", ""))
 A1_HUGO_BRANCH = os.getenv("AIKO_DEV_GITHUB_BRANCH", os.getenv("GITHUB_BRANCH", "main"))
 A1_HUGO_CONTENT_PATH = os.getenv("AIKO_DEV_HUGO_CONTENT_PATH", "content/posts")
@@ -429,9 +430,13 @@ def _teaser_for_post(post: dict[str, Any]) -> str:
         # Put the URL on its own line so platforms (Bluesky, Discord,
         # Mastodon) reliably auto-link it instead of treating it as
         # trailing text glued onto the last word. Reserve enough chars
-        # for "\n\n" + url so the URL never gets truncated mid-string.
-        reserve = len(post_url) + 2  # "\n\n" + url
+        # for "\n\n" + url + a trailing " ..." to signal truncation.
+        reserve = len(post_url) + 6  # "\n\n" + url + " ..."
         teaser = teaser[: max(0, A1_TEASER_MAX_CHARS - reserve)].rstrip()
+        if not teaser.endswith((".", "!", "?")):
+            teaser = teaser.rstrip(",;:- ") + " ..."
+        else:
+            teaser = teaser + " ..."
         teaser = f"{teaser}\n\n{post_url}"
     return teaser[:A1_TEASER_MAX_CHARS].rstrip()
 
