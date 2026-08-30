@@ -312,10 +312,7 @@ def _fetch_latest_patreon_post() -> dict[str, Any] | None:
     headers = {"Authorization": f"Bearer {token}"}
     url = custom_url or f"https://www.patreon.com/api/oauth2/v2/campaigns/{campaign_id}/posts"
     params = None if custom_url else {
-        "fields[post]": "title,content,published_at,url,embed_data,embed_url,post_type",
-        "fields[images]": "url,image_url,download_url,width,height",
-        "fields[post_file]": "file_name,download_url,url,mime_type",
-        "include": "images,post_file",
+        "fields[post]": "title,content,published_at,url,embed_data,embed_url",
         "sort": "-published_at",
         "page[count]": "50",
     }
