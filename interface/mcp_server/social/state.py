@@ -143,6 +143,25 @@ class MCPDatabase:
                 worker_id TEXT
             );
 
+            CREATE TABLE IF NOT EXISTS mastodon_processed_replies (
+                reply_id TEXT PRIMARY KEY,
+                post_id TEXT NOT NULL,
+                processed_at REAL NOT NULL,
+                response_id TEXT
+            );
+
+            CREATE TABLE IF NOT EXISTS mastodon_logged_replies (
+                reply_id TEXT PRIMARY KEY,
+                logged_at REAL NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS mastodon_reply_claims (
+                reply_id TEXT PRIMARY KEY,
+                claimed_at REAL NOT NULL,
+                status TEXT NOT NULL,
+                worker_id TEXT
+            );
+
             CREATE TABLE IF NOT EXISTS tool_log (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 tool TEXT NOT NULL,
@@ -387,6 +406,69 @@ class MCPDatabase:
         )
         self._commit()
 
+    def has_processed_mastodon_reply(self, reply_id: str) -> bool:
+        row = self._conn.execute(
+            "SELECT 1 FROM mastodon_processed_replies WHERE reply_id = ?",
+            (str(reply_id),),
+        ).fetchone()
+        return row is not None
+
+    def mark_processed_mastodon_reply(
+        self, reply_id: str, post_id: str, response_id: str | None = None
+    ) -> None:
+        self._conn.execute(
+            "INSERT OR IGNORE INTO mastodon_processed_replies "
+            "(reply_id, post_id, processed_at, response_id) VALUES (?, ?, ?, ?)",
+            (str(reply_id), str(post_id), time.time(), response_id),
+        )
+        self._commit()
+
+    def has_logged_mastodon_reply(self, reply_id: str) -> bool:
+        row = self._conn.execute(
+            "SELECT 1 FROM mastodon_logged_replies WHERE reply_id = ?",
+            (str(reply_id),),
+        ).fetchone()
+        return row is not None
+
+    def mark_logged_mastodon_reply(self, reply_id: str) -> None:
+        self._conn.execute(
+            "INSERT OR IGNORE INTO mastodon_logged_replies (reply_id, logged_at) VALUES (?, ?)",
+            (str(reply_id), time.time()),
+        )
+        self._commit()
+
+    def claim_mastodon_reply(self, reply_id: str, worker_id: str = "") -> bool:
+        try:
+            self._conn.execute(
+                "INSERT INTO mastodon_reply_claims (reply_id, claimed_at, status, worker_id) VALUES (?, ?, ?, ?)",
+                (str(reply_id), time.time(), "in_progress", worker_id),
+            )
+            self._commit()
+            return True
+        except sqlite3.IntegrityError:
+            return False
+
+    def release_mastodon_reply_claim(self, reply_id: str, success: bool = False) -> None:
+        if success:
+            self._conn.execute(
+                "UPDATE mastodon_reply_claims SET status = ?, claimed_at = ? WHERE reply_id = ?",
+                ("completed", time.time(), str(reply_id)),
+            )
+        else:
+            self._conn.execute(
+                "DELETE FROM mastodon_reply_claims WHERE reply_id = ?",
+                (str(reply_id),),
+            )
+        self._commit()
+
+    def cleanup_stale_mastodon_claims(self, max_age_seconds: float = 300) -> None:
+        cutoff = time.time() - max_age_seconds
+        self._conn.execute(
+            "DELETE FROM mastodon_reply_claims WHERE status = ? AND claimed_at < ?",
+            ("in_progress", cutoff),
+        )
+        self._commit()
+
     def log_tool_call(self, tool: str, arguments: dict, result: dict, duration_ms: float):
         self._conn.execute(
             "INSERT INTO tool_log (tool, arguments, result, duration_ms, created_at) VALUES (?, ?, ?, ?, ?)",
@@ -401,6 +483,8 @@ class MCPDatabase:
         self._conn.execute("DELETE FROM access_tokens WHERE expires_at < ?", (time.time(),))
         self._conn.execute("DELETE FROM bluesky_reply_claims WHERE status = ? AND claimed_at < ?", ("completed", cutoff))
         self.cleanup_stale_bluesky_claims(max_age_seconds=300)
+        self._conn.execute("DELETE FROM mastodon_reply_claims WHERE status = ? AND claimed_at < ?", ("completed", cutoff))
+        self.cleanup_stale_mastodon_claims(max_age_seconds=300)
         self._commit()
 
     def close(self):

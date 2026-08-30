@@ -24,7 +24,10 @@ Key functions:
   - set_current_display_name() / reset_current_display_name() — per-request
                               display name context
   - normalize_user_id()    — build a filesystem-safe, provider-scoped id
-                              for OAuth identities
+                              for OAuth identities, with built-in owner
+                              aliases (e.g. github_205369547 → OppaAI) so
+                              a single canonical directory serves the box's
+                              owner regardless of which provider logged in
  
 The multi-user design allows running multiple Aiko instances (e.g., for
 different team members) on the same machine, each with their own isolated
@@ -102,13 +105,46 @@ def current_display_name() -> str:
     return current_user_id()
 
 
+# Built-in owner aliases: raw provider-scoped ids (e.g. github_205369547)
+# resolve to the human owner name (OppaAI) so a single directory under
+# USER_SPACE_ROOT serves as the canonical home for the box's owner,
+# regardless of which OAuth provider issued the login. Mirrors the alias
+# map in cognition/memory/entity.py so memory attribution and filesystem
+# paths agree on the same canonical name.
+_BUILTIN_USER_ALIASES: dict[str, str] = {
+    "github_205369547": "OppaAI",
+    "local_oppa.ai.bot": "OppaAI",
+    "local_oppa.ai": "OppaAI",
+    "local_@oppa.ai.bot": "OppaAI",
+}
+
+
 def normalize_user_id(provider: str | None, user_id: object) -> str:
-    """Create a filesystem-safe, provider-scoped id for OAuth identities."""
+    """Create a filesystem-safe, provider-scoped id for OAuth identities.
+
+    Resolves built-in owner aliases (e.g. github_205369547 -> OppaAI) so
+    the returned id is the canonical directory name for the box's owner
+    rather than the raw provider id. Non-aliased ids pass through
+    unchanged.
+    """
     provider_part = _SAFE_RE.sub("_", str(provider or "local")).strip("._-") or "local"
     provider_part = _DOTDOT_RE.sub("_", provider_part)
     user_part = _SAFE_RE.sub("_", str(user_id or _DEFAULT_USER_ID)).strip("._-") or _DEFAULT_USER_ID
     user_part = _DOTDOT_RE.sub("_", user_part)
-    return f"{provider_part}_{user_part}"
+    raw = f"{provider_part}_{user_part}"
+    return _BUILTIN_USER_ALIASES.get(raw, raw)
+
+
+def _resolve_aliased_uid(raw: str) -> str:
+    """Sanitise a raw user_id and collapse built-in owner aliases.
+
+    Used by user_state_dir() so an already-canonical id (e.g. "OppaAI")
+    or a raw provider-scoped one (e.g. "github_205369547") both resolve
+    to the same on-disk directory name.
+    """
+    sanitised = _SAFE_RE.sub("_", str(raw or _DEFAULT_USER_ID)).strip("._-") or _DEFAULT_USER_ID
+    sanitised = _DOTDOT_RE.sub("_", sanitised)
+    return _BUILTIN_USER_ALIASES.get(sanitised, sanitised)
 
 
 def _user_state_root_value() -> str:
@@ -137,14 +173,15 @@ def user_state_dir(user_id: str | None = None) -> Path:
     see nothing there, and no stray folder is left on disk before login.
     """
     root = Path(_user_state_root_value()).expanduser()
-    uid = user_id or current_user_id()
-    uid = _SAFE_RE.sub("_", uid).strip("._-") or _DEFAULT_USER_ID
-    uid = _DOTDOT_RE.sub("_", uid)
-    path = root / uid
+    raw = user_id if user_id is not None else current_user_id()
+    # normalise through the same alias-aware pipeline as OAuth logins so a
+    # raw github_205369547 collapses to the canonical OppaAI directory.
+    uid = _resolve_aliased_uid(raw)
 
     if uid == _DEFAULT_USER_ID:
-        return path  # no mkdir — nothing on disk for an unauthenticated guest
+        return root / uid  # no mkdir — nothing on disk for an unauthenticated guest
 
+    path = root / uid
     path.mkdir(parents=True, exist_ok=True)
     try:
         os.chmod(path, 0o700)

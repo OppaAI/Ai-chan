@@ -131,7 +131,7 @@ def _resolve_owner_display_name(uid: str) -> str | None:
     except Exception:
         pass
     # 3) hardcoded owner for this box
-    if uid == "github_205369547":
+    if uid in {"github_205369547", "OppaAI"}:
         return "OppaAI"
     return None
 
@@ -216,6 +216,19 @@ def _poll_bluesky() -> None:
         log.info("[bluesky_daemon] Answered %d / %d matched replies", answered, matched)
     if errors:
         log.warning("[bluesky_daemon] %d error(s): %s", len(errors), errors[:3])
+
+
+def _poll_mastodon() -> None:
+    from interface.mcp_server.social.services.mastodon import monitor_mastodon_replies
+
+    result = monitor_mastodon_replies(memorize=_bound_memorize())
+    answered = result.get("answered", 0)
+    matched = result.get("matched", 0)
+    errors = result.get("errors", [])
+    if answered:
+        log.info("[mastodon_daemon] Answered %d / %d matched replies", answered, matched)
+    if errors:
+        log.warning("[mastodon_daemon] %d error(s): %s", len(errors), errors[:3])
 
 
 def _social_loop() -> None:
@@ -318,6 +331,17 @@ def start_social_monitor_daemon(interval_seconds: int | None = None, only: str |
         else:
             candidates.append(("bluesky", explicit or _interval("BLUESKY_REPLY_MONITOR_INTERVAL_SECONDS", "bluesky"), _poll_bluesky))
 
+    if only in (None, "mastodon"):
+        if os.getenv("MASTODON_MONITOR_DAEMON_ENABLED", "1").strip().lower() in {"0", "false", "no", "off"}:
+            log.info("[mastodon_daemon] Disabled via MASTODON_MONITOR_DAEMON_ENABLED=0, skipping")
+        elif not os.getenv("MASTODON_ACCESS_TOKEN") or not os.getenv("MASTODON_INSTANCE"):
+            log.info(
+                "[mastodon_daemon] MASTODON_ACCESS_TOKEN or MASTODON_INSTANCE not set — "
+                "Mastodon monitor daemon will not start"
+            )
+        else:
+            candidates.append(("mastodon", explicit or _interval("MASTODON_REPLY_MONITOR_INTERVAL_SECONDS", "mastodon"), _poll_mastodon))
+
     if not candidates:
         return None
 
@@ -370,5 +394,15 @@ def start_bluesky_monitor_daemon(interval_seconds: int | None = None) -> threadi
 
 
 def stop_bluesky_monitor_daemon() -> None:
+    """Deprecated: prefer stop_social_monitor_daemon()."""
+    stop_social_monitor_daemon()
+
+
+def start_mastodon_monitor_daemon(interval_seconds: int | None = None) -> threading.Thread | None:
+    """Deprecated: prefer start_social_monitor_daemon()."""
+    return start_social_monitor_daemon(interval_seconds=interval_seconds, only="mastodon")
+
+
+def stop_mastodon_monitor_daemon() -> None:
     """Deprecated: prefer stop_social_monitor_daemon()."""
     stop_social_monitor_daemon()

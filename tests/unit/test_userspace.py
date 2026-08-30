@@ -136,6 +136,19 @@ class TestNormalizeUserId:
         assert result.startswith("patreon_")
         assert "12345" in result
 
+    def test_github_owner_id_resolves_to_canonical_alias(self):
+        """The box owner's GitHub id must collapse to the canonical
+        directory name so a single USER_SPACE_ROOT folder serves them,
+        instead of leaking raw provider ids as parallel directories."""
+        assert normalize_user_id("github", "205369547") == "OppaAI"
+
+    def test_non_aliased_provider_id_passes_through(self):
+        """Unknown providers/ids must NOT be aliased — only the built-in
+        owner map should redirect, so arbitrary users still get their
+        own isolated directory."""
+        result = normalize_user_id("github", "9999999")
+        assert result == "github_9999999"
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Filesystem isolation
@@ -167,6 +180,16 @@ class TestUserStateDir:
         monkeypatch.setenv("AIKO_USER_ID", "implicit_user")
         path = user_state_dir()
         assert path.name == "implicit_user"
+
+    def test_aliased_provider_id_creates_canonical_directory(self, state_root):
+        """Regression: logging in via GitHub with the owner's id must
+        create exactly one canonical directory (OppaAI), not a parallel
+        github_205369547 folder that then gets joined by a second
+        OppaAI folder created elsewhere."""
+        path = user_state_dir("github_205369547")
+        assert path.name == "OppaAI"
+        assert path == state_root / "OppaAI"
+        assert path.exists()
 
 
 class TestUserStatePath:

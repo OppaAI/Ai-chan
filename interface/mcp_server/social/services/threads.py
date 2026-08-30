@@ -115,7 +115,7 @@ def _requested_memory(text: str, context: list[dict] | None = None) -> tuple[str
     return "", ""
 
 
-_OWNER_ALIASES = {"github_205369547", "oppa.ai.bot", "oppa.ai", "oppaai"}
+_OWNER_ALIASES = {"github_205369547", "oppa.ai.bot", "oppa.ai", "oppaai", "OppaAI"}
 
 def _is_owner_author(author: str, owner: str) -> bool:
     """Owner check with built-in aliases (github id ↔ Threads handle → OppaAI)."""
