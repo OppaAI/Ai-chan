@@ -980,11 +980,13 @@ def run_session(ui, args) -> None:
         from interface.mcp_server.social.monitor_daemon import (
             start_threads_monitor_daemon,
             start_bluesky_monitor_daemon,
+            start_mastodon_monitor_daemon,
         )
         start_threads_monitor_daemon()
         start_bluesky_monitor_daemon()
+        start_mastodon_monitor_daemon()
     except Exception:
-        log.debug("Social reply daemons failed to start", exc_info=True)
+        log.warning("Social reply daemons failed to start", exc_info=True)
 
     # per browser connection inside AikoWeb._ws_handler; the CLI resolves its
     # identity in run_cli() before run_session() is ever called.

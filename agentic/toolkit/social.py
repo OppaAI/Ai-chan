@@ -1045,6 +1045,11 @@ def run_scheduled_photo_social() -> dict[str, Any]:
 
 VIDEO_SOCIAL_AUTODRAFT = os.getenv("VIDEO_SOCIAL_AUTODRAFT", "0").lower() in {"1", "true", "yes", "on"}
 VIDEO_SOCIAL_AUTOPOST = os.getenv("VIDEO_SOCIAL_AUTOPOST", "0").lower() in {"1", "true", "yes", "on"}
+# Skip the manual human_approved flag for Lane C. The user already
+# curated the video by dropping the .mp4 + .txt pair into the inbox,
+# so an extra approval click is pure friction. Enable with
+# VIDEO_SOCIAL_AUTO_APPROVE=1 in .env.
+VIDEO_SOCIAL_AUTO_APPROVE = os.getenv("VIDEO_SOCIAL_AUTO_APPROVE", "0").lower() in {"1", "true", "yes", "on"}
 VIDEO_SOCIAL_PROVIDERS = tuple(
     p.strip().lower()
     for p in os.getenv("VIDEO_SOCIAL_PROVIDERS", "youtube").split(",")
@@ -1206,6 +1211,12 @@ def generate_video_draft(*, inbox: str | None = None) -> dict[str, Any]:
     already have a description) and prevents re-drafting the same file
     twice via a small local ledger. Videos without a matching .txt are
     left alone and picked up automatically once you add one.
+
+    With VIDEO_SOCIAL_AUTO_APPROVE=1 the draft is auto-marked as
+    human_approved since the user already curated the upload by placing
+    the .mp4 + .txt in the inbox. Combine with VIDEO_SOCIAL_AUTODRAFT=1
+    + VIDEO_SOCIAL_AUTOPOST=1 in the scheduler for a true drop-and-post
+    pipeline.
     """
     inbox_path = inbox or VIDEO_SOCIAL_INBOX
     candidates = _list_video_candidates(inbox_path, limit=50)
@@ -1275,7 +1286,10 @@ def generate_video_draft(*, inbox: str | None = None) -> dict[str, Any]:
         "selections": selections,
         "created_at": datetime.now(timezone.utc).isoformat(),
         "posted": False,
-        "human_approved": False,
+        # Auto-approve when VIDEO_SOCIAL_AUTO_APPROVE=1: the user already
+        # curated the .mp4 + .txt by dropping them in the inbox, so an
+        # extra manual approval click is pure friction.
+        "human_approved": bool(VIDEO_SOCIAL_AUTO_APPROVE),
     }
     (draft_dir / "draft.json").write_text(json.dumps(meta, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
@@ -1371,9 +1385,12 @@ def post_video_draft(draft_dir: str | Path, providers: tuple[str, ...] | None = 
 
 def run_scheduled_video_social() -> dict[str, Any]:
     """Scheduler entrypoint for the video lane: draft (queue) by default.
-    Posting requires BOTH VIDEO_SOCIAL_AUTOPOST=1 AND
-    draft.json["human_approved"] = true — see run_scheduled_weekly_social
-    for the rationale."""
+
+    When VIDEO_SOCIAL_AUTO_APPROVE=1 is set, generate_video_draft
+    auto-marks new drafts as human_approved, so a single scheduler tick
+    with VIDEO_SOCIAL_AUTOPOST=1 gives a true drop-and-post pipeline:
+    user drops .mp4 + .txt → scheduler picks up, polishes, posts.
+    """
     if not VIDEO_SOCIAL_AUTODRAFT:
         return {"success": False, "skipped": True, "reason": "VIDEO_SOCIAL_AUTODRAFT is off"}
     draft = generate_video_draft()

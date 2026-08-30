@@ -275,7 +275,11 @@ def resolve_user_db_path(path_value: str | os.PathLike[str], *, user_id: str | N
 def connect_sqlite_db(path: str | os.PathLike[str], *, user_id: str | None = None, busy_timeout_ms: int = 5000) -> sqlite3.Connection:
     """Open an optionally encrypted SQLite connection without sqlite-vec."""
     uid = user_id or current_user_id()
-    conn = connect_sqlite(path, user_id=uid)
+    # Resolve relative paths under <USER_SPACE_ROOT>/<user_id>/ so that
+    # a bare "memory/memory.db" argument never lands in the process's
+    # CWD (e.g. the repo root when launched via main.py).
+    resolved = resolve_user_db_path(path, user_id=uid)
+    conn = connect_sqlite(resolved, user_id=uid)
     conn.execute(f"PRAGMA busy_timeout = {int(busy_timeout_ms)}")
     conn.execute("PRAGMA journal_mode = WAL")
     return conn
@@ -292,7 +296,8 @@ def initialize_sqlite_db(path: str | os.PathLike[str], ddl: str, *, user_id: str
 def connect_sqlite_vec(path: str | os.PathLike[str], *, user_id: str | None = None, busy_timeout_ms: int = 5000) -> sqlite3.Connection:
     """Open an optionally encrypted SQLite connection with sqlite-vec loaded."""
     uid = user_id or current_user_id()
-    conn = connect_sqlite(path, user_id=uid)
+    resolved = resolve_user_db_path(path, user_id=uid)
+    conn = connect_sqlite(resolved, user_id=uid)
     conn.execute(f"PRAGMA busy_timeout = {int(busy_timeout_ms)}")
     conn.execute("PRAGMA journal_mode = WAL")
     try:
