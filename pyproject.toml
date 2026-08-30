@@ -45,6 +45,7 @@ dependencies = [
     "pysqlcipher3==1.2.0",
     "mcp>=1.29.0",
     "fastmcp>=3.4.6",
+    "atproto>=0.0.71",
 ]
 
 [project.optional-dependencies]

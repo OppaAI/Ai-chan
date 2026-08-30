@@ -72,9 +72,17 @@ def _mention_trigger() -> str:
     return f"@{user}@{instance}"
 
 
-def _mastodon_headers() -> dict:
+def _mastodon_headers_json() -> dict:
+    """Bearer token + JSON content-type (for endpoints that need JSON body)."""
     token = env("MASTODON_ACCESS_TOKEN", "").strip()
     return {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+
+
+def _mastodon_headers() -> dict:
+    """Bearer token only — no Content-Type, so the caller can set it
+    (form-encoded for /api/v1/statuses, multipart for media uploads)."""
+    token = env("MASTODON_ACCESS_TOKEN", "").strip()
+    return {"Authorization": f"Bearer {token}"}
 
 
 def _owner_display_name() -> str:
@@ -476,7 +484,7 @@ def _post_mastodon_status(text: str, in_reply_to: Optional[str] = None, image_pa
                 files = {"file": (p.name, f, "application/octet-stream")}
                 resp = get_session().post(
                     f"{_mastodon_instance()}/api/v2/media",
-                    headers={"Authorization": f"Bearer {env('MASTODON_ACCESS_TOKEN', '').strip()}"},
+                    headers=_mastodon_headers(),
                     files=files,
                     timeout=60,
                 )
@@ -487,11 +495,22 @@ def _post_mastodon_status(text: str, in_reply_to: Optional[str] = None, image_pa
         if in_reply_to:
             payload["in_reply_to_id"] = in_reply_to
         if media_ids:
+            # Mastodon expects media_ids as repeated form fields, not a list
+            # — but requests' data= serializes list values as repeated keys,
+            # which the API accepts. Keep the list and let requests handle it.
             payload["media_ids[]"] = [m for m in media_ids if m]
+        # Build the form data so list values repeat correctly
+        form_data: list[tuple[str, str]] = []
+        for k, v in payload.items():
+            if isinstance(v, list):
+                for item in v:
+                    form_data.append((k, str(item)))
+            else:
+                form_data.append((k, str(v)))
         resp = get_session().post(
             f"{_mastodon_instance()}/api/v1/statuses",
             headers=_mastodon_headers(),
-            data=payload,
+            data=form_data,
             timeout=30,
         )
         if resp.status_code not in (200, 201):

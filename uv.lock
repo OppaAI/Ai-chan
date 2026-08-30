@@ -27,6 +27,7 @@ name = "aiko-chan"
 version = "0.1.5"
 source = { virtual = "." }
 dependencies = [
+    { name = "atproto" },
     { name = "coloredlogs" },
     { name = "davey" },
     { name = "defusedxml" },
@@ -103,6 +104,7 @@ twitter = [
 
 [package.metadata]
 requires-dist = [
+    { name = "atproto", specifier = ">=0.0.71" },
     { name = "atproto", marker = "extra == 'bluesky'", specifier = ">=0.0.34" },
     { name = "coloredlogs", specifier = ">=15.0.1" },
     { name = "davey", specifier = ">=0.1.6" },

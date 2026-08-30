@@ -281,6 +281,9 @@ _LLM_CLIENT = OpenAI(base_url=LLM_BASE_URL, api_key="not-needed")
 A1_FULL_PROVIDERS = tuple(p.strip().lower() for p in os.getenv("A1_FULL_PROVIDERS", "").split(",") if p.strip())
 A1_TEASER_PROVIDERS = tuple(p.strip().lower() for p in os.getenv("A1_TEASER_PROVIDERS", "x,bluesky,mastodon,discord,threads").split(",") if p.strip())
 A1_TEASER_MAX_CHARS = _int_env("A1_TEASER_MAX_CHARS", 280)
+# Threads topic tag for the teaser fanout. "AI" is a default that's always
+# valid; users can override with A1_THREADS_TOPIC_TAG.
+A1_THREADS_TOPIC_TAG = os.getenv("A1_THREADS_TOPIC_TAG", "AI").strip() or None
 A1_HUGO_REPO = os.getenv("AIKO_DEV_GITHUB_REPO", os.getenv("GITHUB_REPO", ""))
 A1_HUGO_BRANCH = os.getenv("AIKO_DEV_GITHUB_BRANCH", os.getenv("GITHUB_BRANCH", "main"))
 A1_HUGO_CONTENT_PATH = os.getenv("AIKO_DEV_HUGO_CONTENT_PATH", "content/posts")
@@ -370,13 +373,23 @@ def _fetch_latest_patreon_post() -> dict[str, Any] | None:
                     inc_type = str(inc.get("type") or "")
                     inc_attrs = inc.get("attributes") or {}
                     if inc_type in {"images", "image", "post_file", "media"}:
+                        # Patreon image schema: attributes.urls is a dict of
+                        # {original, large, medium, small, thumb} URLs.
+                        urls_dict = inc_attrs.get("urls")
+                        if isinstance(urls_dict, dict):
+                            for size_key in ("original", "large", "medium", "small", "thumb"):
+                                v = urls_dict.get(size_key)
+                                if isinstance(v, str) and v.startswith("http") and v not in image_urls:
+                                    image_urls.append(v)
+                                    break
+                        # Fallback to direct fields
                         for k in ("url", "image_url", "download_url", "full", "large"):
                             v = inc_attrs.get(k)
                             if isinstance(v, str) and v.startswith("http") and v not in image_urls:
                                 image_urls.append(v)
                                 break
-                        # fallback: any http string in attributes
-                        if len(image_urls) == 0 or image_urls[-1] not in str(inc_attrs):
+                        # Final fallback: any http string in attributes that looks like an image
+                        if not any(u in str(inc_attrs) for u in image_urls):
                             for v in inc_attrs.values():
                                 if isinstance(v, str) and v.startswith("http") and v not in image_urls and any(v.lower().endswith(ext) for ext in (".png", ".jpg", ".jpeg", ".webp", ".gif")):
                                     image_urls.append(v)
@@ -407,9 +420,19 @@ def _teaser_for_post(post: dict[str, Any]) -> str:
     text = re.sub(r"\s+", " ", text).strip()
     title = post.get("title") or "Aiko dev update"
     teaser = f"{title}: {text}" if text else title
-    if post.get("url"):
-        reserve = len(post["url"]) + 1
-        teaser = teaser[: max(0, A1_TEASER_MAX_CHARS - reserve)].rstrip() + " " + post["url"]
+    # Normalize Patreon API's relative URL to absolute so the teaser
+    # (and downstream summary) is always a clickable link.
+    post_url = str(post.get("url") or "").strip()
+    if post_url.startswith("/"):
+        post_url = f"https://www.patreon.com{post_url}"
+    if post_url:
+        # Put the URL on its own line so platforms (Bluesky, Discord,
+        # Mastodon) reliably auto-link it instead of treating it as
+        # trailing text glued onto the last word. Reserve enough chars
+        # for "\n\n" + url so the URL never gets truncated mid-string.
+        reserve = len(post_url) + 2  # "\n\n" + url
+        teaser = teaser[: max(0, A1_TEASER_MAX_CHARS - reserve)].rstrip()
+        teaser = f"{teaser}\n\n{post_url}"
     return teaser[:A1_TEASER_MAX_CHARS].rstrip()
 
 
@@ -424,7 +447,14 @@ def _build_a1_hugo_post(post: dict[str, Any], teaser: str) -> tuple[str, str]:
     slug = f"{date_part}-{_slugify(post.get('title', 'aiko-dev-update'))}"
     title = str(post.get("title") or "Aiko dev update").replace('"', "'")
     body = post.get("body") or ""
-    source = f"\n\nOriginal Patreon post: {post.get('url')}" if post.get("url") else ""
+    # Patreon API returns a relative URL like "/Oppa_AI/posts/...".
+    # Normalize to an absolute URL so the GitHub post link is clickable.
+    raw_url = str(post.get("url") or "").strip()
+    if raw_url.startswith("/"):
+        source_url = f"https://www.patreon.com{raw_url}"
+    else:
+        source_url = raw_url
+    source = f"\n\nOriginal Patreon post: {source_url}" if source_url else ""
     md = (
         "---\n"
         f"title: \"{title}\"\n"
@@ -634,10 +664,10 @@ def post_draft(draft_dir: str | Path, providers: tuple[str, ...] | None = None) 
     results = [*image_results, _push_a1_hugo_post(slug, hugo)]
     full_services = ",".join(providers or A1_FULL_PROVIDERS)
     if full_services:
-        results.append(_call_social_mcp("post_social", services=full_services, text=full_body, title=meta.get("patreon_post", {}).get("title", "Aiko dev update")))
+        results.append(_call_social_mcp("post_social", services=full_services, text=full_body, title=meta.get("patreon_post", {}).get("title", "Aiko dev update"), topic_tag=A1_THREADS_TOPIC_TAG))
     teaser_services = ",".join(A1_TEASER_PROVIDERS)
     if teaser_services:
-        results.append(_call_social_mcp("post_social", services=teaser_services, text=teaser, image_path=str(image_path) if image_path else None, title=meta.get("patreon_post", {}).get("title", "Aiko dev update")))
+        results.append(_call_social_mcp("post_social", services=teaser_services, text=teaser, image_path=str(image_path) if image_path else None, title=meta.get("patreon_post", {}).get("title", "Aiko dev update"), topic_tag=A1_THREADS_TOPIC_TAG))
     post_meta = {"posted": any(r.get("ok") for r in results), "posted_at": datetime.now(timezone.utc).isoformat(), "results": results}
     (path / "posted.json").write_text(json.dumps(post_meta, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     meta["posted"] = post_meta["posted"]
