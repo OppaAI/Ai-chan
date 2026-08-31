@@ -299,3 +299,25 @@ startup catalogue, while Aiko rejects any call outside its already
 capability-filtered subset, validates all arguments through the registry, and
 retains every existing approval gate. Set `AGENT_REACT_BACKEND=openai` (the
 default) to disable Needle.
+
+### Optional deterministic Needle 2 worker fan-out
+
+Set `AGENT_REACT_BACKEND=needle_multi` to fan each *novel-task ReAct turn* out
+to explicitly configured Needle workers. This is deterministic orchestration,
+not an LLM supervisor: Aiko starts no processes itself, so run one isolated
+Needle server per worker and supply each server only its role's startup tool
+catalogue. `allowed_tools` is required and intersects with Aiko's existing
+per-turn capability filter before a request is sent.
+
+```dotenv
+AGENT_REACT_BACKEND=needle_multi
+NEEDLE_MAX_WORKERS=4
+NEEDLE_WORKERS=[{"id":"research","role":"researcher","base_url":"http://127.0.0.1:8082","allowed_tools":["adaptive_search","deep_read"]},{"id":"planner","role":"planner","base_url":"http://127.0.0.1:8083","allowed_tools":["create_checklist","save_note"]}]
+```
+
+Workers run concurrently. Aiko deduplicates identical proposed calls, then
+uses the same registry validation, approval gates, retries, and result loop as
+single-worker Needle ReAct. A failed, low-confidence, or ineligible worker is
+excluded; if every worker fails, Aiko escalates the turn to the configured main
+LLM. Do not point several workers at a shared Needle server unless that Needle
+deployment documents isolated concurrent sessions.

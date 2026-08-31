@@ -52,6 +52,14 @@ GRAPH_AGENT_PLAYBOOK: "agentic/playbook.json"  # Per-user JSON file for practice
 GRAPH_MAX_WORKERS: "4"  # Max parallel tool nodes for graph execution.
 AGENT_INCLUDE_EXPERIENCE_CONTEXT: "0"  # Experience is now used for offline playbook promotion, not prompt context, by default.
 
+# -- Optional Needle 2 multi-worker ReAct backend --
+# Set AGENT_REACT_BACKEND=needle_multi and configure one isolated Needle
+# endpoint per worker. Each worker must have a least-privilege allowed_tools
+# list; calls are still validated and executed by Aiko's normal ReAct policy.
+# Example: [{"id":"research","role":"researcher","base_url":"http://127.0.0.1:8082","allowed_tools":["adaptive_search","deep_read"]}]
+NEEDLE_WORKERS: ""
+NEEDLE_MAX_WORKERS: "4"
+
 # -- Agent loop limits --
 MAX_AGENT_ITER: "6"  # Maximum tool/planning iterations per task; raise for complex tasks, lower for safety.
 AGENT_MAX_TOKENS: "512"  # Max model output tokens per agent step.

@@ -50,6 +50,7 @@ from cognition.knowledge import knowledge_context_for, ingest_text as ingest_kno
 from agentic import experience, skill_learning
 from agentic import graph_engine as schema
 from agentic.needle import NeedleClient, NeedleError, NeedleLowConfidence
+from agentic.needle_orchestrator import NeedleOrchestrator, load_needle_workers
 from agentic.tools import (
     adaptive_search,
     deep_research,
@@ -116,6 +117,8 @@ AGENT_REACT_BACKEND = os.getenv("AGENT_REACT_BACKEND", "openai").strip().lower()
 NEEDLE_BASE_URL = os.getenv("NEEDLE_BASE_URL", "http://127.0.0.1:8082")
 NEEDLE_TIMEOUT = float(os.getenv("NEEDLE_TIMEOUT", "15"))
 NEEDLE_CONFIDENCE_THRESHOLD = float(os.getenv("NEEDLE_CONFIDENCE_THRESHOLD", "0.85"))
+NEEDLE_WORKERS = os.getenv("NEEDLE_WORKERS", "")
+NEEDLE_MAX_WORKERS = int(os.getenv("NEEDLE_MAX_WORKERS", "4"))
 
 # Rolling STM window shared across all three chat paths. Mirrors
 # CONTEXT_WINDOW_TURNS in cognition.think (kept as a distinct name here rather
@@ -1387,12 +1390,60 @@ def _needle_agent_message(messages, tools, token_callback):
     return msg, usage
 
 
+def _needle_multi_agent_message(messages, tools, token_callback):
+    """Fan a novel ReAct turn out to isolated, least-privilege Needle workers."""
+    workers = load_needle_workers(
+        NEEDLE_WORKERS,
+        default_timeout=NEEDLE_TIMEOUT,
+        default_confidence_threshold=NEEDLE_CONFIDENCE_THRESHOLD,
+        max_workers=NEEDLE_MAX_WORKERS,
+    )
+    results = NeedleOrchestrator(workers).complete(_needle_prompt(messages), tools)
+    calls = []
+    seen: set[tuple[str, str]] = set()
+    for result in results:
+        if result.response is None:
+            log.info("[agentic] Needle worker %s unavailable: %s", result.worker_id, result.error)
+            continue
+        for index, call in enumerate(result.response.calls):
+            arguments = json.dumps(call.arguments, ensure_ascii=False, sort_keys=True)
+            key = (call.name, arguments)
+            if key in seen:
+                continue
+            seen.add(key)
+            calls.append(SimpleNamespace(
+                id=f"needle-{result.worker_id}-{index}",
+                function=SimpleNamespace(name=call.name, arguments=arguments),
+            ))
+    content = next((result.response.content for result in results if result.response and result.response.content), None)
+    if not calls and not content:
+        raise NeedleError("Needle workers returned no calls or response content")
+    if content and token_callback:
+        token_callback(content)
+
+    def _dump(exclude_none=True):
+        data = {"role": "assistant", "content": content}
+        if calls:
+            data["tool_calls"] = [
+                {"id": call.id, "type": "function", "function": {"name": call.function.name, "arguments": call.function.arguments}}
+                for call in calls
+            ]
+        return data
+
+    msg = SimpleNamespace(content=content, tool_calls=calls or None)
+    msg.model_dump = _dump
+    usage = SimpleNamespace(prompt_tokens=None, completion_tokens=None, total_tokens=None)
+    return msg, usage
+
+
 def _stream_agent_message(owner, messages, tools, token_callback):
     """Stream an agentic LLM call, feeding text tokens to token_callback.
     Returns (SimpleNamespace, usage) matching the non-streaming shape.
     """
-    if AGENT_REACT_BACKEND == "needle":
+    if AGENT_REACT_BACKEND in {"needle", "needle_multi"}:
         try:
+            if AGENT_REACT_BACKEND == "needle_multi":
+                return _needle_multi_agent_message(messages, tools, token_callback)
             return _needle_agent_message(messages, tools, token_callback)
         except (NeedleLowConfidence, NeedleError) as exc:
             # Needle is a bounded action worker. Unavailable or uncertain calls
