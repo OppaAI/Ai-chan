@@ -565,6 +565,18 @@ def test_invalid_needle_confidence_falls_back_to_openai(monkeypatch, confidence)
     assert usage is None
 
 
+def test_invalid_needle_max_workers_falls_back_to_openai(monkeypatch):
+    monkeypatch.setattr("agentic.agentic.AGENT_REACT_BACKEND", "needle_multi")
+    monkeypatch.setattr("agentic.agentic.NEEDLE_MAX_WORKERS", "not-an-integer")
+
+    owner = MockOwner()
+    message, usage = _stream_agent_message(owner, [{"role": "user", "content": "save this"}], [], None)
+
+    assert owner._client.call_count == 1
+    assert message.content is None
+    assert usage is None
+
+
 class TestSaveNoteContentTruncation:
     """Tests that save_note truncates content to AGENT_NOTE_MAX_CHARS."""
 

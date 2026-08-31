@@ -118,7 +118,7 @@ NEEDLE_BASE_URL = os.getenv("NEEDLE_BASE_URL", "http://127.0.0.1:8082")
 NEEDLE_TIMEOUT = float(os.getenv("NEEDLE_TIMEOUT", "15"))
 NEEDLE_CONFIDENCE_THRESHOLD = float(os.getenv("NEEDLE_CONFIDENCE_THRESHOLD", "0.85"))
 NEEDLE_WORKERS = os.getenv("NEEDLE_WORKERS", "")
-NEEDLE_MAX_WORKERS = int(os.getenv("NEEDLE_MAX_WORKERS", "4"))
+NEEDLE_MAX_WORKERS = os.getenv("NEEDLE_MAX_WORKERS", "4")
 
 # Rolling STM window shared across all three chat paths. Mirrors
 # CONTEXT_WINDOW_TURNS in cognition.think (kept as a distinct name here rather
@@ -1392,11 +1392,15 @@ def _needle_agent_message(messages, tools, token_callback):
 
 def _needle_multi_agent_message(messages, tools, token_callback):
     """Fan a novel ReAct turn out to isolated, least-privilege Needle workers."""
+    try:
+        max_workers = int(NEEDLE_MAX_WORKERS)
+    except ValueError as exc:
+        raise NeedleError("NEEDLE_MAX_WORKERS must be an integer") from exc
     workers = load_needle_workers(
         NEEDLE_WORKERS,
         default_timeout=NEEDLE_TIMEOUT,
         default_confidence_threshold=NEEDLE_CONFIDENCE_THRESHOLD,
-        max_workers=NEEDLE_MAX_WORKERS,
+        max_workers=max_workers,
     )
     results = NeedleOrchestrator(workers).complete(_needle_prompt(messages), tools)
     calls = []
