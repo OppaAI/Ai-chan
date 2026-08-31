@@ -225,7 +225,7 @@ def record_step(
 ) -> None:
     """Record one named step to both the live UI sink and the trace file.
 
-    name:    "think.route", "memorize.search", "edge_state.situation_context", …
+    name:    "think.route", "memorize.search", "attention.situation_context", …
     layer:   one of LAYER_COLORS keys — drives the colour of the live line
     inputs:  short labels of what flowed into the step
     outputs: short labels of what came out

@@ -1,7 +1,7 @@
 from cognition.attention import EdgeCognitiveState
 
 
-def test_edge_state_is_bounded_and_retrieves_current_focus():
+def test_attention_state_is_bounded_and_retrieves_current_focus():
     state = EdgeCognitiveState()
     for i in range(12):
         state.record(f"remember task {i}", f"Noted item {i}.")
@@ -12,7 +12,7 @@ def test_edge_state_is_bounded_and_retrieves_current_focus():
     assert len(state._open_loops) == 3
 
 
-def test_edge_state_has_no_context_before_first_turn():
+def test_attention_state_has_no_context_before_first_turn():
     assert EdgeCognitiveState().context("hello") == ""
 
 
