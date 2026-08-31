@@ -326,7 +326,7 @@ class IntentConfidenceClassifier:
             return 0.0, 0.5
         
         try:
-            import xgboost as xgb
+            xgb = importlib.import_module("xgboost")
             # Feature order must match training pipeline.
             feature_list = [
                 features.get("input_length", 0),
