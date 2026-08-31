@@ -49,6 +49,7 @@ from agentic.guardrails import DEFAULT_POST_ANSWER_GUARDRAILS, default_pre_tool_
 from cognition.knowledge import knowledge_context_for, ingest_text as ingest_knowledge_text, ingest_file as ingest_knowledge_file
 from agentic import experience, skill_learning
 from agentic import graph_engine as schema
+from agentic.needle import NeedleClient, NeedleError, NeedleLowConfidence
 from agentic.tools import (
     adaptive_search,
     deep_research,
@@ -108,6 +109,13 @@ AGENT_VERIFY_MIN_SCORE = float(os.getenv("AGENT_VERIFY_MIN_SCORE", "0.70"))
 AGENT_TOOL_RETRY_BACKOFF = float(os.getenv("AGENT_TOOL_RETRY_BACKOFF", 0.4))
 AGENT_EXECUTOR_MODE = os.getenv("AGENT_EXECUTOR_MODE", "hybrid").strip().lower()  # react | graph | hybrid
 AGENT_INCLUDE_EXPERIENCE_CONTEXT = os.getenv("AGENT_INCLUDE_EXPERIENCE_CONTEXT", "0").lower() in {"1", "true", "yes", "on"}
+# ``needle`` uses the local Needle 2 /complete contract for the novel ReAct
+# path. Graph playbooks remain deterministic; low-confidence Needle outputs
+# intentionally fall back to the configured conversational LLM.
+AGENT_REACT_BACKEND = os.getenv("AGENT_REACT_BACKEND", "openai").strip().lower()
+NEEDLE_BASE_URL = os.getenv("NEEDLE_BASE_URL", "http://127.0.0.1:8082")
+NEEDLE_TIMEOUT = float(os.getenv("NEEDLE_TIMEOUT", "15"))
+NEEDLE_CONFIDENCE_THRESHOLD = float(os.getenv("NEEDLE_CONFIDENCE_THRESHOLD", "0.85"))
 
 # Rolling STM window shared across all three chat paths. Mirrors
 # CONTEXT_WINDOW_TURNS in cognition.think (kept as a distinct name here rather
@@ -1331,10 +1339,63 @@ def _enforce_agentic_context_budget(
     return blocks["wiki"], blocks["skill"], blocks["knowledge"], blocks["agentic_policy"], blocks["experience"], blocks["task_mode"]
 
 
+def _needle_prompt(messages: list[dict]) -> str:
+    """Keep the Needle worker inside its small, tool-oriented context window."""
+    task = next((str(m.get("content") or "") for m in reversed(messages) if m.get("role") == "user"), "")
+    observations = [str(m.get("content") or "") for m in messages if m.get("role") == "tool"][-2:]
+    if not observations:
+        return task
+    compact = "\n".join(observations)
+    return f"Task: {task}\nLatest tool observations:\n{compact[-1800:]}"
+
+
+def _needle_agent_message(messages, tools, token_callback):
+    """Ask Needle for constrained calls; escalate low-confidence turns to OpenAI."""
+    client = NeedleClient(
+        NEEDLE_BASE_URL, timeout=NEEDLE_TIMEOUT,
+        confidence_threshold=NEEDLE_CONFIDENCE_THRESHOLD,
+    )
+    response = client.complete(_needle_prompt(messages), tools)
+    calls = [
+        SimpleNamespace(
+            id=f"needle-{index}",
+            function=SimpleNamespace(name=call.name, arguments=json.dumps(call.arguments, ensure_ascii=False)),
+        )
+        for index, call in enumerate(response.calls)
+    ]
+    content = response.content or None
+    if content and token_callback:
+        token_callback(content)
+
+    def _dump(exclude_none=True):
+        data = {"role": "assistant", "content": content}
+        if calls:
+            data["tool_calls"] = [
+                {"id": call.id, "type": "function", "function": {"name": call.function.name, "arguments": call.function.arguments}}
+                for call in calls
+            ]
+        return data
+
+    msg = SimpleNamespace(content=content, tool_calls=calls or None)
+    msg.model_dump = _dump
+    usage = SimpleNamespace(prompt_tokens=None, completion_tokens=None, total_tokens=None)
+    return msg, usage
+
+
 def _stream_agent_message(owner, messages, tools, token_callback):
     """Stream an agentic LLM call, feeding text tokens to token_callback.
     Returns (SimpleNamespace, usage) matching the non-streaming shape.
     """
+    if AGENT_REACT_BACKEND == "needle":
+        try:
+            return _needle_agent_message(messages, tools, token_callback)
+        except (NeedleLowConfidence, NeedleError) as exc:
+            # Needle is a bounded action worker. Unavailable or uncertain calls
+            # must not execute; the larger conversational model handles them.
+            log.info("[agentic] Needle escalation to OpenAI: %s", exc)
+    elif AGENT_REACT_BACKEND != "openai":
+        log.warning("[agentic] unknown AGENT_REACT_BACKEND=%r; using openai", AGENT_REACT_BACKEND)
+
     stream = owner._client.chat.completions.create(
         model=owner._llm_model, messages=messages, tools=tools,
         tool_choice="auto", stream=True, max_tokens=AGENT_MAX_TOKENS,
