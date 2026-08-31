@@ -198,7 +198,10 @@ def main() -> int:
         _os.environ["LOG_LEVEL"] = "DEBUG"
         # Auto-enable the per-step brain tracer. --debug now implies a
         # full pipeline trace (system/brain_trace.py) — env-only knob so
-        # normal launches are unaffected.
+        # normal launches are unaffected. Background social-listening
+        # daemons (Threads/Bluesky/Mastodon) get their urllib3/httpcore
+        # debug lines muted automatically; set AIKO_DEBUG_FULL_HTTP=1 to
+        # see raw HTTP if you ever need to.
         _os.environ.setdefault("AIKO_TRACE_BRAIN", "1")
 
     # Set up logging and exit tracing
