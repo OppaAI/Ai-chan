@@ -109,6 +109,20 @@ def test_non_greeting_route_starts_memory_after_intent(monkeypatch):
     assert events == ["intent", "submit_mem_kb"]
 
 
+def test_degrade_chat_is_recorded_without_promoting_agency(monkeypatch):
+    from cognition import attention
+
+    think = _bare_think()
+    state = attention.EdgeCognitiveState()
+    monkeypatch.setattr(attention, "for_identity", lambda _identity: state)
+    monkeypatch.setattr(think, "chat", lambda *_args, **_kwargs: "soft reply")
+
+    assert think._soft_gate_reply("draft this", "degrade_chat", "low confidence") == "soft reply"
+
+    assert state.snapshot()["self_decisions"][0]["kinds"] == ["degrade_chat"]
+    assert not state.snapshot()["self_preference_evidence"]
+
+
 class FakeCompletions:
     def __init__(self, label: str):
         self.label = label

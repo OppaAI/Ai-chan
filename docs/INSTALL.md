@@ -273,3 +273,29 @@ uv run python main.py --clear-mem
 ```
 
 In-app commands include `/quit`, `/reset`, `/memory`, `/clear`, `/remember`, `/think <question>`, `/web <query>`, `/voice`, `/listen`, and `/help`.
+
+### Optional Needle 2 ReAct worker
+
+Aiko can use a local Needle 2 server only for novel-task ReAct tool selection;
+known graph/playbook workflows remain deterministic and the configured main LLM
+remains the fallback for low-confidence or unavailable Needle responses.
+
+```dotenv
+AGENT_REACT_BACKEND=needle
+NEEDLE_BASE_URL=http://127.0.0.1:8082
+NEEDLE_CONFIDENCE_THRESHOLD=0.85
+NEEDLE_TIMEOUT=15
+```
+
+Export Aiko's startup catalogue, then start Needle with it:
+
+```bash
+uv run python scripts/export_needle_tools.py needle-tools.json
+needle --tools needle-tools.json --serve
+```
+
+Configure the server port in `NEEDLE_BASE_URL`. Needle retrieves from its
+startup catalogue, while Aiko rejects any call outside its already
+capability-filtered subset, validates all arguments through the registry, and
+retains every existing approval gate. Set `AGENT_REACT_BACKEND=openai` (the
+default) to disable Needle.

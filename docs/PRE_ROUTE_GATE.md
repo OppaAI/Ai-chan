@@ -4,7 +4,7 @@ Moves the self-assessment gate **in front of** quaternary semantic routing so lo
 
 ## Already on this branch
 
-- `cognition/memory/attempt_gate.py` — soft rules for `mode="route"` and `mode="agentic"`
+- `cognition/attention.py` — soft rules for `mode="route"` and `mode="agentic"`
 - `docs/SHOULD_ATTEMPT.md` — updated placement notes
 
 ## Restore + finish think.py (required)

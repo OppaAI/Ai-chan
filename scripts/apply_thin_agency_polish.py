@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Apply thin agency polish patch to edge_state.py and think.py."""
+"""Apply thin agency polish patch to attention.py and think.py."""
 from __future__ import annotations
 import subprocess
 import sys
@@ -24,7 +24,7 @@ def main() -> int:
     if r.returncode != 0:
         print(r.stderr or r.stdout, file=sys.stderr)
         return 1
-    print("Applied thin_agency_polish.patch to edge_state.py and think.py")
+    print("Applied thin_agency_polish.patch to attention.py and think.py")
     return 0
 
 

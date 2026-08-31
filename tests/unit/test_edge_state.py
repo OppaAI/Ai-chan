@@ -1,7 +1,19 @@
-from cognition.edge_state import EdgeCognitiveState
+import importlib
+import json
+import sqlite3
+
+from cognition import attention
+from cognition.attention import EdgeCognitiveState
 
 
-def test_edge_state_is_bounded_and_retrieves_current_focus():
+def test_edge_state_is_a_true_attention_module_alias():
+    edge_state = importlib.import_module("cognition.edge_state")
+
+    assert edge_state is attention
+    assert edge_state._tokens is attention._tokens
+
+
+def test_attention_state_is_bounded_and_retrieves_current_focus():
     state = EdgeCognitiveState()
     for i in range(12):
         state.record(f"remember task {i}", f"Noted item {i}.")
@@ -12,7 +24,7 @@ def test_edge_state_is_bounded_and_retrieves_current_focus():
     assert len(state._open_loops) == 3
 
 
-def test_edge_state_has_no_context_before_first_turn():
+def test_attention_state_has_no_context_before_first_turn():
     assert EdgeCognitiveState().context("hello") == ""
 
 
@@ -49,6 +61,54 @@ def test_promotes_repeated_feedback_to_semantic_rule():
     state.record("This is too verbose", "Short answer")
     state.record("That was too long, be concise", "Short answer")
     assert any("Prefer concise responses." in lesson for lesson in state.snapshot()["durable_lessons"])
+
+
+def test_clear_resets_all_state_and_removes_persisted_snapshot(tmp_path, monkeypatch):
+    database = tmp_path / "memory.db"
+    conn = sqlite3.connect(database)
+    conn.execute(
+        "CREATE TABLE cognitive_state "
+        "(user_id TEXT PRIMARY KEY, state_json TEXT NOT NULL)"
+    )
+    conn.execute("INSERT INTO cognitive_state VALUES (?, ?)", ("person", json.dumps({"preferences": {"tone": "brief"}})))
+    conn.commit()
+    conn.close()
+    monkeypatch.setattr(
+        "cognition.memory.vecstore.connect_sqlite_db",
+        lambda *_args, **_kwargs: sqlite3.connect(database),
+    )
+
+    state = EdgeCognitiveState("person")
+    state._preferences["tone"] = "brief"
+    state._preference_counts["tone=brief"] = 2
+    state._identity_questions.append("Do you know me?")
+    state._intuitions.append("A tentative thought")
+    state._pending_memory_conflicts.append({"memory_id": "old"})
+
+    state.clear()
+
+    assert not state._preferences
+    assert not state._preference_counts
+    assert not state._identity_questions
+    assert not state._intuitions
+    assert not state._pending_memory_conflicts
+    conn = sqlite3.connect(database)
+    assert conn.execute("SELECT state_json FROM cognitive_state WHERE user_id = ?", ("person",)).fetchone() is None
+    conn.close()
+
+
+def test_lesson_evidence_evicts_oldest_signatures_at_fixed_limit():
+    state = EdgeCognitiveState()
+
+    for index in range(attention.EDGE_COGNITION_MAX_LESSON_EVIDENCE + 2):
+        state._add_lesson("Tool limitation: ", f"topic{index:03d}")
+
+    evidence = state.snapshot()["lesson_evidence"]
+    assert len(evidence) == attention.EDGE_COGNITION_MAX_LESSON_EVIDENCE
+    assert "topic000" not in evidence
+    assert "topic001" not in evidence
+    newest = attention.EDGE_COGNITION_MAX_LESSON_EVIDENCE + 1
+    assert f"topic{newest:03d}" in evidence
 
 
 def test_adaptive_guidance_and_reflection_include_state():

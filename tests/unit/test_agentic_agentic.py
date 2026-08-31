@@ -73,6 +73,7 @@ from agentic.agentic import (
     _research_call_count,
     _verify_final_answer,
     _looks_like_approval_reply,
+    _stream_agent_message,
 )
 from agentic import graph_engine as schema
 from agentic.toolkit.plan import save_note, create_checklist, make_plan
@@ -427,6 +428,30 @@ class TestTaskState:
         assert state.evidence[0] == "tool1: output"
         assert state.failures[0].tool == "tool2"
 
+    @pytest.mark.parametrize(
+        "error_type",
+        [
+            "schema_validation_failed",
+            "research_limit_reached",
+            "invalid_json",
+            "repeated_tool_call",
+        ],
+    )
+    def test_records_failed_tool_outcomes_for_attempt_gate(self, monkeypatch, error_type):
+        cognitive_state = MagicMock()
+        monkeypatch.setattr("cognition.attention.for_identity", lambda _identity: cognitive_state)
+
+        state = TaskState("test goal")
+        state.record(ToolResult(False, "tool1", {}, "failure detail", error_type=error_type))
+
+        cognitive_state.record_tool_outcome.assert_called_once_with(
+            "tool1",
+            ok=False,
+            detail="failure detail",
+            error_type=error_type,
+        )
+        cognitive_state.persist.assert_called_once_with()
+
     def test_last_tool_result(self):
         state = TaskState("goal")
         state.record(ToolResult(True, "a", {}, "1"))
@@ -518,6 +543,26 @@ class TestRunAgenticChatSmoke:
                         with patch("agentic.agentic.tool_schemas", return_value=[]):
                             # ReAct loop would run but we can't fully test without more mocks
                             pass
+
+
+@pytest.mark.parametrize("confidence", [int("9" * 400), float("nan")], ids=["overflow", "nan"])
+def test_invalid_needle_confidence_falls_back_to_openai(monkeypatch, confidence):
+    monkeypatch.setattr("agentic.agentic.AGENT_REACT_BACKEND", "needle")
+    needle_response = MagicMock()
+    needle_response.read.return_value = json.dumps({
+        "success": True,
+        "confidence": confidence,
+        "function_calls": [],
+    }).encode("utf-8")
+    needle_response.__enter__.return_value = needle_response
+
+    owner = MockOwner()
+    with patch("agentic.needle.urlopen", return_value=needle_response):
+        message, usage = _stream_agent_message(owner, [{"role": "user", "content": "save this"}], [], None)
+
+    assert owner._client.call_count == 1
+    assert message.content is None
+    assert usage is None
 
 
 class TestSaveNoteContentTruncation:
