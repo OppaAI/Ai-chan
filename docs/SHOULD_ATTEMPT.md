@@ -10,7 +10,7 @@ State used to only shape prompts. This gate lets Aiko **branch** on her own ener
 
 ## Module
 
-`cognition/memory/attempt_gate.py`
+`cognition/attention.py`
 
 - `should_attempt(...)` → `(ok, reason, action)`
   - `proceed` | `degrade_chat` | `defer` | `clarify`

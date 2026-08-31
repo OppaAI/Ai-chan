@@ -1,6 +1,6 @@
-# Self-model via edge_state (not a second SOUL.md)
+# Self-model via attention (not a second SOUL.md)
 
-Aiko's lived self is learned in `cognition/memory/edge_state.py`, not hardcoded.
+Aiko's lived self is learned in `cognition/attention.py`, not hardcoded.
 
 ## What was added
 

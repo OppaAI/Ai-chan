@@ -84,8 +84,8 @@ def chat_env(monkeypatch):
         def metacognitive_context(self, *a, **kw):
             return ""
 
-    from cognition import edge_state
-    monkeypatch.setattr(edge_state, "for_identity", lambda uid: EdgeState())
+    from cognition import attention
+    monkeypatch.setattr(attention, "for_identity", lambda uid: EdgeState())
     monkeypatch.setattr(think_module.bioclock, "current_datetime_block", lambda: "")
     monkeypatch.setattr(think, "_resolve_mem_kb", lambda *a, **kw: ([], ""))
     monkeypatch.setattr(think, "_sanitize_history", lambda history: history)

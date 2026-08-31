@@ -666,7 +666,7 @@ class TaskState:
     def record(self, result: ToolResult) -> None:
         """Record a tool execution result and update agent state."""
         try:
-            from cognition.edge_state import for_identity
+            from cognition.attention import for_identity
             from system.userspace import current_user_id
             state = for_identity(current_user_id())
             state.record_tool_result(result.tool, result.ok, result.error_type, result.content)
@@ -1008,7 +1008,7 @@ def dispatch_tool(name: str, args: dict, owner=None) -> str:
         detail = str(exc)[:240]
         error_type = type(exc).__name__
     try:
-        from cognition.edge_state import for_identity
+        from cognition.attention import for_identity
         from system.userspace import current_user_id
         for_identity(current_user_id()).record_tool_outcome(name, ok=ok, detail=detail, error_type=error_type)
     except Exception:
@@ -1052,7 +1052,7 @@ _PREFERENCE_READ_ONLY_TOOLS = frozenset({
 
 def _preference_requires_approval(name: str) -> bool:
     try:
-        from cognition.edge_state import for_identity
+        from cognition.attention import for_identity
         preferences = for_identity(current_user_id()).snapshot().get("preferences", {})
         return preferences.get("action_confirmation") == "ask_before_acting" and name not in _PREFERENCE_READ_ONLY_TOOLS
     except Exception:
