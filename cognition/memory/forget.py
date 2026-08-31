@@ -127,7 +127,7 @@ def resolve_ambient_valence(user_id: str | None = None) -> int | None:
     if not FORGET_MOOD_MATCH_ENABLED:
         return None
     try:
-        from cognition.memory.edge_state import for_identity
+        from cognition.edge_state import for_identity
         from system.userspace import current_user_id
 
         uid = user_id or current_user_id()

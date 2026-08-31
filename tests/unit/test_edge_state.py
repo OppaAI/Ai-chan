@@ -1,4 +1,4 @@
-from cognition.memory.edge_state import EdgeCognitiveState
+from cognition.edge_state import EdgeCognitiveState
 
 
 def test_edge_state_is_bounded_and_retrieves_current_focus():

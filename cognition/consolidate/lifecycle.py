@@ -98,7 +98,7 @@ def maybe_run_consolidation(memorize, now: datetime | None = None, user_id: str 
     cognitive_state = None
     cognitive_lesson_rows = []
     try:
-        from cognition.memory.edge_state import for_identity
+        from cognition.edge_state import for_identity
         cognitive_state = for_identity(user_id)
         cognitive_lesson_rows = [
             {"id": None, "memory": f"Interaction lesson: {lesson}", "pinned": 0,

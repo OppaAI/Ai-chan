@@ -3,6 +3,12 @@
 Used by EdgeCognitiveState.should_attempt and AikoThink.route / agentic_chat.
 Keeps thresholds conservative: critical work always proceeds.
 
+This module is intentionally outside cognition.memory because it does not read
+or write long-term memory.  It is a pure decision helper over the bounded
+per-user state snapshot: energy/load readiness, uncertainty, recent tool
+outcomes, contradictions, time sensitivity, answer-completeness review flags,
+and self-consistency review flags.
+
 mode:
   - agentic — gate before the tool loop (legacy path; also used for direct agentic entry)
   - route   — gate *before* quaternary semantic routing so localchat/webchat
@@ -123,7 +129,9 @@ def should_attempt(
     if not text:
         return True, "empty input", "proceed"
     if is_critical_task(text):
-        return True, "critical or time-sensitive request", "proceed"
+        return True, "critical request", "proceed"
+    if is_time_sensitive(text):
+        return True, "time-sensitive request should proceed with verification discipline", "proceed"
 
     mode_norm = (mode or "").strip().lower()
     soft = mode_norm in _SOFT_MODES
@@ -175,8 +183,5 @@ def should_attempt(
 
     if soft and (incomplete_flag or self_consistency_flag) and len(text_tokens) <= 6:
         return False, "last answer review found a likely issue; clarify the follow-up before acting", "clarify"
-
-    if is_time_sensitive(text):
-        return True, "time-sensitive request should proceed with verification discipline", "proceed"
 
     return True, "self-assessment clear", "proceed"

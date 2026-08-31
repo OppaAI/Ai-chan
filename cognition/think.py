@@ -541,7 +541,7 @@ class AikoThink:
         core = self._persona_core()
         volatile_parts: list[str] = []
         try:
-            from cognition.memory.edge_state import for_identity
+            from cognition.edge_state import for_identity
             state_obj = for_identity(current_user_id())
             state_obj.record_activity(os.getenv("AIKO_ACTIVITY", ""))
             state_obj.continuous_tick()
@@ -629,7 +629,7 @@ class AikoThink:
             resumed = _maybe_resume_approval(self, user_input, token_callback=token_callback)
             if resumed is not None:
                 try:
-                    from cognition.memory.edge_state import for_identity
+                    from cognition.edge_state import for_identity
                     for_identity(user_id).record_turn_latency(time.monotonic() - _route_t0)
                 except Exception:
                     pass
@@ -640,7 +640,7 @@ class AikoThink:
         # Self-assessment *before* quaternary routing so localchat/webchat
         # also get executable soft outcomes (defer / clarify / degrade_chat).
         try:
-            from cognition.memory.edge_state import for_identity
+            from cognition.edge_state import for_identity
             state = for_identity(user_id)
             ok, reason, action = state.should_attempt(user_input, mode="route")
             snap = state.snapshot()
@@ -732,7 +732,7 @@ class AikoThink:
             return self.chat(user_input, token_callback=token_callback, _skip_search=True, mem_kb_future=mem_kb_future, query_vec=query_vec)
         finally:
             try:
-                from cognition.memory.edge_state import for_identity
+                from cognition.edge_state import for_identity
                 for_identity(user_id).record_turn_latency(time.monotonic() - _route_t0)
             except Exception:
                 pass
@@ -1174,14 +1174,14 @@ class AikoThink:
         Prompts come from attempt_gate.soft_user_prompt (one short reply only).
         """
         try:
-            from cognition.memory.edge_state import for_identity
+            from cognition.edge_state import for_identity
             state = for_identity(current_user_id())
             kind = action if action in {"defer", "clarify"} else "stance"
             state.record_self_decision(kind, reason)
             state.persist()
         except Exception:
             pass
-        from cognition.memory.attempt_gate import soft_user_prompt
+        from cognition.attempt_gate import soft_user_prompt
         prompt = soft_user_prompt(user_input, action, reason)
         return self.chat(
             prompt,
@@ -1211,7 +1211,7 @@ class AikoThink:
             # uncertainty, tool outcomes, contradictions, time sensitivity,
             # answer completeness, and self-consistency.
             try:
-                from cognition.memory.edge_state import for_identity
+                from cognition.edge_state import for_identity
                 state = for_identity(user_id)
                 ok, reason, action = state.should_attempt(user_input, mode="agentic")
                 if not ok:
@@ -1239,7 +1239,7 @@ class AikoThink:
             # Only record latency if called directly (not from route, which already records)
             if not _from_route:
                 try:
-                    from cognition.memory.edge_state import for_identity
+                    from cognition.edge_state import for_identity
                     for_identity(user_id).record_turn_latency(time.monotonic() - _agentic_t0)
                 except Exception:
                     pass
@@ -1264,7 +1264,7 @@ class AikoThink:
         # Memory + KB — either resolved from route()'s pre-intent future,
         # or fetched directly if this was called standalone.
         memories, knowledge_block = self._resolve_mem_kb(user_input, mem_kb_future)
-        from cognition.memory.edge_state import for_identity
+        from cognition.edge_state import for_identity
         memories = for_identity(current_user_id()).prioritize_memories(user_input, memories)
         memory_block = self._get_memorize().format_for_context(
           memories, query=user_input, query_vector=query_vec
@@ -1517,7 +1517,7 @@ class AikoThink:
                 persona_block = ""
             else:
                 memorize = self._get_memorize()
-                from cognition.memory.edge_state import for_identity
+                from cognition.edge_state import for_identity
                 memories, knowledge_block = self._resolve_mem_kb(user_input, mem_kb_future)
                 memories = for_identity(current_user_id()).prioritize_memories(user_input, memories)
                 memory_block = memorize.format_for_context(
@@ -1525,7 +1525,7 @@ class AikoThink:
                 ) if memorize is not None else ""
                 persona_block = memorize.persona_context() if memorize is not None else ""
                 try:
-                    from cognition.memory.edge_state import for_identity
+                    from cognition.edge_state import for_identity
                     situation_block = for_identity(current_user_id()).situation_context(user_input, memories, knowledge_block)
                     metacognitive_block = for_identity(current_user_id()).metacognitive_context(user_input, memories)
                 except Exception:
@@ -2124,7 +2124,7 @@ class AikoThink:
         if response != draft:
             self._review_response(user_input, response)
         try:
-            from cognition.memory.edge_state import for_identity
+            from cognition.edge_state import for_identity
             speak = self._get_speak()
             if speak is not None and hasattr(speak, "set_expression"):
                 snap = for_identity(current_user_id()).snapshot()
@@ -2176,7 +2176,7 @@ class AikoThink:
 
     def _review_response(self, user_input: str, response_text: str) -> dict:
         try:
-            from cognition.memory.edge_state import for_identity
+            from cognition.edge_state import for_identity
             state = for_identity(current_user_id())
             review = state.review_response(user_input, response_text)
             state.persist()
@@ -2200,7 +2200,7 @@ class AikoThink:
         with _brain_trace.step("think._store_async", layer="write",
                                inputs={"user_input": user_input, "response_chars": len(response_text or "")}) as ctx:
             try:
-                from cognition.memory.edge_state import for_identity
+                from cognition.edge_state import for_identity
                 state = for_identity(current_user_id())
                 confirmed = state.confirm_memory_update(user_input)
                 if confirmed:
