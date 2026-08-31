@@ -1501,6 +1501,8 @@ class AikoThink:
         with _brain_trace.step("think.chat", layer="context",
                                inputs={"user_input": user_input, "skip_memory": skip_memory,
                                        "store_turn": store_turn, "websearch_net": websearch_net}) as ctx:
+            situation_block = ""
+            metacognitive_block = ""
             if skip_memory:
                 memories = []
                 knowledge_block = ""
@@ -1515,8 +1517,6 @@ class AikoThink:
                   memories, query=user_input, query_vector=query_vec
                 ) if memorize is not None else ""
                 persona_block = memorize.persona_context() if memorize is not None else ""
-                situation_block = ""
-                metacognitive_block = ""
                 try:
                     from cognition.memory.edge_state import for_identity
                     situation_block = for_identity(current_user_id()).situation_context(user_input, memories, knowledge_block)

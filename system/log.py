@@ -233,6 +233,24 @@ def _setup() -> None:
             for noisy in ("httpx", "httpx2", "httpcore", "telegram", "telegram.ext"):
                 logging.getLogger(noisy).setLevel(logging.WARNING)
 
+        # ── --debug mode: still mute the brain-irrelevant HTTP chatter ──
+        # The Threads / Bluesky / Mastody monitor daemons poll external
+        # APIs every few seconds. At DEBUG level urllib3 + httpcore2 +
+        # openai._base_client each emit a line per request, drowning out
+        # the brain trace that --debug is actually for. Demote them to
+        # WARNING so only real errors surface — the brain trace itself is
+        # logged via system.brain_trace and is independent of this filter.
+        # Toggle off by setting AIKO_DEBUG_FULL_HTTP=1 if you ever need to
+        # see the raw HTTP layer.
+        if os.getenv("AIKO_DEBUG_FULL_HTTP", "0").lower() not in {"1", "true", "yes", "on"}:
+            for noisy in (
+                "urllib3", "urllib3.connectionpool", "urllib3.util.retry",
+                "httpcore", "httpcore2", "httpcore.connection",
+                "hpack", "hypercorn", "h11", "httpx", "httpx2",
+                "openai", "openai._base_client", "openai._utils",
+            ):
+                logging.getLogger(noisy).setLevel(logging.WARNING)
+
         _initialized = True
 
 
