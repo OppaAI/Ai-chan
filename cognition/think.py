@@ -1179,8 +1179,8 @@ class AikoThink:
             kind = action if action in {"defer", "clarify", "degrade_chat"} else "other"
             state.record_self_decision(kind, reason)
             state.persist()
-        except Exception:
-            pass
+        except Exception as exc:
+            log.debug("[soft_gate] self-decision record skipped: %s", exc)
         from cognition.attention import soft_user_prompt
         prompt = soft_user_prompt(user_input, action, reason)
         return self.chat(
