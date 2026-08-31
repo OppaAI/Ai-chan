@@ -18,6 +18,17 @@ from collections import OrderedDict, deque
 from dataclasses import dataclass
 
 from .env import env_bool, env_flag, env_int
+try:
+    from system import brain_trace as _brain_trace
+except Exception:
+    _brain_trace = None
+
+def _bt_record(*args, **kwargs):
+    if _brain_trace is not None:
+        try:
+            _brain_trace.record_step(*args, **kwargs)
+        except Exception:
+            pass
 
 EDGE_COGNITION_ENABLED = env_flag("EDGE_COGNITION_ENABLED", "1")
 EDGE_COGNITION_PERSIST = env_bool("EDGE_COGNITION_PERSIST", "1")
@@ -752,8 +763,6 @@ class EdgeCognitiveState:
     def prioritize_memories(self, query: str, memories: list[dict] | None) -> list[dict]:
         """Rank memories as a bounded reconstruction with confidence cues."""
         rows = list(memories or [])
-        if not rows:
-            return []
         snap = self.snapshot()
         query_words = _tokens(query)
         context_words = _tokens(" ".join([snap.get("attention", ""), " ".join(snap.get("goals", [])), " ".join(snap.get("open_loops", []))]))
@@ -799,7 +808,27 @@ class EdgeCognitiveState:
             reconstructed["_reconstruction_basis"] = basis or ["weak_match"]
             scored.append((score, -index, reconstructed))
         scored.sort(key=lambda item: (item[0], item[1]), reverse=True)
-        return [row for _, _, row in scored]
+        result = [row for _, _, row in scored]
+        # Brain trace — show exactly what scored above threshold and why
+        _bt_record(
+            "EdgeCognitiveState.prioritize_memories",
+            layer="rerank",
+            inputs={"query": query, "memories_count": len(rows),
+                    "current_affect": round(current_affect, 3),
+                    "active_goals": snap.get("goals", []),
+                    "open_loops": snap.get("open_loops", [])},
+            outputs={
+                "reranked_count": len(result),
+                "top_basis": result[0].get("_reconstruction_basis") if result else None,
+                "top_confidence": result[0].get("_reconstruction_confidence") if result else None,
+                "top_text_preview": (result[0].get("memory") or "")[:160] if result else None,
+            },
+            factors=[
+                "weights: query×2.0, context×0.7, goal×1.5, pinned+1.5, salient+0.8, recall_history≤+1.0, affective_resonance+0.35, superseded-2.0",
+                f"confidence tiers: high ≥4.0 (with overlap), moderate ≥2.0, low otherwise",
+            ],
+        )
+        return result
 
     def memory_conflicts(self, query: str, memories: list[dict] | None = None) -> list[dict]:
         """Find conservative conflicts between a new statement and recalled facts."""
@@ -939,6 +968,16 @@ class EdgeCognitiveState:
         review = {"flags": flags, "confidence": "low" if len(flags) >= 2 else "moderate" if flags else "high", "response_chars": len(text)}
         with self._lock:
             self._response_reviews.appendleft(review)
+        _bt_record(
+            "EdgeCognitiveState.review_response",
+            layer="review",
+            inputs={"query": query, "response_chars": len(text)},
+            outputs=review,
+            factors=[
+                "checks: time-sensitivity, overconfidence, undisclosed tool failures, too-short answer, contradictions, self-consistency vs last 1-2 replies",
+                "confidence tiers: low if ≥2 flags, moderate if any, high otherwise",
+            ],
+        )
         return review
 
     def _self_consistency_flag(self, response: str) -> str:
@@ -1032,6 +1071,9 @@ class EdgeCognitiveState:
                     seen.add(key)
                     entities.append(value)
         if not facts and not snap["goals"] and not snap["open_loops"]:
+            _bt_record("EdgeCognitiveState.situation_context", layer="context",
+                       inputs={"query": query, "memories_count": len(memories or [])},
+                       outputs={"skipped": True, "reason": "no_facts_or_goals_or_loops"})
             return ""
         health = self.cognitive_health()
         lines = ["<situation_model>", "Organized from available evidence; treat it as context, not certainty.", f"Current query: {query[:260]}"]
@@ -1067,7 +1109,25 @@ class EdgeCognitiveState:
         uncertainty = "elevated" if snap["uncertainty"] > 0.35 else "ordinary"
         lines.append(f"Internal cues: mood={snap.get('mood')}, energy={energy}, uncertainty={uncertainty}")
         lines.append("Evidence confidence: " + ("moderate" if facts else "low"))
-        return "\n".join(lines) + "\n</situation_model>"
+        block = "\n".join(lines) + "\n</situation_model>"
+        _bt_record(
+            "EdgeCognitiveState.situation_context",
+            layer="context",
+            inputs={"query": query, "memories_count": len(memories or [])},
+            outputs={
+                "block_chars": len(block),
+                "block_preview": block[:1200],
+                "facts_count": len(facts), "entities_count": len(entities),
+                "conflicts_detected": len(conflicts),
+            },
+            factors=[
+                f"cognitive health status: {health['status']} (population={health['population']})",
+                f"mood={snap.get('mood')}, energy={energy}, uncertainty={uncertainty}",
+                f"contradictions queue size: {len(snap.get('contradictions', []))}",
+                f"pending memory conflicts staged for confirm_memory_update: {len(conflicts)}",
+            ],
+        )
+        return block
 
     def metacognitive_context(self, query: str = "", memories: list[dict] | None = None) -> str:
         """Return a compact pre-response confidence and clarification check."""
@@ -1095,7 +1155,23 @@ class EdgeCognitiveState:
         confidence = "low" if len(flags) >= 2 or not evidence else "moderate"
         action = "ask or verify before asserting" if flags else "answer, while separating memory from inference"
         lines = ["<metacognitive_checkpoint>", f"Evidence available: {len(evidence)} memory item(s)", f"Confidence: {confidence}", "Checks: " + ("; ".join(flags) if flags else "no immediate warning"), "Response discipline: " + action, "</metacognitive_checkpoint>"]
-        return "\n".join(lines)
+        block = "\n".join(lines)
+        _bt_record(
+            "EdgeCognitiveState.metacognitive_context",
+            layer="context",
+            inputs={"query": query, "memories_count": len(rows)},
+            outputs={
+                "confidence": confidence, "flags_count": len(flags),
+                "block_chars": len(block), "block_preview": block,
+                "flags": flags,
+            },
+            factors=[
+                f"low confidence if len(flags)≥2 OR no evidence",
+                f"temporal query trigger: {temporal}",
+                f"any 'superseded' status in hits: {'superseded' in statuses}",
+            ],
+        )
+        return block
 
     def context(self, query: str = "") -> str:
         if not EDGE_COGNITION_ENABLED:

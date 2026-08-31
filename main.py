@@ -196,6 +196,10 @@ def main() -> int:
     if args.debug:                                      # explicit CLI flag overrides whatever .env set
         _os.environ["LOG_CONSOLE"] = "1"
         _os.environ["LOG_LEVEL"] = "DEBUG"
+        # Auto-enable the per-step brain tracer. --debug now implies a
+        # full pipeline trace (system/brain_trace.py) — env-only knob so
+        # normal launches are unaffected.
+        _os.environ.setdefault("AIKO_TRACE_BRAIN", "1")
 
     # Set up logging and exit tracing
     from system.log import get_logger

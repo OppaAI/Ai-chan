@@ -81,6 +81,7 @@ from system.bioclock import local_now
 from system.log import get_logger
 from system.turngate import AIKO_BUSY_LOCK
 from system.wakeup import AikoWakeup
+from system import brain_trace as _brain_trace
 from agentic.toolkit.websearch import web_search_context
 from sensory.speak import extract_dialogue_for_tts
 
@@ -997,6 +998,19 @@ def run_session(ui, args) -> None:
     spin_t    = threading.Thread(target=ui.spin_loop, args=(spin_stop,), daemon=True)
     spin_t.start()
 
+    # Wire the brain tracer to the UI sink so per-step traces stream into
+    # the WebUI / CLI as sys lines. Cheap when AIKO_TRACE_BRAIN is off.
+    _brain_trace.set_ui_sink(ui)
+    _brain_trace.begin_turn("boot")  # banner
+    _brain_trace.record_step(
+        "session.boot",
+        layer="preflight",
+        inputs={"args": {"debug": args.debug, "text": args.text, "cli": args.cli}},
+        outputs={"ui": type(ui).__name__},
+        factors=["boot via main.py", "ui constructed", "subsystems to be booted next"],
+    )
+    _brain_trace.end_turn()
+
     # ── boot all subsystems via wakeup ────────────────────────────────────────
 
     result = AikoWakeup().boot(
@@ -1246,6 +1260,7 @@ def run_session(ui, args) -> None:
         if listen is not None:
             listen.stop_barge_in_monitor()
         think.wait_for_memory()
+        _brain_trace.shutdown()
 
     # ── main loop ─────────────────────────────────────────────────────────────
 
@@ -1523,6 +1538,15 @@ def run_session(ui, args) -> None:
         session_active.set()
         ui._draw()
 
+        _brain_trace.begin_turn(f"mode={current_latency.get('mode', 'text')}")
+        _brain_trace.record_step(
+            "transport.receive",
+            layer="transport",
+            inputs={"raw_input": user_input, "user_id": turn_uid},
+            outputs={"normalized_input": user_input},
+            factors=["received from ui.get_input() or ASR pipeline"],
+        )
+
         if typewriter is not None:
             typewriter.start()
             _sentence_buf = []
@@ -1685,6 +1709,15 @@ def run_session(ui, args) -> None:
             _update_latency_stats(current_latency)
             _log_latency(current_latency)
             ui._draw()
+
+            _brain_trace.record_step(
+                "transport.commit",
+                layer="transport",
+                inputs={"reply_chars": len(reply_text or "")},
+                outputs={"latency_ms_total": int((current_latency["turn_done_at"] - current_latency["submitted_at"]) * 1000)},
+                factors=["LLM stream done", "TTS synthesized", "UI committed"],
+            )
+            _brain_trace.end_turn()
         finally:
             session_active.clear()
             proactive.touch()

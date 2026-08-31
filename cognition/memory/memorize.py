@@ -23,6 +23,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from system import bioclock
+from system import brain_trace as _brain_trace
 from cognition.memory.vecstore import initialize_store_db
 from system.userspace import current_display_name, current_user_id
 import sqlite_vec
@@ -1547,8 +1548,8 @@ class _MemoryBackend:
             SQL scan.
         4. Otherwise widen to KNN_LIMIT / FTS_LIMIT / GRAPH_LIMIT and re-rank
             the larger pool from scratch (rank positions shift when the pool
-            grows, so this is a fresh scoring pass, not a merge with the
-            quick pass).
+            grows, so this is a fresh scoring pass, not a merge with the quick
+            pass).
         5. Reorder the resulting candidates by recency-among-relevant.
         6. Truncate to `limit` and return as payload dicts.
 
@@ -1562,8 +1563,12 @@ class _MemoryBackend:
         reads the full `memories` rows), and the wide-pass fallback racing
         against the async write-worker thread on the same connection.
         """
-        if vector is None:
-            vector = self._embed(query, query=True)
+        with _brain_trace.step("_MemoryBackend.search", layer="recall",
+                               inputs={"query": query, "limit": limit,
+                                       "vector_supplied": vector is not None,
+                                       "include_history": include_history,
+                                       "user_id": user_id}) as ctx:
+            return self._search_inner(query, user_id, limit, vector, include_history, ctx)
         # Phase 17: record query embedding for session dynamic anchor
         try:
             from cognition.memory.session_anchor import push_query_vector
@@ -1699,18 +1704,13 @@ class _MemoryBackend:
                     if pen > 0:
                         r["_recall_score"] = float(r.get("_recall_score") or 0.0) - pen
                 results.sort(key=lambda x: float(x.get("_recall_score") or x.get("score") or 0.0), reverse=True)
-  
+
         # Phase 19: sticky-neg not volunteered unless query engages them
         results = apply_neg_hard_filter(results, query)
         return results[:limit]
 
     def _expand_supersession_chains(self, query: str, user_id: str, results: list[dict], limit: int = 5) -> list[dict]:
-        """
-        Insert supersession lineage (oldest → newest) when expand is warranted.
-
-        Result budget: up to max(limit, min(len, 2*limit)) so short chains
-        still fit under limit while multi-hit reflective expand is bounded.
-        """
+        """Expand supersession chains — older → newer for hits that need lineage."""
         if not results:
             return results
         expanded: list[dict] = []
@@ -1729,21 +1729,272 @@ class _MemoryBackend:
                     expanded.append(hit)
                     seen.add(mid)
                     continue
-
-                # Normalize: list[dict], oldest → newest
                 chain_rows = [dict(n) for n in chain]
-
                 for node in chain_rows:
                     nid = str(node.get("id") or "")
                     if not nid or nid in seen:
                         continue
                     node = dict(node)
                     node["_recall_score"] = hit.get("_recall_score", 0.0)
-                    # Full chain for narrative (same list on each member is fine)
                     node["_supersession_chain"] = chain_rows
                     expanded.append(node)
                     seen.add(nid)
         return expanded[: max(limit, min(len(expanded), limit * 2))]
+
+    def _search_inner(self, query, user_id, limit, vector, include_history, ctx):
+        """Heavy lift of search(), split out so brain_trace.step can wrap it."""
+        if vector is None:
+            vector = self._embed(query, query=True)
+            ctx.add_extra(vector_embedded_here=True, dims=len(vector))
+        else:
+            ctx.add_extra(vector_embedded_here=False, dims=len(vector))
+        # Phase 17: record query embedding for session dynamic anchor
+        try:
+            from cognition.memory.session_anchor import push_query_vector
+            push_query_vector(user_id, vector)
+        except Exception:
+            pass
+        fts_query = _sanitize_fts_query(query)
+        query_entities = extract_entities(query, max_entities=5)
+        active_only = not include_history
+
+        # Phase 21: encoding-specificity context. Cheap heuristic valence/
+        # arousal of the query itself, matched against stored memory tags.
+        query_context: tuple[int, int] | None = None
+        if MEMORY_RECALL_CONTEXT_MATCH_ENABLED and MEMORY_RECALL_CONTEXT_MATCH_WEIGHT > 0:
+            try:
+                q_val = int(infer_valence_score(query))
+                q_aro = int(infer_arousal_score(query))
+                if q_val or q_aro:
+                    query_context = (q_val, q_aro)
+            except Exception:
+                query_context = None
+
+        entity_importance_map = {}
+        if MEMORY_RANK_ENTITY_IMPORTANCE_WEIGHT > 0:
+            entity_importance_map = self._get_entity_importance_map(user_id) or {}
+
+        # ── Quick pass: fetch candidate IDs only (short lock scope) ──
+        with self._db_lock:
+            quick_knn_rows = _sqlite_knn_search(
+                self._conn, vector, user_id, QUICK_KNN_LIMIT, active_only=active_only
+            )
+            rank_knn_q = {row["id"]: i + 1 for i, row in enumerate(quick_knn_rows)}
+            quick_fts_rows = self._fts_pass(fts_query, user_id, QUICK_FTS_LIMIT, active_only=active_only)
+            rank_fts_q = {row["id"]: i + 1 for i, row in enumerate(quick_fts_rows)}
+            quick_graph_rows = self._graph_pass(query_entities, user_id, QUICK_GRAPH_LIMIT, active_only=active_only)
+            rank_graph_q = {row["id"]: i + 1 for i, row in enumerate(quick_graph_rows)}
+
+        # Fetch full rows for quick pass candidates (separate lock scope)
+        quick_all_ids = set(rank_knn_q) | set(rank_fts_q) | set(rank_graph_q)
+        with self._db_lock:
+            quick_row_by_id = self._fetch_full_rows(quick_all_ids)
+
+        # Score quick pass (no lock needed)
+        scored_ids, scores, row_by_id = self._rank_and_score(
+            rank_knn_q, rank_fts_q, rank_graph_q,
+            entity_importance_map=entity_importance_map,
+            query_context=query_context,
+            row_by_id=quick_row_by_id,
+        )
+
+        confident = (
+            len(scored_ids) >= limit
+            and scores.get(scored_ids[limit - 1], 0.0) >= MEMORY_RECALL_SCORE_THRESHOLD
+        )
+        ctx.add_extra(
+            quick_pass={"knn": len(rank_knn_q), "fts": len(rank_fts_q),
+                        "graph": len(rank_graph_q),
+                        "scored": len(scored_ids), "confident": confident}
+        )
+
+        # ── Widen only if the quick pass was under-filled or under-confident ──
+        if not confident:
+            with self._db_lock:
+                wide_knn_rows = _sqlite_knn_search(
+                    self._conn, vector, user_id, KNN_LIMIT, active_only=active_only
+                )
+                rank_knn_w = {row["id"]: i + 1 for i, row in enumerate(wide_knn_rows)}
+                wide_fts_rows = self._fts_pass(fts_query, user_id, FTS_LIMIT, active_only=active_only)
+                rank_fts_w = {row["id"]: i + 1 for i, row in enumerate(wide_fts_rows)}
+                wide_graph_rows = self._graph_pass(query_entities, user_id, GRAPH_LIMIT, active_only=active_only)
+                rank_graph_w = {row["id"]: i + 1 for i, row in enumerate(wide_graph_rows)}
+
+            wide_all_ids = set(rank_knn_w) | set(rank_fts_w) | set(rank_graph_w)
+            with self._db_lock:
+                wide_row_by_id = self._fetch_full_rows(wide_all_ids)
+
+            scored_ids, scores, row_by_id = self._rank_and_score(
+                rank_knn_w, rank_fts_w, rank_graph_w,
+                entity_importance_map=entity_importance_map,
+                query_context=query_context,
+                row_by_id=wide_row_by_id,
+            )
+            ctx.add_extra(wide_pass={"knn": len(rank_knn_w), "fts": len(rank_fts_w),
+                                    "graph": len(rank_graph_w), "scored": len(scored_ids)})
+
+        ordered_ids = self._apply_recency_rerank(scored_ids, scores, row_by_id)
+        top_ids = ordered_ids[:limit]
+
+        results = []
+        for mid in top_ids:
+            if mid not in row_by_id:
+                continue
+            d = dict(row_by_id[mid])
+            d["_recall_score"] = scores.get(mid, 0.0)
+            results.append(d)
+
+        activation: dict[str, float] = {}
+        if MEMORY_SPREADING_ENABLED and results:
+            try:
+                with self._db_lock:
+                    exclude = {str(r.get("id")) for r in results}
+                    activation, extra_ids = self._spreading_extra_ids(
+                        user_id, results, exclude_ids=exclude, query=query,
+                    )
+                    if extra_ids:
+                        placeholders = ",".join("?" * len(extra_ids))
+                        rows = self._conn.execute(
+                            f"SELECT * FROM memories WHERE id IN ({placeholders}) AND user_id = ?",
+                            list(extra_ids) + [user_id],
+                        ).fetchall()
+                        for row in rows:
+                            d = dict(row)
+                            d["_recall_score"] = 0.0
+                            d["_from_spreading"] = True
+                            results.append(d)
+            except Exception as exc:
+                log.debug("spreading activation skipped: %s", exc)
+
+        if MEMORY_SPREADING_SCORE_WEIGHT > 0 and activation and results:
+            try:
+                from cognition.memory.entity import memory_max_activation
+                for r in results:
+                    boost = MEMORY_SPREADING_SCORE_WEIGHT * memory_max_activation(r, activation)
+                    r["_recall_score"] = float(r.get("_recall_score") or 0.0) + boost
+                results.sort(key=lambda x: float(x.get("_recall_score") or 0.0), reverse=True)
+            except Exception as exc:
+                log.debug("spreading activation score boost skipped: %s", exc)
+
+        if MEMORY_NEG_RECALL_AVOID and results:
+            relax = MEMORY_NEG_RECALL_AVOID_EXCEPT and query_wants_emotion(query or "")
+            if not relax:
+                from cognition.memory.forget import negative_recall_penalty
+                for r in results:
+                    if r.get("pinned"):
+                        continue
+                    pen = negative_recall_penalty(
+                        valence_tag=r.get("valence_tag"),
+                        valence_score=r.get("valence_score"),
+                    )
+                    if pen > 0:
+                        r["_recall_score"] = float(r.get("_recall_score") or 0.0) - pen
+                results.sort(key=lambda x: float(x.get("_recall_score") or x.get("score") or 0.0), reverse=True)
+
+        # Phase 19: sticky-neg not volunteered unless query engages them
+        results = apply_neg_hard_filter(results, query)
+        results = results[:limit]
+
+        ctx.set(
+            outputs={
+                "returned": len(results),
+                "top_score": round(float(results[0]["_recall_score"]), 4) if results else None,
+                "top_hit_preview": (results[0].get("memory") or "")[:200] if results else None,
+            },
+            factors=[
+                f"KNN+FTS+entity-graph fused via RRF (k={RRF_K})",
+                f"recency rerank applied: {MEMORY_RECENCY_RERANK_ENABLED}",
+                f"super-node entities filtered: {len(self._high_freq_entities)}",
+                f"neg-recall-avoid: {MEMORY_NEG_RECALL_AVOID}",
+                f"spreading: {MEMORY_SPREADING_ENABLED}",
+            ],
+        )
+        return results
+
+    def _search_top(self, query, user_id, limit, query_vector, include_history, ctx):
+        """Heavy lift of AikoMemorize.search — extracted so the brain tracer
+        can wrap the whole call without forcing a return through `with`."""
+        user_id = self._resolve_user_id(user_id)
+        if _is_trivial_input(query or ""):
+            ctx.set(outputs={"skipped": True, "reason": "trivial_input"},
+                    factors=["input matches trivial pattern (hi/ok/thanks/...) — no KNN/FTS cost"])
+            log.debug(f"Skipping search for trivial input: {query!r}")
+            return []
+
+        if _BROAD_RECALL_RE.search(query or ""):
+            results = self._recent_or_important_memories(
+                user_id=user_id, limit=limit, include_history=include_history
+            )
+            results = self._expand_scenes(user_id, results[:int(limit)])
+            self._touch_memories(results)
+            ctx.set(outputs={"short_circuit": "broad_recall", "returned": len(results)},
+                    factors=[f"query matches _BROAD_RECALL_RE → recent_or_important path (no KNN)"])
+            return results
+
+        cache_key = (user_id, " ".join((query or "").lower().split()), int(limit), bool(include_history))
+        now_s = time.monotonic()
+
+        with self._search_cache_lock:
+            cached = self._search_cache.get(cache_key)
+            if cached and now_s - cached[0] <= MEMORY_SEARCH_CACHE_TTL:
+                self._search_cache.move_to_end(cache_key)
+                results = [dict(r) for r in cached[1]]
+                try:
+                    from cognition.memory.entity import MEMORY_SUPERSESSION_CHAIN_EXPAND
+                    if MEMORY_SUPERSESSION_CHAIN_EXPAND and results:
+                        results = self._mem._expand_supersession_chains(
+                            query, user_id, results, limit=limit
+                        )
+                except Exception as exc:
+                    log.debug("supersession chain expand skipped: %s", exc)
+                self._touch_memories(results)
+                ctx.set(outputs={"cache": "hit", "returned": len(results)},
+                        factors=[f"cache TTL {MEMORY_SEARCH_CACHE_TTL}s"])
+                return results
+            if cached:
+                self._search_cache.pop(cache_key, None)
+
+        # Run the core RRF search (KNN + FTS + entity graph, fused)
+        results = self._mem.search(
+            query,
+            user_id=user_id,
+            limit=limit,
+            vector=query_vector,
+            include_history=include_history,
+        )
+        # Fold L2 scene parents/members into the recall set (see _expand_scenes).
+        results = self._expand_scenes(user_id, results)
+        log.debug("[memory] search miss, scores=%s", [r.get("_recall_score") for r in results])
+
+        # Search replay logging (optional, feature-gated)
+        if os.getenv("AIKO_REPLAY_SEARCHES"):
+            self._write_search_replay(query, results, user_id)
+
+        # Cache and return
+        with self._search_cache_lock:
+            self._search_cache[cache_key] = (now_s, [dict(r) for r in results])
+            while len(self._search_cache) > MEMORY_SEARCH_CACHE_SIZE:
+                self._search_cache.popitem(last=False)
+
+        try:
+            from cognition.memory.entity import MEMORY_SUPERSESSION_CHAIN_EXPAND
+            if MEMORY_SUPERSESSION_CHAIN_EXPAND and results:
+                results = self._mem._expand_supersession_chains(
+                    query, user_id, results, limit=limit
+                )
+        except Exception as exc:
+            log.debug("supersession chain expand skipped: %s", exc)
+
+        self._touch_memories(results)
+        ctx.set(outputs={"cache": "miss", "returned": len(results)},
+                factors=[f"scene_expansion applied", "touch_memories incremented access_count"])
+        return results
+
+    # ── L2 scene expansion ─────────────────────────────────────────────────────
+    # After RRF returns a set, re-link episode structure so yes the scene row
+    # itself is searchable, but also: a recalled-member pulls in its parent
+    # scene, and a recalled scene carries its members. Keeps "what happened
+    # during X" recoverable without rearchitecting search scoring.
 
     def iter_all(self, user_id: str, batch_size: int = MEMORY_LIFECYCLE_BATCH_SIZE):
         """Yield memory records for a user in rowid order without one giant list.
@@ -1780,6 +2031,13 @@ class _MemoryBackend:
                     "valence_score": row["valence_score"],
                     "salience_hit": row["salience_hit"],
                 }
+
+    def _scene_cols_available(self) -> bool:
+        try:
+            cols = existing_columns(self._conn)
+        except Exception:
+            return False
+        return "scene_id" in cols and "kind" in cols
 
     def get_all(self, user_id: str) -> list[dict]:
         """Return all memories for a user as a list."""
@@ -2326,79 +2584,24 @@ class AikoMemorize:
         _MemoryBackend._graph_pass / _rank_and_score) — this method no
         longer does a separate post-hoc entity rerank pass.
         """
-        user_id = self._resolve_user_id(user_id)
-        if _is_trivial_input(query or ""):
-            log.debug(f"Skipping search for trivial input: {query!r}")
-            return []
-
-        if _BROAD_RECALL_RE.search(query or ""):
-            results = self._recent_or_important_memories(
-                user_id=user_id, limit=limit, include_history=include_history
-            )
-            results = self._expand_scenes(user_id, results[:int(limit)])
-            self._touch_memories(results)
-            return results
-
-        cache_key = (user_id, " ".join((query or "").lower().split()), int(limit), bool(include_history))
-        now_s = time.monotonic()
-
-        with self._search_cache_lock:
-            cached = self._search_cache.get(cache_key)
-            if cached and now_s - cached[0] <= MEMORY_SEARCH_CACHE_TTL:
-                self._search_cache.move_to_end(cache_key)
-                results = [dict(r) for r in cached[1]]
-                try:
-                    from cognition.memory.entity import MEMORY_SUPERSESSION_CHAIN_EXPAND
-                    if MEMORY_SUPERSESSION_CHAIN_EXPAND and results:
-                        results = self._mem._expand_supersession_chains(
-                            query, user_id, results, limit=limit
-                        )
-                except Exception as exc:
-                    log.debug("supersession chain expand skipped: %s", exc)
-                self._touch_memories(results)
-                return results
-            if cached:
-                self._search_cache.pop(cache_key, None)
-
-        # Run the core RRF search (KNN + FTS + entity graph, fused)
-        results = self._mem.search(
-            query,
-            user_id=user_id,
-            limit=limit,
-            vector=query_vector,
-            include_history=include_history,
-        )
-        # Fold L2 scene parents/members into the recall set (see _expand_scenes).
-        results = self._expand_scenes(user_id, results)
-        log.debug("[memory] search miss, scores=%s", [r.get("_recall_score") for r in results])
-
-        # Search replay logging (optional, feature-gated)
-        if os.getenv("AIKO_REPLAY_SEARCHES"):
-            self._write_search_replay(query, results, user_id)
-
-        # Cache and return
-        with self._search_cache_lock:
-            self._search_cache[cache_key] = (now_s, [dict(r) for r in results])
-            while len(self._search_cache) > MEMORY_SEARCH_CACHE_SIZE:
-                self._search_cache.popitem(last=False)
-
-        try:
-            from cognition.memory.entity import MEMORY_SUPERSESSION_CHAIN_EXPAND
-            if MEMORY_SUPERSESSION_CHAIN_EXPAND and results:
-                results = self._mem._expand_supersession_chains(
-                    query, user_id, results, limit=limit
-                )
-        except Exception as exc:
-            log.debug("supersession chain expand skipped: %s", exc)
-
-        self._touch_memories(results)
-        return results
+        with _brain_trace.step("AikoMemorize.search", layer="recall",
+                               inputs={"query": query, "limit": limit,
+                                       "user_id": user_id,
+                                       "vector_supplied": query_vector is not None}) as ctx:
+            return self._search_top(query, user_id, limit, query_vector, include_history, ctx)
 
     # ── L2 scene expansion ─────────────────────────────────────────────────────
     # After RRF returns a set, re-link episode structure so yes the scene row
     # itself is searchable, but also: a recalled-member pulls in its parent
     # scene, and a recalled scene carries its members. Keeps "what happened
     # during X" recoverable without rearchitecting search scoring.
+
+    # ── L2 scene blocks (backend) ─────────────────────────────────────────────
+    # A scene is a normal memories row with kind=KIND_SCENE whose text is a
+    # mid-grain episode summary. The atomic facts it was built from carry
+    # scene_id back to it, so recall can surface the scene (via its own
+    # vector match) and expand to its members, or re-link a recalled member to
+    # its episode.
 
     def _scene_cols_available(self) -> bool:
         try:
@@ -2855,6 +3058,19 @@ class AikoMemorize:
             except Exception as exc:
                 log.debug("cross_store context skipped: %s", exc)
 
+        # Brain trace: capture exactly what gets injected into the prompt.
+        _brain_trace.record_step(
+            "AikoMemorize.format_for_context",
+            layer="context",
+            inputs={"memories_count": len(memories),
+                    "cross_store_enabled": bool(MEMORY_CROSS_STORE_ENABLED)},
+            outputs={"block_chars": len(block or ""), "block_preview": (block or "")[:1200]},
+            factors=[
+                f"age labels computed in local tz: today/yesterday/N days ago",
+                f"stale temporal facts dropped via _is_stale_temporal_fact",
+                f"supersession_narrative cap={MEMORY_SUPERSESSION_NARRATIVE_MAX}",
+            ],
+        )
         return block
 
     # ── dream pass ────────────────────────────────────────────────────────────

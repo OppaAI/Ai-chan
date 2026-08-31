@@ -55,6 +55,7 @@ from cognition import CONTEXT_POOL
 from system.log      import get_logger
 from system.schedule import DueJob, schedule_job_record, list_schedule_records, cancel_schedule_record
 from system.userspace import current_user_id, current_display_name, user_profile_path
+from system import brain_trace as _brain_trace
 from system import bioclock
 from cognition import reason
 from cognition.memory import learn
@@ -642,6 +643,18 @@ class AikoThink:
             from cognition.memory.edge_state import for_identity
             state = for_identity(user_id)
             ok, reason, action = state.should_attempt(user_input, mode="route")
+            _brain_trace.record_step(
+                "edge_state.should_attempt",
+                layer="gate",
+                inputs={"user_input": user_input, "mode": "route", "user_id": user_id},
+                outputs={"ok": ok, "reason": reason, "action": action},
+                factors=[
+                    f"energy={state.snapshot().get('energy')}",
+                    f"uncertainty={state.snapshot().get('uncertainty')}",
+                    f"recent_tool_failures={sum(1 for o in state.snapshot().get('tool_outcomes', []) if not o.get('ok'))}",
+                    f"load_signal={state.load_signal():.2f}",
+                ],
+            )
             if not ok:
                 log.info("[route] should_attempt action=%s reason=%s", action, reason)
                 return self._soft_gate_reply(
@@ -655,6 +668,13 @@ class AikoThink:
             log.info("[route] intent=%s", intent)
 
             if intent == "greeting":
+                _brain_trace.record_step(
+                    "think.route",
+                    layer="route",
+                    inputs={"user_input": user_input},
+                    outputs={"intent": "greeting", "handler": "chat(skip_memory=True)"},
+                    factors=["greeting-only regex match OR threshold + gap on greeting label"],
+                )
                 return self.chat(
                     user_input,
                     token_callback=token_callback,
@@ -680,9 +700,30 @@ class AikoThink:
             )
 
             if intent == "agentic":
+                _brain_trace.record_step(
+                    "think.route",
+                    layer="route",
+                    inputs={"user_input": user_input, "intent": "agentic"},
+                    outputs={"handler": "agentic_chat", "vector_reused": route_vec is not None},
+                    factors=["agentic_score >= 0.78 and gap >= min_gap"],
+                )
                 return self.agentic_chat(user_input, token_callback=token_callback, mem_kb_future=mem_kb_future, query_vec=query_vec, _from_route=True)
             if intent == "webchat":
+                _brain_trace.record_step(
+                    "think.route",
+                    layer="route",
+                    inputs={"user_input": user_input, "intent": "webchat"},
+                    outputs={"handler": "webchat", "vector_reused": route_vec is not None},
+                    factors=["webchat_score >= 0.72 and gap >= min_gap"],
+                )
                 return self.webchat(user_input, token_callback=token_callback, mem_kb_future=mem_kb_future, query_vec=query_vec)
+            _brain_trace.record_step(
+                "think.route",
+                layer="route",
+                inputs={"user_input": user_input, "intent": "localchat"},
+                outputs={"handler": "chat", "vector_reused": route_vec is not None, "mem_kb_future_started": mem_kb_future is not None},
+                factors=["no label cleared greeting/agentic/webchat thresholds"],
+            )
             return self.chat(user_input, token_callback=token_callback, _skip_search=True, mem_kb_future=mem_kb_future, query_vec=query_vec)
         finally:
             try:
@@ -739,43 +780,80 @@ class AikoThink:
         if memorize is None:
             log.warning("[think] Memory unavailable — skipping memory/KB recall.")
             return [], ""
-        embedder = memorize._mem._embedder
-        # Enriched query resolves pronouns against recent turns; the passed
-        # query_vector embeds only the raw input, so it must be dropped when
-        # the text changed or KNN and FTS would score different queries.
+
         recall_query = self._recall_query(user_input)
-        if recall_query != user_input:
-            query_vector = None
-        mem_future = CONTEXT_POOL.submit(memorize.search, recall_query, limit=mem_limit, query_vector=query_vector)
-        know_future = CONTEXT_POOL.submit(
-            knowledge_context_for, recall_query, limit=know_limit, max_chars=2000, embedder=embedder
-        )
-        try:
-            memories = mem_future.result(timeout=MEMORY_RECALL_TIMEOUT)
-        except concurrent.futures.TimeoutError:
-            log.warning("Memory recall timed out after %.1fs; skipping", MEMORY_RECALL_TIMEOUT)
-            know_future.cancel()
-            memories = []
-        except Exception as e:
-            log.error("Memory search failed: %s", e)
-            know_future.cancel()
-            memories = []
+        query_for_call = query_vector if recall_query == user_input else None
 
-        if MEMORY_MIN_SCORE > 0:
-            before = len(memories)
-            memories = [m for m in memories if m.get("_recall_score", 0.0) >= MEMORY_MIN_SCORE]
-            if len(memories) < before:
-                log.debug(
-                    "[memory] filtered %d/%d below MEMORY_MIN_SCORE=%.4f",
-                    before - len(memories), before, MEMORY_MIN_SCORE,
-                )
+        with _brain_trace.step(
+            "think._fetch_memory_and_knowledge",
+            layer="recall",
+            inputs={
+                "user_input": user_input,
+                "recall_query": recall_query,
+                "enriched_query": recall_query != user_input,
+                "mem_limit": mem_limit,
+                "know_limit": know_limit,
+                "vector_reused": query_for_call is not None,
+            },
+            factors=[
+                "memory + KB fetched concurrently via CONTEXT_POOL",
+                f"query_vector reused from route() = {query_for_call is not None}",
+            ],
+        ) as ctx:
+            embedder = memorize._mem._embedder
+            mem_future = CONTEXT_POOL.submit(memorize.search, recall_query, limit=mem_limit, query_vector=query_for_call)
+            know_future = CONTEXT_POOL.submit(
+                knowledge_context_for, recall_query, limit=know_limit, max_chars=2000, embedder=embedder
+            )
+            try:
+                memories = mem_future.result(timeout=MEMORY_RECALL_TIMEOUT)
+            except concurrent.futures.TimeoutError:
+                log.warning("Memory recall timed out after %.1fs; skipping", MEMORY_RECALL_TIMEOUT)
+                know_future.cancel()
+                memories = []
+            except Exception as e:
+                log.error("Memory search failed: %s", e)
+                know_future.cancel()
+                memories = []
 
-        try:
-            knowledge_block = know_future.result()
-        except Exception as e:
-            log.error("Knowledge lookup failed: %s", e)
-            knowledge_block = "<knowledge_context>\nLookup failed.\n</knowledge_context>"
-        return memories, knowledge_block
+            if MEMORY_MIN_SCORE > 0:
+                before = len(memories)
+                memories = [m for m in memories if m.get("_recall_score", 0.0) >= MEMORY_MIN_SCORE]
+                if len(memories) < before:
+                    log.debug(
+                        "[memory] filtered %d/%d below MEMORY_MIN_SCORE=%.4f",
+                        before - len(memories), before, MEMORY_MIN_SCORE,
+                    )
+
+            try:
+                knowledge_block = know_future.result()
+            except Exception as e:
+                log.error("Knowledge lookup failed: %s", e)
+                knowledge_block = "<knowledge_context>\nLookup failed.\n</knowledge_context>"
+
+            # Per-hit preview so the trace file shows what got recalled.
+            hit_preview = []
+            for i, m in enumerate((memories or [])[:5], 1):
+                hit_preview.append({
+                    "rank": i,
+                    "score": round(float(m.get("_recall_score", 0.0)), 4),
+                    "text": (m.get("memory") or m.get("text") or "")[:160],
+                    "kind": m.get("kind"),
+                    "pinned": bool(m.get("pinned")),
+                })
+
+            ctx.set(
+                outputs={
+                    "memories_returned": len(memories),
+                    "knowledge_chars": len(knowledge_block or ""),
+                    "top_hits": hit_preview,
+                },
+                factors=(ctx.__dict__.get("_step", {}).get("factors", []) if False else [
+                    f"min_score filter MEMORY_MIN_SCORE={MEMORY_MIN_SCORE} kept {len(memories)}/{sum(1 for _ in hit_preview)}",
+                    f"knowledge_block {'empty' if not knowledge_block else str(len(knowledge_block)) + ' chars'}",
+                ]),
+            )
+            return memories, knowledge_block
 
     def _resolve_mem_kb(self, user_input: str, mem_kb_future) -> tuple[list[dict], str]:
         """Resolve a pending memory+KB future, or fetch directly if this
@@ -825,81 +903,107 @@ class AikoThink:
         returned so route() can reuse it for memory recall instead of paying
         for a second embed of the same text (see route()).
         """
+        with _brain_trace.step("think._route_intent", layer="route",
+                               inputs={"user_input": user_input, "mode": _ROUTE_MODE}) as ctx:
+            if not _ROUTE_ENABLED:
+                ctx.set(outputs={"intent": "localchat", "vector": None},
+                        factors=["ROUTE_ENABLED=0 → forced localchat"])
+                return "localchat", None
+            if _ROUTE_MODE == "llm_only":
+                label = self._classify_quaternary_intent_llm(user_input, allow_agentic=_AGENTIC_MODE_ON)
+                ctx.set(outputs={"intent": label, "vector": None, "method": "llm_only"},
+                        factors=["llm_only mode bypasses semantic scoring"])
+                return label, None
 
-        if not _ROUTE_ENABLED:
-            return "localchat", None
-        if _ROUTE_MODE == "llm_only":
-            return self._classify_quaternary_intent_llm(user_input, allow_agentic=_AGENTIC_MODE_ON), None
+            instruct = _ROUTE_INSTRUCT_QUATERNARY
+            memorize = self._get_memorize()
+            if memorize is None:
+                log.warning("[think] Memory unavailable — intent routing via LLM only")
+                label = self._classify_quaternary_intent_llm(user_input, allow_agentic=_AGENTIC_MODE_ON)
+                ctx.set(outputs={"intent": label, "vector": None, "method": "llm_fallback"},
+                        factors=["memory backend unavailable → fell back to LLM classifier"])
+                return label, None
+            embedder = memorize._mem._embedder
+            query_vec = embedder.embed_query(user_input, instruct=instruct)
+            labels, example_vecs = self._semantic_example_vectors(_ROUTE_QUATERNARY_EXAMPLES, instruct)
+            scores = reason.label_scores_topk(query_vec, labels, example_vecs, top_k=_SEMANTIC_LABEL_TOP_K)
 
-        instruct = _ROUTE_INSTRUCT_QUATERNARY
-        memorize = self._get_memorize()
-        if memorize is None:
-            log.warning("[think] Memory unavailable — intent routing via LLM only")
-            return self._classify_quaternary_intent_llm(user_input, allow_agentic=_AGENTIC_MODE_ON), None
-        embedder = memorize._mem._embedder
-        query_vec = embedder.embed_query(user_input, instruct=instruct)
-        labels, example_vecs = self._semantic_example_vectors(_ROUTE_QUATERNARY_EXAMPLES, instruct)
-        scores = reason.label_scores_topk(query_vec, labels, example_vecs, top_k=_SEMANTIC_LABEL_TOP_K)
+            if not _AGENTIC_MODE_ON:
+                scores.pop("agentic", None)
 
-        if not _AGENTIC_MODE_ON:
-            # Remove agentic from consideration before ranking, so the
-            # existing gap/threshold logic naturally degenerates into a
-            # webchat-vs-localchat decision — no separate code path needed.
-            scores.pop("agentic", None)
+            greeting_score = scores.get("greeting", 0.0)
+            agentic_score = scores.get("agentic", 0.0)
+            webchat_score = scores.get("webchat", 0.0)
 
-        greeting_score = scores.get("greeting", 0.0)
-        agentic_score = scores.get("agentic", 0.0)
-        webchat_score = scores.get("webchat", 0.0)
+            ranked = sorted(scores.items(), key=lambda kv: kv[1], reverse=True)
+            best_label, best_score = ranked[0] if ranked else ("localchat", 0.0)
+            gap = best_score - ranked[1][1] if len(ranked) > 1 else 1.0
 
-        ranked = sorted(scores.items(), key=lambda kv: kv[1], reverse=True)
-        best_label, best_score = ranked[0] if ranked else ("localchat", 0.0)
-        gap = best_score - ranked[1][1] if len(ranked) > 1 else 1.0
+            agentic_threshold = float(os.getenv("ROUTE_AGENTIC_THRESHOLD", "0.78"))
+            webchat_threshold = float(os.getenv("ROUTE_WEBCHAT_THRESHOLD", "0.72"))
+            greeting_threshold = float(os.getenv("ROUTE_GREETING_THRESHOLD", "0.60"))
 
-        agentic_threshold = float(os.getenv("ROUTE_AGENTIC_THRESHOLD", "0.78"))
-        webchat_threshold = float(os.getenv("ROUTE_WEBCHAT_THRESHOLD", "0.72"))
-        greeting_threshold = float(os.getenv("ROUTE_GREETING_THRESHOLD", "0.60"))
-
-        log.debug(
-            "[route] quaternary scores: greeting=%.3f agentic=%.3f webchat=%.3f best=%s gap=%.3f for: %r",
-            greeting_score, agentic_score, webchat_score, best_label, gap, user_input
-        )
-
-        if best_label == "greeting" and greeting_score >= greeting_threshold and (gap >= _SEMANTIC_ROUTE_MIN_GAP or _is_greeting_only(user_input)):
-            return "greeting", query_vec
-
-        if best_label == "agentic" and agentic_score >= agentic_threshold and gap >= _SEMANTIC_ROUTE_MIN_GAP:
-            return "agentic", query_vec
-        if best_label == "webchat" and webchat_score >= webchat_threshold and gap >= _SEMANTIC_ROUTE_MIN_GAP:
-            return "webchat", query_vec
-
-        # Above threshold but too close to call cleanly.
-        ambiguous = (
-            (agentic_score >= agentic_threshold or webchat_score >= webchat_threshold or greeting_score >= greeting_threshold)
-            and gap < _SEMANTIC_ROUTE_MIN_GAP
-        )
-        if ambiguous:
-            if _is_greeting_only(user_input):
-                return "greeting", query_vec
-            if _ROUTE_MODE == "semantic_only":
-                # Deterministic mode: no LLM call on ambiguity.
-                log.debug("[route] semantic_only: ambiguous gap, defaulting localchat")
-                return "localchat", query_vec
-            if _ROUTE_MODE == "llm":
-                return self._classify_quaternary_intent_llm(user_input, allow_agentic=_AGENTIC_MODE_ON), query_vec
-            # "semantic" mode tie-break: use the same quaternary classifier
-            # as "llm" mode so webchat stays reachable when embeddings are
-            # torn between labels. The old binary agentic-or-chat check
-            # structurally collapsed every ambiguous webchat candidate into
-            # localchat, where no search code exists.
-            llm_label = self._classify_quaternary_intent_llm(
-                user_input, allow_agentic=_AGENTIC_MODE_ON,
+            log.debug(
+                "[route] quaternary scores: greeting=%.3f agentic=%.3f webchat=%.3f best=%s gap=%.3f for: %r",
+                greeting_score, agentic_score, webchat_score, best_label, gap, user_input
             )
-            return llm_label, query_vec
 
-        if _is_greeting_only(user_input):
-            return "greeting", query_vec
+            ctx.add_extra(scores=dict(scores), best=best_label, gap=gap,
+                          thresholds={"agentic":agentic_threshold, "webchat":webchat_threshold,
+                                     "greeting":greeting_threshold},
+                          method="semantic")
 
-        return "localchat", query_vec
+            if best_label == "greeting" and greeting_score >= greeting_threshold and (gap >= _SEMANTIC_ROUTE_MIN_GAP or _is_greeting_only(user_input)):
+                ctx.set(outputs={"intent": "greeting", "vector_dim": int(query_vec.shape[0])},
+                        factors=[f"greeting_score={greeting_score:.3f} ≥ {greeting_threshold}",
+                                 f"gap={gap:.3f} ≥ min_gap={_SEMANTIC_ROUTE_MIN_GAP} OR greeting-only regex hit"])
+                return "greeting", query_vec
+
+            if best_label == "agentic" and agentic_score >= agentic_threshold and gap >= _SEMANTIC_ROUTE_MIN_GAP:
+                ctx.set(outputs={"intent": "agentic", "vector_dim": int(query_vec.shape[0])},
+                        factors=[f"agentic_score={agentic_score:.3f} ≥ {agentic_threshold}",
+                                 f"gap={gap:.3f} ≥ min_gap={_SEMANTIC_ROUTE_MIN_GAP}"])
+                return "agentic", query_vec
+            if best_label == "webchat" and webchat_score >= webchat_threshold and gap >= _SEMANTIC_ROUTE_MIN_GAP:
+                ctx.set(outputs={"intent": "webchat", "vector_dim": int(query_vec.shape[0])},
+                        factors=[f"webchat_score={webchat_score:.3f} ≥ {webchat_threshold}",
+                                 f"gap={gap:.3f} ≥ min_gap={_SEMANTIC_ROUTE_MIN_GAP}"])
+                return "webchat", query_vec
+
+            ambiguous = (
+                (agentic_score >= agentic_threshold or webchat_score >= webchat_threshold or greeting_score >= greeting_threshold)
+                and gap < _SEMANTIC_ROUTE_MIN_GAP
+            )
+            if ambiguous:
+                if _is_greeting_only(user_input):
+                    ctx.set(outputs={"intent": "greeting", "vector_dim": int(query_vec.shape[0])},
+                            factors=["ambiguous but greeting-only regex overrides → greeting"])
+                    return "greeting", query_vec
+                if _ROUTE_MODE == "semantic_only":
+                    log.debug("[route] semantic_only: ambiguous gap, defaulting localchat")
+                    ctx.set(outputs={"intent": "localchat", "vector_dim": int(query_vec.shape[0])},
+                            factors=[f"ambiguous gap={gap:.3f}, semantic_only mode → localchat default"])
+                    return "localchat", query_vec
+                if _ROUTE_MODE == "llm":
+                    label = self._classify_quaternary_intent_llm(user_input, allow_agentic=_AGENTIC_MODE_ON)
+                    ctx.set(outputs={"intent": label, "vector_dim": int(query_vec.shape[0]), "method": "llm_tiebreak"},
+                            factors=[f"ambiguous gap={gap:.3f}, llm mode → LLM tiebreak"])
+                    return label, query_vec
+                llm_label = self._classify_quaternary_intent_llm(
+                    user_input, allow_agentic=_AGENTIC_MODE_ON,
+                )
+                ctx.set(outputs={"intent": llm_label, "vector_dim": int(query_vec.shape[0]), "method": "llm_tiebreak"},
+                        factors=[f"ambiguous gap={gap:.3f}, semantic mode → LLM tiebreak"])
+                return llm_label, query_vec
+
+            if _is_greeting_only(user_input):
+                ctx.set(outputs={"intent": "greeting", "vector_dim": int(query_vec.shape[0])},
+                        factors=["no threshold met but greeting-only regex hit"])
+                return "greeting", query_vec
+
+            ctx.set(outputs={"intent": "localchat", "vector_dim": int(query_vec.shape[0])},
+                    factors=["no threshold met, no greeting regex → default localchat"])
+            return "localchat", query_vec
 
     def _semantic_example_vectors(self, examples_by_label: dict, instruct: str) -> tuple[list[str], object]:
         """Return cached route-example vectors.
@@ -1394,148 +1498,150 @@ class AikoThink:
         if speak and speak.is_playing():
             speak.stop()
 
-        if skip_memory:
-            memories = []
-            knowledge_block = ""
-            memory_block = ""
-            persona_block = ""
-        else:
-            # Memory + KB — either resolved from route()'s post-intent future,
-            # or fetched directly if this was called standalone.
-            memorize = self._get_memorize()
-            from cognition.memory.edge_state import for_identity
-            memories, knowledge_block = self._resolve_mem_kb(user_input, mem_kb_future)
-            memories = for_identity(current_user_id()).prioritize_memories(user_input, memories)
-            memory_block = memorize.format_for_context(
-              memories, query=user_input, query_vector=query_vec
-            ) if memorize is not None else ""
-            persona_block = memorize.persona_context() if memorize is not None else ""
-            situation_block = ""
-            metacognitive_block = ""
-            try:
-                from cognition.memory.edge_state import for_identity
-                situation_block = for_identity(current_user_id()).situation_context(user_input, memories, knowledge_block)
-                metacognitive_block = for_identity(current_user_id()).metacognitive_context(user_input, memories)
-            except Exception:
-                pass
-
-        # Stable/volatile split for prompt-cache reuse: the persona core goes
-        # FIRST in the message array, conversation history next, and all
-        # per-turn context last (right before the user turn) — see
-        # _stream_response() and _current_system_prompt_parts().
-        core_system, volatile_system = self._current_system_prompt_parts(user_input)
-        if not skip_memory:
-            if persona_block:
-                volatile_system = f"{volatile_system}\n\n{persona_block}"
-            if memory_block:
-                volatile_system = f"{volatile_system}\n\n{memory_block}"
-            if situation_block:
-                volatile_system = f"{volatile_system}\n\n{situation_block}"
-            if metacognitive_block:
-                volatile_system = f"{volatile_system}\n\n{metacognitive_block}"
-            if not memory_block:
-                volatile_system += "\n\n<memory_context>\nNo relevant memories found.\n</memory_context>"
-            if knowledge_block:
-                volatile_system = f"{volatile_system}\n\n{knowledge_block}"
-
-        # Additional narrower wiki lookup — only when the user is asking
-        # about Aiko's own architecture/docs, distinct from the general KB
-        # fetch above. Gated so casual chat doesn't pay for it every turn.
-        if not skip_memory and _should_use_local_knowledge(user_input):
-            try:
+        with _brain_trace.step("think.chat", layer="context",
+                               inputs={"user_input": user_input, "skip_memory": skip_memory,
+                                       "store_turn": store_turn, "websearch_net": websearch_net}) as ctx:
+            if skip_memory:
+                memories = []
+                knowledge_block = ""
+                memory_block = ""
+                persona_block = ""
+            else:
                 memorize = self._get_memorize()
-                embedder = memorize.embedder() if memorize is not None else None
-                wiki_context = wiki_knowledge_context_for(
-                    user_input, limit=3, max_chars=3000,
-                    embedder=embedder,
-                )
-                if wiki_context:
-                    volatile_system = f"{volatile_system}\n\n{wiki_context}"
-            except Exception as e:
-                log.error("Local wiki-knowledge lookup failed: %s", e)
+                from cognition.memory.edge_state import for_identity
+                memories, knowledge_block = self._resolve_mem_kb(user_input, mem_kb_future)
+                memories = for_identity(current_user_id()).prioritize_memories(user_input, memories)
+                memory_block = memorize.format_for_context(
+                  memories, query=user_input, query_vector=query_vec
+                ) if memorize is not None else ""
+                persona_block = memorize.persona_context() if memorize is not None else ""
+                situation_block = ""
+                metacognitive_block = ""
+                try:
+                    from cognition.memory.edge_state import for_identity
+                    situation_block = for_identity(current_user_id()).situation_context(user_input, memories, knowledge_block)
+                    metacognitive_block = for_identity(current_user_id()).metacognitive_context(user_input, memories)
+                except Exception:
+                    pass
 
-        # Last-resort websearch net: routing can classify an explicit
-        # ask-the-internet message as localchat when embeddings miss the
-        # phrasing. When the message clearly requests live information,
-        # run one search and offer the results without forcing the reply
-        # to be web-only (unlike webchat, this stays conversational).
-        if (
-            not skip_memory
-            and websearch_net
-            and _CHAT_WEBSEARCH_NET_ENABLED
-            and _WEBSEARCH_HINT_RE.search(user_input)
-        ):
-            net_context = self._websearch_net_block(user_input, token_callback)
-            if net_context:
-                volatile_system = (
-                    f"{volatile_system}\n\n"
-                    f"<search_results query='{user_input}'>\n"
-                    f"Live web results — use them when they are relevant; do not invent time-sensitive facts:\n\n"
-                    f"{net_context}\n"
-                    f"</search_results>"
-                )
+            core_system, volatile_system = self._current_system_prompt_parts(user_input)
+            if not skip_memory:
+                if persona_block:
+                    volatile_system = f"{volatile_system}\n\n{persona_block}"
+                if memory_block:
+                    volatile_system = f"{volatile_system}\n\n{memory_block}"
+                if situation_block:
+                    volatile_system = f"{volatile_system}\n\n{situation_block}"
+                if metacognitive_block:
+                    volatile_system = f"{volatile_system}\n\n{metacognitive_block}"
+                if not memory_block:
+                    volatile_system += "\n\n<memory_context>\nNo relevant memories found.\n</memory_context>"
+                if knowledge_block:
+                    volatile_system = f"{volatile_system}\n\n{knowledge_block}"
 
-        # Live working-memory (<grasp>) block — explicit injection replacing
-        # the old grasp_hub monkeypatch wrapper. Sits in the volatile tail so
-        # the byte-stable core prefix keeps its prompt-cache reuse.
-        _wm_mem = self._get_memorize()
-        if _wm_mem is not None:
-            try:
-                _wm_block = _wm_mem.wm_context_block()
-                if _wm_block:
-                    volatile_system = f"{volatile_system}\n\n{_wm_block}"
-            except Exception:
-                pass
+            if not skip_memory and _should_use_local_knowledge(user_input):
+                try:
+                    memorize = self._get_memorize()
+                    embedder = memorize.embedder() if memorize is not None else None
+                    wiki_context = wiki_knowledge_context_for(
+                        user_input, limit=3, max_chars=3000,
+                        embedder=embedder,
+                    )
+                    if wiki_context:
+                        volatile_system = f"{volatile_system}\n\n{wiki_context}"
+                except Exception as e:
+                    log.error("Local wiki-knowledge lookup failed: %s", e)
 
-        # Datetime very last: it changes every minute, so keeping it after
-        # everything else maximizes the byte-stable prefix length.
-        volatile_system = f"{volatile_system}\n\n{bioclock.current_datetime_block()}".strip()
+            if (
+                not skip_memory
+                and websearch_net
+                and _CHAT_WEBSEARCH_NET_ENABLED
+                and _WEBSEARCH_HINT_RE.search(user_input)
+            ):
+                net_context = self._websearch_net_block(user_input, token_callback)
+                if net_context:
+                    volatile_system = (
+                        f"{volatile_system}\n\n"
+                        f"<search_results query='{user_input}'>\n"
+                        f"Live web results — use them when they are relevant; do not invent time-sensitive facts:\n\n"
+                        f"{net_context}\n"
+                        f"</search_results>"
+                    )
 
-        # Build messages
-        llm_prompt = user_input
-        if self._reasoning:
-            llm_prompt = f"{user_input}\n\nThink through this carefully."
+            _wm_mem = self._get_memorize()
+            if _wm_mem is not None:
+                try:
+                    _wm_block = _wm_mem.wm_context_block()
+                    if _wm_block:
+                        volatile_system = f"{volatile_system}\n\n{_wm_block}"
+                except Exception:
+                    pass
 
-        with self._history_lock:
-            self._history.append({"role": "user", "content": user_input})
-            if len(self._history) > CONTEXT_WINDOW_TURNS * 10:
-                self._history = self._history[-(CONTEXT_WINDOW_TURNS * 10):]
-            trimmed = self._history[-(CONTEXT_WINDOW_TURNS * 2):]
+            volatile_system = f"{volatile_system}\n\n{bioclock.current_datetime_block()}".strip()
 
-        trimmed = self._sanitize_history(trimmed)
-        if trimmed and trimmed[-1]["role"] == "user" and llm_prompt != user_input:
-            trimmed = trimmed[:-1] + [{"role": "user", "content": llm_prompt}]
+            llm_prompt = user_input
+            if self._reasoning:
+                llm_prompt = f"{user_input}\n\nThink through this carefully."
 
-        # Log debug
-        self.last_prompt_debug = {
-            "mode": "greeting" if skip_memory else "localchat",
-            "system_prompt": core_system + ("\n\n" + volatile_system if volatile_system else ""),
-            "memory_prompt": memory_block or "<memory_context>\nNo memories.\n</memory_context>",
-            "knowledge_prompt": knowledge_block,
-            "web_prompt": "",
-            "previous_chat_messages": [dict(m) for m in trimmed],
-        }
-        _dump_full_prompt(self.last_prompt_debug)
+            with self._history_lock:
+                self._history.append({"role": "user", "content": user_input})
+                if len(self._history) > CONTEXT_WINDOW_TURNS * 10:
+                    self._history = self._history[-(CONTEXT_WINDOW_TURNS * 10):]
+                trimmed = self._history[-(CONTEXT_WINDOW_TURNS * 2):]
 
-        # Stream response — core system message first, history, then the
-        # volatile context system message right before the newest user turn.
-        raw_response = self._stream_response(
-            trimmed,
-            system=core_system,
-            system_tail=volatile_system,
-            token_callback=token_callback,
-            emit=_CHAT_STREAM_EMIT,
-        )
-        raw_response = self._finalize_response(user_input, raw_response, token_callback, already_emitted=_CHAT_STREAM_EMIT)
+            trimmed = self._sanitize_history(trimmed)
+            if trimmed and trimmed[-1]["role"] == "user" and llm_prompt != user_input:
+                trimmed = trimmed[:-1] + [{"role": "user", "content": llm_prompt}]
 
-        # Store
-        with self._history_lock:
-            self._history.append({"role": "assistant", "content": raw_response})
+            self.last_prompt_debug = {
+                "mode": "greeting" if skip_memory else "localchat",
+                "system_prompt": core_system + ("\n\n" + volatile_system if volatile_system else ""),
+                "memory_prompt": memory_block or "<memory_context>\nNo memories.\n</memory_context>",
+                "knowledge_prompt": knowledge_block,
+                "web_prompt": "",
+                "previous_chat_messages": [dict(m) for m in trimmed],
+            }
+            _dump_full_prompt(self.last_prompt_debug)
 
-        if store_turn:
-            self._store_async(user_input, raw_response)
-        self._reasoning = False
-        return raw_response
+            # The two halves of the system prompt get sent as two separate
+            # system messages with conversation history sandwiched between —
+            # see _stream_response for the cache_prompt reasoning.
+            _brain_trace.record_step(
+                "think.chat.prompt_assembled",
+                layer="context",
+                outputs={
+                    "core_chars": len(core_system),
+                    "volatile_chars": len(volatile_system),
+                    "memory_block_chars": len(memory_block or ""),
+                    "memory_block_preview": (memory_block or "")[:600],
+                    "history_turns": len(trimmed),
+                },
+                factors=[
+                    f"memories reranked: {len(memories)}",
+                    f"situation/metacognitive added: {bool(situation_block)}/{bool(metacognitive_block)}",
+                    f"wiki trigger: {_should_use_local_knowledge(user_input)}",
+                    f"websearch_net trigger: {_WEBSEARCH_HINT_RE.search(user_input) is not None}",
+                ],
+            )
+
+            raw_response = self._stream_response(
+                trimmed,
+                system=core_system,
+                system_tail=volatile_system,
+                token_callback=token_callback,
+                emit=_CHAT_STREAM_EMIT,
+            )
+            raw_response = self._finalize_response(user_input, raw_response, token_callback, already_emitted=_CHAT_STREAM_EMIT)
+
+            with self._history_lock:
+                self._history.append({"role": "assistant", "content": raw_response})
+
+            if store_turn:
+                self._store_async(user_input, raw_response)
+            self._reasoning = False
+            ctx.set(outputs={"reply_chars": len(raw_response or "")},
+                    factors=[f"LLM stream done; reply {len(raw_response or '')} chars"])
+            return raw_response
 
     def web_search(self, query: str, token_callback=None) -> str:
         """Explicit /web command path."""
@@ -1816,6 +1922,14 @@ class AikoThink:
                     "top_k":          int(os.getenv("TOP_K", 40)),
                 },
             )
+            _brain_trace.record_step(
+                "think._stream_response.llm_open",
+                layer="stream",
+                outputs={"model": self._llm_model, "max_tokens": max_tokens,
+                         "cache_prompt": _LLM_CACHE_PROMPT,
+                         "n_messages": len(all_messages)},
+                factors=["cache_prompt=True reuses KV across turns for stable core prefix"],
+            )
             for chunk in stream:
                 delta = chunk.choices[0].delta if chunk.choices else None
                 token = (delta.content or "") if delta else ""
@@ -2076,51 +2190,62 @@ class AikoThink:
         blocks the turn and never invents metadata).
         """
         cognitive_state = None
-        try:
-            from cognition.memory.edge_state import for_identity
-            state = for_identity(current_user_id())
-            confirmed = state.confirm_memory_update(user_input)
-            if confirmed:
-                memorize = self._get_memorize()
-                for conflict in confirmed:
-                    if conflict.get("memory_id") and memorize is not None:
-                        memorize.supersede_exact(conflict["memory_id"], conflict.get("current", user_input), current_user_id())
-            state.record(user_input, response_text)
-            _sync_goal_review_schedule(state)
-            state.persist()
-            cognitive_state = for_identity(current_user_id()).snapshot()
-        except Exception:
-            pass
+        with _brain_trace.step("think._store_async", layer="write",
+                               inputs={"user_input": user_input, "response_chars": len(response_text or "")}) as ctx:
+            try:
+                from cognition.memory.edge_state import for_identity
+                state = for_identity(current_user_id())
+                confirmed = state.confirm_memory_update(user_input)
+                if confirmed:
+                    memorize = self._get_memorize()
+                    for conflict in confirmed:
+                        if conflict.get("memory_id") and memorize is not None:
+                            memorize.supersede_exact(conflict["memory_id"], conflict.get("current", user_input), current_user_id())
+                state.record(user_input, response_text)
+                _sync_goal_review_schedule(state)
+                state.persist()
+                cognitive_state = for_identity(current_user_id()).snapshot()
+            except Exception:
+                pass
 
-        def _is_any_active():
-            with self._active_users_lock:
-                return bool(self._active_user_ids)
-        mem = self._get_memorize()
-        mem.queue_write(
-            user_input,
-            response_text,
-            user_id=current_user_id(),
-            display_name=current_display_name(),
-            is_active_turn=_is_any_active,
-            idle_since=lambda: self._last_chat_time,
-        )
-        try:
-            mem.queue_episode(
+            def _is_any_active():
+                with self._active_users_lock:
+                    return bool(self._active_user_ids)
+            mem = self._get_memorize()
+            mem.queue_write(
                 user_input,
                 response_text,
-                cognitive_state=cognitive_state,
                 user_id=current_user_id(),
+                display_name=current_display_name(),
+                is_active_turn=_is_any_active,
+                idle_since=lambda: self._last_chat_time,
             )
-        except Exception:
-            pass
-
-        # Working memory (Grasp) — replaces the old grasp_hub wrapper around
-        # this method; same call timing (completed turns only, greeting turns
-        # with store_turn=False were never recorded and still aren't).
-        try:
-            mem.wm_record_turn(user_input, response_text)
-        except Exception:
-            pass
+            try:
+                mem.queue_episode(
+                    user_input,
+                    response_text,
+                    cognitive_state=cognitive_state,
+                    user_id=current_user_id(),
+                )
+            except Exception:
+                pass
+            try:
+                mem.wm_record_turn(user_input, response_text)
+            except Exception:
+                pass
+            ctx.set(
+                outputs={
+                    "write_queued": True,
+                    "episodic_queued": True,
+                    "wm_recorded": True,
+                    "memory_conflicts_consumed": cognitive_state is not None,
+                },
+                factors=[
+                    "edge_state.record() updates affect/energy/uncertainty/goals/loops",
+                    "queue_write → background thread, waits for idle window before LLM fact extraction",
+                    "queue_episode → EpisodicStore staging",
+                ],
+            )
 
 
 _STREAM_SENTENCE_END = set(".?!。？！")
