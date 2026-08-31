@@ -5,23 +5,31 @@
   "longitude": -123.1207,
   "min_aurora_probability_pct": 15,
   "max_cloud_cover_pct": 50,
-  "min_kp_for_alert": 5.0,
-  "min_kp_for_threads": 5.0,
+  "min_kp_for_alert": 4.0,
+  "min_kp_for_threads": 4.0,
   "retain_days": 3,
   "sources": [
-    {"type": "adapter", "id": "aurora", "name": "aurora"}
+    {
+      "type": "adapter",
+      "id": "aurora",
+      "name": "aurora"
+    }
   ],
   "template": "{summary}",
   "human_in_the_loop": false,
   "email": {
     "enabled": true,
     "when": "interesting",
-    "subject": "Aurora watch — {location_name}"
+    "subject": "Aurora watch \u2014 {location_name}"
   },
   "social": [
     {
       "platform": "threads",
-      "when": {"field": "kp_index", "op": ">=", "value": 5.0}
+      "when": {
+        "field": "kp_index",
+        "op": ">=",
+        "value": 5.0
+      }
     }
   ],
   "email_on_check": true,

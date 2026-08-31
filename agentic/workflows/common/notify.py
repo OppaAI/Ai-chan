@@ -16,8 +16,14 @@ log = logging.getLogger(__name__)
 def notify_email(subject: str, body: str, *, to: str | None = None) -> dict[str, Any]:
     """Send an email via a registered mail tool if available.
 
-    Tries common tool names: send_email, send_protonmail.
+    Tries common tool names: send_email, send_protonmail. The recipient
+    defaults to the AIKO_EMAIL env var so aurora/job-alert notifications
+    reach the owner even when the caller doesn't pass `to` explicitly.
     """
+    import os
+    if not to:
+        to = os.getenv("AIKO_EMAIL", "").strip() or None
+
     try:
         from agentic.registry import registry
     except Exception as e:
@@ -38,8 +44,19 @@ def notify_email(subject: str, body: str, *, to: str | None = None) -> dict[str,
                 args["subject"] = subject
             if "body" in params:
                 args["body"] = body
-            if to and "to" in params:
-                args["to"] = to
+            # Recipients: map `to` (single address) to whichever plural or
+            # singular param the tool exposes (recipients / to / address).
+            if to:
+                if "recipients" in params:
+                    args["recipients"] = [to]
+                elif "to" in params:
+                    args["to"] = to
+                elif "address" in params:
+                    args["address"] = to
+            if not to:
+                # No recipient resolved and the tool needs one; skip this
+                # tool rather than calling it with an empty recipient.
+                continue
 
             if inspect.iscoroutinefunction(spec.handler):
                 try:
