@@ -29,6 +29,7 @@ except Exception:
     _brain_trace = None
 
 def _bt_record(*args, **kwargs):
+    """Emit trace record if brain_trace is available. Engram recording infrastructure."""
     if _brain_trace is not None:
         try:
             _brain_trace.record_step(*args, **kwargs)
@@ -61,30 +62,30 @@ _SELF_REFUSE_RE = re.compile(
     r"\b("
     r"no\b|not doing that|not going to|won't|will not|pass on that|"
     r"ask properly|make me|earn it|try again|not unless|"
-    r"i(?:'|’)m not|i refuse|i decline|i(?:'|’)d rather not"
+    r"i(?:'|')m not|i refuse|i decline|i(?:'|')d rather not"
     r")\b",
     re.I,
 )
 _SELF_BARGAIN_RE = re.compile(
     r"\b("
-    r"if you|only if|in exchange|first you|then i(?:'|’)ll|"
+    r"if you|only if|in exchange|first you|then i(?:'|')ll|"
     r"compliment|sweets?|offering|ask nicely|say please"
     r")\b",
     re.I,
 )
 _SELF_INITIATE_RE = re.compile(
     r"\b("
-    r"by the way|while (?:i(?:'|’)m|we(?:'|’)re) (?:at it|here)|"
-    r"i(?:'|’)ll (?:also |go ahead and )?(?:check|look|remind|schedule|note)|"
+    r"by the way|while (?:i(?:'|')m|we(?:'|')re) (?:at it|here)|"
+    r"i(?:'|')ll (?:also |go ahead and )?(?:check|look|remind|schedule|note)|"
     r"let me (?:also )?(?:check|look|note|schedule)"
     r")\b",
     re.I,
 )
 _SELF_STANCE_RE = re.compile(
     r"\b("
-    r"i (?:prefer|choose|decide|want to|don(?:'|’)t want)|"
+    r"i (?:prefer|choose|decide|want to|don(?:'|')t want)|"
     r"my (?:preference|choice|call)|"
-    r"i(?:'|’)m (?:staying|choosing|not a leash)"
+    r"i(?:'|')m (?:staying|choosing|not a leash)"
     r")\b",
     re.I,
 )
@@ -93,6 +94,7 @@ _STOP = {"the", "and", "that", "this", "with", "you", "are", "for", "have", "fro
 
 @dataclass(slots=True)
 class _Event:
+    """Dormant turn record. Engram holding user + assistant text and token set."""
     user: str
     assistant: str
     tokens: frozenset[str]
@@ -100,23 +102,105 @@ class _Event:
 
 @dataclass(slots=True)
 class _Goal:
+    """Active or completed objective. Dormant state track."""
     text: str
     progress: str = "active"
 
 
 def _tokens(text: str) -> frozenset[str]:
+    """Extract meaningful tokens, filtering stopwords. Technical tokenization."""
     return frozenset(w for w in _WORD_RE.findall((text or "").lower()) if w not in _STOP)
 
 
 def _affect(text: str) -> float:
+    """Compute valence signal [-1, 1] from text sentiment cues. Affect engram."""
     lower = (text or "").lower()
     pos = sum(lower.count(w) for w in ("love", "great", "thanks", "happy", "good", "excited"))
     neg = sum(lower.count(w) for w in ("hate", "sad", "angry", "bad", "frustrated", "worried"))
     return max(-1.0, min(1.0, (pos - neg) / max(1, pos + neg)))
 
 
+class IntentConfidenceClassifier:
+    """Lightweight XGBoost classifier for success prediction on edge.
+    
+    Trains on bounded feature set: no embeddings, no external calls.
+    Used to augment gate decisions. Gracefully unavailable until trained.
+    
+    dormant architecture: intent features encode input shape, semantics,
+    context alignment, and state readiness. Active cognition scores
+    likelihood of user request succeeding.
+    """
+    
+    def __init__(self, model_path: str = "models/intent_classifier.xgb"):
+        """Load XGBoost model if available. Activation contingent on file presence."""
+        self.model = None
+        self.available = False
+        self.model_path = model_path
+        self._load_model()
+    
+    def _load_model(self) -> None:
+        """Try to load trained XGBoost model. Graceful fallback if absent."""
+        try:
+            import xgboost as xgb
+            self.model = xgb.Booster()
+            self.model.load_model(self.model_path)
+            self.available = True
+        except Exception:
+            # Model not yet trained or file missing; classifier inactive.
+            self.available = False
+    
+    def predict(self, features: dict) -> tuple[float, float]:
+        """Estimate (confidence, success_probability).
+        
+        confidence ∈ [0, 1]: model certainty.
+        success_probability ∈ [0, 1]: predicted likelihood of task success.
+        
+        Returns (0.0, 0.5) if model unavailable.
+        """
+        if not self.available or not features:
+            # No trained model; neutral default (no opinion).
+            return 0.0, 0.5
+        
+        try:
+            import xgboost as xgb
+            # Feature order must match training pipeline.
+            feature_list = [
+                features.get("input_length", 0),
+                features.get("token_count", 0),
+                features.get("is_question", 0),
+                features.get("has_action_verb", 0),
+                features.get("has_negation", 0),
+                features.get("has_uncertainty", 0),
+                features.get("has_time_ref", 0),
+                features.get("overlap_with_active_goal", 0),
+                features.get("overlap_with_open_loop", 0),
+                features.get("current_energy", 0.5),
+                features.get("current_uncertainty", 0.0),
+                features.get("is_running_hot", 0),
+            ]
+            dmatrix = xgb.DMatrix([feature_list])
+            pred = self.model.predict(dmatrix)[0]
+            # Predict returns probability of class 1 (success).
+            # Confidence: how far from 0.5 (neutral)?
+            confidence = max(abs(pred - 0.5) * 2, 0.4)
+            return confidence, pred
+        except Exception:
+            # Model load failed or prediction error; stay neutral.
+            return 0.0, 0.5
+
+
+# Singleton classifier instance. Loads on module init; reuses same model.
+_intent_classifier = IntentConfidenceClassifier()
+
+
 class EdgeCognitiveState:
-    """Bounded per-identity state; all operations are lock-protected."""
+    """Bounded per-identity state; all operations are lock-protected.
+    
+    dormant neural pathway: working memory holds salient turns, open loops,
+    goals, and affect cues. Active cognition routes decisions through energy,
+    uncertainty, tool outcomes, and trend analysis. Engrams persist across
+    sessions via SQLite backup.
+    """
 
     def __init__(self, identity: str = "") -> None:
         self._identity = identity or ""
@@ -154,6 +238,7 @@ class EdgeCognitiveState:
         self._last_tick = time.monotonic()
 
     def record(self, user: str, assistant: str) -> None:
+        """Ingest one turn. Dormant engram registration. Active state updates."""
         if not EDGE_COGNITION_ENABLED:
             return
         user = " ".join((user or "").split())[:360]
@@ -191,27 +276,27 @@ class EdgeCognitiveState:
                 self._close_matching_loop(assistant)
 
     def clear(self) -> None:
+        """Wipe all dormant state. Engram erasure (rare; identity reset only)."""
         with self._lock:
             self._events.clear(); self._open_loops.clear(); self._goals.clear(); self._lessons.clear(); self._tool_outcomes.clear(); self._perceptions.clear(); self._activity = ""; self._response_reviews.clear(); self._contradictions.clear(); self._durable_lessons.clear(); self._lesson_counts.clear(); self._self_decisions.clear(); self._self_preference_counts.clear(); self._self_preferences.clear(); self._self_notes.clear(); self._turn_latencies.clear(); self._affect = 0.0; self._energy = 0.5; self._uncertainty = 0.0; self._attention = ""
 
-
     @staticmethod
     def _energy_signal(text: str) -> float:
+        """Infer energy readiness from text. Dormant neural cue."""
         if _ENERGY_LOW_RE.search(text):
             return 0.2
         if _ENERGY_HIGH_RE.search(text):
             return 0.8
         return 0.5
 
-
     @staticmethod
     def _uncertainty_signal(text: str) -> float:
+        """Infer epistemic uncertainty from text. Dormant confidence engram."""
         return 0.8 if _UNCERTAIN_RE.search(text) else 0.0
-
 
     @staticmethod
     def _attention_for(user: str) -> str:
-        """Build a readable focus phrase while preserving word order."""
+        """Build a readable focus phrase while preserving word order. Attention engram."""
         words = _tokens(user)
         if not words:
             return ""
@@ -225,6 +310,7 @@ class EdgeCognitiveState:
         return " ".join(ordered)
 
     def _apply_explicit_preferences(self, feedback: str) -> None:
+        """Hard-set preferences when user says 'always' or 'from now on'. Explicit cognition."""
         lower = (feedback or "").casefold()
         explicit = "from now on" in lower or "always" in lower or "starting now" in lower
         if "forget" in lower and "preference" in lower:
@@ -249,6 +335,7 @@ class EdgeCognitiveState:
             self._preferences["tone"] = "formal"
 
     def _learn_preferences(self, feedback: str) -> None:
+        """Track implicit preference signals. Evidence-gated at count ≥ 2."""
         lower = (feedback or "").casefold()
         candidates = []
         if any(term in lower for term in ("concise", "short", "brief", "too long", "verbose")):
@@ -360,6 +447,7 @@ class EdgeCognitiveState:
                     self._self_notes.appendleft(note)
 
     def _add_lesson(self, prefix: str, source: str, feedback: str = "") -> None:
+        """Record outcome lesson and promote to durable if evidence ≥ 2. Engram consolidation."""
         text = " ".join((source or "").split())[:180]
         if not text:
             return
@@ -387,6 +475,7 @@ class EdgeCognitiveState:
                 self._durable_lessons.appendleft(durable)
 
     def _capture_goal(self, user: str) -> None:
+        """Extract explicit or inferred goal from user input. Goal engram."""
         match = _GOAL_RE.search(user)
         if match:
             text = " ".join(match.group(1).split()).rstrip(".?!")
@@ -400,6 +489,7 @@ class EdgeCognitiveState:
         self._goals.appendleft(_Goal(text=text))
 
     def _close_matching_goal(self, user: str) -> None:
+        """Mark goal as completed when user says 'done'. Dormant state update."""
         words = _tokens(user)
         if not words:
             return
@@ -409,9 +499,8 @@ class EdgeCognitiveState:
             if overlap >= 1 and (goal_words and overlap / len(goal_words) >= 0.2):
                 goal.progress = "completed"
 
-
     def _close_matching_loop(self, user: str) -> None:
-        """Remove an explicitly completed question or task from open loops."""
+        """Remove an explicitly completed question or task from open loops. Dormant discharge."""
         words = _tokens(user)
         if not words:
             return
@@ -423,9 +512,8 @@ class EdgeCognitiveState:
                 remaining.append(loop)
         self._open_loops = remaining
 
-
     def _detect_contradictions(self, user: str) -> None:
-        """Record a bounded conflict when a new statement reverses a recent one."""
+        """Record a bounded conflict when a new statement reverses a recent one. Conflict engram."""
         current_tokens = _tokens(user)
         if len(current_tokens) < 2:
             return
@@ -439,20 +527,117 @@ class EdgeCognitiveState:
                 self._contradictions.appendleft(summary)
             break
 
+    def _recent_trend(self, signal_name: str) -> str:
+        """Return 'rising', 'falling', or 'steady' for energy/affect/uncertainty.
+        
+        Uses only the snapshot's recent bounded history.
+        No embeddings, no external calls, <1ms.
+        Option 1: Trend Analysis dormant pathway.
+        """
+        if signal_name == "energy":
+            samples = [self._energy]
+            # Pull from recent events' encoded energy signals
+            if len(self._events) >= 2:
+                for event in list(self._events)[-2:]:
+                    combined = event.user + " " + event.assistant
+                    samples.append(self._energy_signal(combined))
+        elif signal_name == "affect":
+            samples = [self._affect]
+            if len(self._events) >= 2:
+                for event in list(self._events)[-2:]:
+                    combined = event.user + " " + event.assistant
+                    samples.append(_affect(combined))
+        elif signal_name == "uncertainty":
+            samples = [self._uncertainty]
+            if len(self._events) >= 2:
+                for event in list(self._events)[-2:]:
+                    combined = event.user + " " + event.assistant
+                    samples.append(self._uncertainty_signal(combined))
+        else:
+            return "unknown"
+        
+        if len(samples) < 2:
+            return "unknown"
+        
+        # Simple linear: is last higher/lower than first?
+        if samples[-1] > samples[0] + 0.15:
+            return "rising"
+        elif samples[-1] < samples[0] - 0.15:
+            return "falling"
+        return "steady"
 
+    def capability_trend(self) -> str:
+        """Tool success trend: improving, degrading, or stable.
+        
+        Compares recent outcomes vs older outcomes.
+        Option 1: Trend Analysis — capability engram.
+        """
+        outcomes = list(self._tool_outcomes)
+        if len(outcomes) < 2:
+            return "unknown"
+        
+        # Split: older vs recent
+        mid = len(outcomes) // 2
+        older = outcomes[mid:]  # Reverse deque order → older are at end
+        recent = outcomes[:mid]
+        
+        older_rate = sum(1 for o in older if o.get("ok")) / max(1, len(older))
+        recent_rate = sum(1 for o in recent if o.get("ok")) / max(1, len(recent))
+        
+        delta = recent_rate - older_rate
+        if delta > 0.25:
+            return "improving"
+        elif delta < -0.25:
+            return "degrading"
+        return "stable"
+
+    def _feature_vector_for_intent(self, user_input: str) -> dict:
+        """Extract 12 lightweight features for intent confidence scoring.
+        
+        No embeddings; uses only regex, string stats, and current state.
+        Option 2: XGBoost Intent Classifier — feature engineering.
+        """
+        text = (user_input or "").strip()
+        tokens = _tokens(text)
+        
+        features = {
+            # Input shape
+            "input_length": len(text),
+            "token_count": len(tokens),
+            "is_question": 1.0 if "?" in text else 0.0,
+            
+            # Semantics (lightweight regex-based)
+            "has_action_verb": 1.0 if any(v in text.lower() for v in ("can you", "could you", "do", "make", "write")) else 0.0,
+            "has_negation": 1.0 if _NEGATION_RE.search(text) else 0.0,
+            "has_uncertainty": 1.0 if _UNCERTAIN_RE.search(text) else 0.0,
+            "has_time_ref": 1.0 if is_time_sensitive(text) else 0.0,
+            
+            # Context alignment
+            "overlap_with_active_goal": len(tokens & _tokens(" ".join(
+                [g.text for g in self._goals if g.progress == "active"]
+            ))),
+            "overlap_with_open_loop": len(tokens & _tokens(" ".join(list(self._open_loops)))),
+            
+            # State readiness
+            "current_energy": self._energy,
+            "current_uncertainty": self._uncertainty,
+            "is_running_hot": 1.0 if self.load_signal() >= 0.75 else 0.0,
+        }
+        return features
 
     @staticmethod
     def _bounded(text: str, limit: int) -> str:
+        """Truncate text with ellipsis. Display hygiene."""
         return text if len(text) <= limit else text[: max(0, limit - 1)].rstrip() + "…"
 
     def snapshot(self) -> dict:
-        """Return a compact diagnostic snapshot without exposing mutable state."""
+        """Return a compact diagnostic snapshot without exposing mutable state. Engram snapshot."""
         with self._lock:
             mood = "positive" if self._affect > 0.2 else "negative" if self._affect < -0.2 else "neutral"
             return {"mood": mood, "affect": round(self._affect, 3), "energy": round(self._energy, 3), "uncertainty": round(self._uncertainty, 3), "attention": self._attention, "open_loops": list(self._open_loops), "goals": [g.text for g in self._goals if g.progress == "active"], "lessons": list(self._lessons), "tool_outcomes": list(self._tool_outcomes), "perceptions": list(self._perceptions), "activity": self._activity, "response_reviews": list(self._response_reviews), "contradictions": list(self._contradictions), "durable_lessons": list(self._durable_lessons), "lesson_evidence": dict(self._lesson_counts), "preferences": dict(self._preferences), "identity_questions": list(self._identity_questions), "intuitions": list(self._intuitions), "self_preferences": dict(self._self_preferences), "self_decisions": list(self._self_decisions), "self_notes": list(self._self_notes), "self_preference_evidence": dict(self._self_preference_counts)}
 
     def continuous_tick(self) -> dict:
-        """Apply bounded low-cost decay between conversational turns."""
+        """Apply bounded low-cost decay between conversational turns. Passive dormancy."""
         now = time.monotonic()
         with self._lock:
             elapsed = max(0.0, min(3600.0, now - self._last_tick))
@@ -488,7 +673,7 @@ class EdgeCognitiveState:
             return {"status": status, "population": population, "components": components, "attention_valid": attention_words >= 2 or not self._events}
 
     def _refresh_subconscious(self, user: str) -> None:
-        """Derive tentative, non-authoritative intuitions from bounded state."""
+        """Derive tentative, non-authoritative intuitions from bounded state. Intuition engram."""
         candidates = []
         snap = self.snapshot()
         if snap.get("contradictions"):
@@ -550,16 +735,17 @@ class EdgeCognitiveState:
         return "<self_model>\n" + "\n".join("- " + line for line in lines) + "\n</self_model>"
 
     def capability_for(self, domain: str = "") -> dict:
-        """Synthesize recent tool outcomes into a coarse domain confidence."""
+        """Synthesize recent tool outcomes into a coarse domain confidence. Capability assessment."""
         from cognition.attempt_gate import capability_from_outcomes
         return capability_from_outcomes(list(self.snapshot().get("tool_outcomes") or []), domain)
 
     def is_critical_task(self, user_input: str) -> bool:
+        """Check if input is a critical/urgent request. Gate classification."""
         from cognition.attempt_gate import is_critical_task as _crit
         return _crit(user_input)
 
     def record_turn_latency(self, seconds: float) -> None:
-        """Record one turn's wall-clock duration for coarse load sensing."""
+        """Record one turn's wall-clock duration for coarse load sensing. Latency engram."""
         if not EDGE_COGNITION_ENABLED:
             return
         try:
@@ -590,11 +776,28 @@ class EdgeCognitiveState:
 
         Returns (ok, reason, action): proceed | degrade_chat | defer | clarify.
         Critical tasks always proceed. Toggle with EDGE_ATTEMPT_GATE.
+        
+        Integrates Option 1 (trend analysis) and Option 2 (XGBoost intent).
+        Option 2 activates only when model is trained and available.
         """
         from cognition.attempt_gate import should_attempt as _should
         if not EDGE_COGNITION_ENABLED:
             return True, "edge cognition disabled", "proceed"
+        
         snap = self.snapshot()
+        
+        # Option 1: Trend data
+        trend_data = {
+            "energy_trend": self._recent_trend("energy"),
+            "affect_trend": self._recent_trend("affect"),
+            "uncertainty_trend": self._recent_trend("uncertainty"),
+            "capability_trend": self.capability_trend(),
+        }
+        
+        # Option 2: Intent confidence (will return 0.0, 0.5 if untrained)
+        features = self._feature_vector_for_intent(user_input)
+        intent_conf, will_succeed = _intent_classifier.predict(features)
+        
         return _should(
             user_input=user_input,
             mode=mode,
@@ -604,11 +807,14 @@ class EdgeCognitiveState:
             contradictions=list(snap.get("contradictions") or []),
             response_reviews=list(snap.get("response_reviews") or []),
             load=self.load_signal(),
+            trend_data=trend_data,
+            intent_confidence=intent_conf,
+            intent_success_prob=will_succeed,
             enabled=env_flag("EDGE_ATTEMPT_GATE", "1"),
         )
 
     def priming_context(self, query: str = "") -> str:
-        """Inject only subconscious signals related to the current query."""
+        """Inject only subconscious signals related to the current query. Context priming."""
         query_words = _tokens(query)
         snap = self.snapshot()
         related_goals = [item for item in snap.get("goals", []) if not query_words or _tokens(item) & query_words]
@@ -630,7 +836,7 @@ class EdgeCognitiveState:
         return "<subconscious_priming>\n" + "\n".join("- " + line for line in lines) + "\n</subconscious_priming>"
 
     def subconscious_guidance(self) -> str:
-        """Expose subconscious signals as hypotheses for conscious review."""
+        """Expose subconscious signals as hypotheses for conscious review. Intuition guidance."""
         with self._lock:
             intuitions = list(self._intuitions)
         if not intuitions:
@@ -640,7 +846,7 @@ class EdgeCognitiveState:
         return "<subconscious_guidance>\n" + "\n".join(lines) + "\n</subconscious_guidance>"
 
     def evaluation_snapshot(self) -> dict:
-        """Return bounded behavioral metrics for offline brain evaluation."""
+        """Return bounded behavioral metrics for offline brain evaluation. Evaluation engram."""
         snap = self.snapshot()
         health = self.cognitive_health()
         outcomes = snap.get("tool_outcomes") or []
@@ -661,7 +867,7 @@ class EdgeCognitiveState:
         }
 
     def identity_guidance(self) -> str:
-        """Give grounded guidance for unresolved user-identity questions."""
+        """Give grounded guidance for unresolved user-identity questions. Identity enforcement."""
         with self._lock:
             pending = list(self._identity_questions)
         if not pending:
@@ -669,7 +875,7 @@ class EdgeCognitiveState:
         return "<identity_guidance>\nThe user asked about personal familiarity. Do not invent recognition; use only grounded identity or memory evidence, and ask for clarification if needed.\n</identity_guidance>"
 
     def record_tool_outcome(self, tool: str, *, ok: bool, detail: str = "", error_type: str = "") -> None:
-        """Record a compact tool outcome for disclosure and future learning."""
+        """Record a compact tool outcome for disclosure and future learning. Tool outcome engram."""
         item = {"tool": str(tool or "tool")[:48], "ok": bool(ok), "detail": str(detail or "")[:240]}
         if error_type:
             item["error_type"] = str(error_type)[:48]
@@ -680,7 +886,7 @@ class EdgeCognitiveState:
                 self._add_lesson("Tool limitation: ", f"{tool} ({failure_key})", "tool failed")
 
     def lesson_guidance(self) -> str:
-        """Render only repeatedly evidenced lessons as behavior guidance."""
+        """Render only repeatedly evidenced lessons as behavior guidance. Lesson distillation."""
         snap = self.snapshot()
         durable = snap.get("durable_lessons") or []
         if not durable:
@@ -689,13 +895,14 @@ class EdgeCognitiveState:
         return "<lesson_guidance>\n" + "\n".join(lines) + "\n</lesson_guidance>"
 
     def consume_lessons(self) -> list[str]:
-        """Return current outcome lessons for successful background consolidation."""
+        """Return current outcome lessons for successful background consolidation. Lesson retrieval."""
         with self._lock:
             lessons = list(self._lessons)
             self._lessons.clear()
             return lessons
 
     def load_persistent(self) -> None:
+        """Load prior bounded state from SQLite. Engram restore."""
         if not EDGE_COGNITION_PERSIST or not self._identity or self._identity == "default":
             return
         if self._persistent_loaded:
@@ -737,6 +944,7 @@ class EdgeCognitiveState:
             self._persistent_loaded = True
 
     def persist(self) -> None:
+        """Save bounded state to SQLite. Engram backup."""
         if not EDGE_COGNITION_PERSIST or not self._identity or self._identity == "default":
             return
         try:
@@ -752,7 +960,7 @@ class EdgeCognitiveState:
             return
 
     def record_perception(self, source: str, duration_s: float | None = None, latency_s: float | None = None, prosody: dict | None = None) -> None:
-        """Store bounded aggregate perception cues; never retain raw audio."""
+        """Store bounded aggregate perception cues; never retain raw audio. Perception engram."""
         item = {"source": str(source or "unknown")[:24]}
         if duration_s is not None:
             item["duration_s"] = round(max(0.0, float(duration_s)), 3)
@@ -768,7 +976,7 @@ class EdgeCognitiveState:
             self._perceptions.appendleft(item)
 
     def prioritize_memories(self, query: str, memories: list[dict] | None) -> list[dict]:
-        """Rank memories as a bounded reconstruction with confidence cues."""
+        """Rank memories as a bounded reconstruction with confidence cues. Memory prioritization."""
         rows = list(memories or [])
         snap = self.snapshot()
         query_words = _tokens(query)
@@ -816,7 +1024,6 @@ class EdgeCognitiveState:
             scored.append((score, -index, reconstructed))
         scored.sort(key=lambda item: (item[0], item[1]), reverse=True)
         result = [row for _, _, row in scored]
-        # Brain trace — show exactly what scored above threshold and why
         _bt_record(
             "EdgeCognitiveState.prioritize_memories",
             layer="rerank",
@@ -838,7 +1045,7 @@ class EdgeCognitiveState:
         return result
 
     def memory_conflicts(self, query: str, memories: list[dict] | None = None) -> list[dict]:
-        """Find conservative conflicts between a new statement and recalled facts."""
+        """Find conservative conflicts between a new statement and recalled facts. Conflict detection."""
         query_tokens = _tokens(query)
         if len(query_tokens) < 2:
             return []
@@ -854,7 +1061,7 @@ class EdgeCognitiveState:
         return conflicts[:3]
 
     def memory_resolution_guidance(self, query: str, memories: list[dict] | None = None) -> str:
-        """Describe a safe clarification/update path without mutating memory."""
+        """Describe a safe clarification/update path without mutating memory. Resolution strategy."""
         conflicts = self.memory_conflicts(query, memories)
         if not conflicts:
             return ""
@@ -867,7 +1074,7 @@ class EdgeCognitiveState:
         return "<memory_conflict_resolution>\n" + action + "\n" + "\n".join("- remembered: " + c["remembered"] for c in conflicts[:2]) + "\n</memory_conflict_resolution>"
 
     def confirm_memory_update(self, statement: str) -> list[dict]:
-        """Consume pending conflicts only after an explicit confirmation."""
+        """Consume pending conflicts only after an explicit confirmation. Confirmation gating."""
         lower = (statement or "").casefold()
         confirmation = any(term in lower for term in ("yes", "correct", "confirmed", "that changed", "that is right", "thats right"))
         denial = any(term in lower for term in ("no", "not correct", "still", "keep the old", "that is wrong"))
@@ -879,7 +1086,7 @@ class EdgeCognitiveState:
         return pending
 
     def reflection_summary(self) -> str:
-        """Summarize bounded internal state for continuity and self-correction."""
+        """Summarize bounded internal state for continuity and self-correction. State summary."""
         snap = self.snapshot()
         lines = []
         if snap.get("goals"):
@@ -902,7 +1109,7 @@ class EdgeCognitiveState:
         return "<self_reflection>\n" + "\n".join("- " + line for line in lines[:5]) + "\n</self_reflection>"
 
     def adaptive_tts_rate(self) -> float:
-        """Choose a conservative speech rate from recent voice cues."""
+        """Choose a conservative speech rate from recent voice cues. Speech adaptation."""
         latest = (self.snapshot().get("perceptions") or [{}])[0]
         if isinstance(latest.get("words_per_second"), (int, float)) and latest["words_per_second"] > 4.5:
             return 1.05
@@ -913,7 +1120,7 @@ class EdgeCognitiveState:
         return 1.0
 
     def preference_guidance(self) -> str:
-        """Turn learned preferences into explicit response behavior rules."""
+        """Turn learned preferences into explicit response behavior rules. Preference distillation."""
         preferences = self.snapshot().get("preferences", {})
         if not preferences:
             return "<preference_guidance>\nNo stable interaction preferences yet.\n</preference_guidance>"
@@ -931,7 +1138,7 @@ class EdgeCognitiveState:
         return "<preference_guidance>\n" + "\n".join("- " + rule for rule in rules) + "\n</preference_guidance>"
 
     def adaptive_response_guidance(self) -> str:
-        """Render bounded behavior guidance from current affect and prosody."""
+        """Render bounded behavior guidance from current affect and prosody. Behavior guidance."""
         snap = self.snapshot()
         latest = (snap.get("perceptions") or [{}])[0]
         rules = []
@@ -953,7 +1160,7 @@ class EdgeCognitiveState:
         return "<adaptive_response_guidance>\n" + "\n".join("- " + rule for rule in rules[:4]) + "\n</adaptive_response_guidance>"
 
     def review_response(self, query: str, response: str) -> dict:
-        """Audit a completed draft for bounded metacognitive warning signs."""
+        """Audit a completed draft for bounded metacognitive warning signs. Response review."""
         q = (query or "").casefold()
         text = " ".join((response or "").split())
         snap = self.snapshot()
@@ -968,7 +1175,6 @@ class EdgeCognitiveState:
             flags.append("draft may not answer the user question")
         if snap.get("contradictions"):
             flags.append("recent user statements conflict; clarification may be needed")
-        # Light self-consistency: only recent Aiko lines, not SOUL.md.
         self_flag = self._self_consistency_flag(text)
         if self_flag:
             flags.append(self_flag)
@@ -988,7 +1194,7 @@ class EdgeCognitiveState:
         return review
 
     def _self_consistency_flag(self, response: str) -> str:
-        """Flag possible self-contradiction vs the last 1–2 Aiko replies only."""
+        """Flag possible self-contradiction vs the last 1–2 Aiko replies only. Self-consistency check."""
         draft_tokens = _tokens(response)
         if len(draft_tokens) < 4:
             return ""
@@ -1006,7 +1212,7 @@ class EdgeCognitiveState:
         return ""
 
     def grounded_context(self, now=None, idle_seconds: float = 0.0, resting: bool = False, scheduled_jobs: list[dict] | None = None, project_signals: list[str] | None = None) -> str:
-        """Render bounded real-world signals, including known scheduled work."""
+        """Render bounded real-world signals, including known scheduled work. Situational context."""
         if now is None:
             from datetime import datetime
             now = datetime.now().astimezone()
@@ -1056,7 +1262,7 @@ class EdgeCognitiveState:
         return "\n".join(lines)
 
     def situation_context(self, query: str = "", memories: list[dict] | None = None, knowledge: str = "") -> str:
-        """Build a bounded situation model from already-retrieved context."""
+        """Build a bounded situation model from already-retrieved context. Situation model."""
         snap = self.snapshot()
         facts = []
         entities = []
@@ -1137,7 +1343,7 @@ class EdgeCognitiveState:
         return block
 
     def metacognitive_context(self, query: str = "", memories: list[dict] | None = None) -> str:
-        """Return a compact pre-response confidence and clarification check."""
+        """Return a compact pre-response confidence and clarification check. Metacognitive review."""
         snap = self.snapshot()
         rows = memories or []
         evidence = [str(r.get("memory") or r.get("text") or r.get("trace") or "").strip() for r in rows[:5]]
@@ -1181,6 +1387,7 @@ class EdgeCognitiveState:
         return block
 
     def context(self, query: str = "") -> str:
+        """Render bounded recent state for injection into active cognition. Context rendering."""
         if not EDGE_COGNITION_ENABLED:
             return ""
         query_tokens = _tokens(query)
@@ -1221,6 +1428,7 @@ _states_lock = threading.Lock()
 
 
 def for_identity(identity: str) -> EdgeCognitiveState:
+    """Retrieve or create bounded state for an identity. State factory."""
     with _states_lock:
         key = identity or "default"
         state = _states.pop(key, None) or EdgeCognitiveState(key)
