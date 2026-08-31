@@ -49,6 +49,11 @@ def is_time_sensitive(user_input: str) -> bool:
 
 
 def capability_from_outcomes(outcomes: list[dict], domain: str = "") -> dict:
+    """Synthesize recent tool outcomes into a coarse domain confidence.
+    
+    dormant analysis: recent tool success/failure patterns.
+    Returns capability profile with success_rate, confidence tier, and avoid flag.
+    """
     domain = (domain or "").strip().lower()
     rows = list(outcomes or [])
     if domain:
@@ -114,14 +119,26 @@ def should_attempt(
     contradictions: list[str] | None = None,
     response_reviews: list[dict] | None = None,
     load: float = 0.0,
+    trend_data: dict | None = None,
+    intent_confidence: float = 0.0,
+    intent_success_prob: float = 0.5,
     enabled: bool = True,
 ) -> tuple[bool, str, str]:
     """Return (ok, reason, action) with action in proceed|degrade_chat|defer|clarify.
 
     The gate combines the cheap readiness signal (energy/load) with bounded
-    reliability/safety signals that are meaningful for the current prompt:
-    uncertainty, recent tool outcomes, contradictions, time sensitivity,
-    answer-completeness review flags, and self-consistency review flags.
+    reliability/safety signals: uncertainty, recent tool outcomes, contradictions,
+    time sensitivity, answer-completeness review flags, self-consistency review
+    flags, trend analysis, and optional intent classification confidence.
+    
+    Trend data:
+      - energy_trend: 'rising'|'falling'|'steady'|'unknown'
+      - capability_trend: 'improving'|'degrading'|'stable'|'unknown'
+      - uncertainty_trend: 'rising'|'falling'|'steady'|'unknown'
+    
+    Intent confidence (from XGBoost, if available):
+      - intent_confidence ∈ [0, 1]: how certain the model is
+      - intent_success_prob ∈ [0, 1]: predicted success rate
     """
     if not enabled:
         return True, "attempt gate disabled", "proceed"
@@ -137,6 +154,25 @@ def should_attempt(
     soft = mode_norm in _SOFT_MODES
     energy_v = max(0.0, min(1.0, float(energy or 0.0)))
     load_v = max(0.0, min(1.0, float(load or 0.0)))
+    
+    # Option 1: Trend risk check (engaged first, before capability check)
+    trend = trend_data or {}
+    risk_signals = sum([
+        trend.get("energy_trend") == "falling",
+        trend.get("capability_trend") == "degrading",
+        trend.get("uncertainty_trend") == "rising",
+    ])
+    if soft and risk_signals >= 2 and energy_v < 0.45:
+        return False, "multiple degrading trends detected; prefer lighter path", "degrade_chat"
+    
+    # Option 2: Intent classifier check (XGBoost, if available and trained)
+    # Confidence > 0 means model was available and made a prediction.
+    intent_conf = max(0.0, min(1.0, float(intent_confidence or 0.0)))
+    intent_prob = max(0.0, min(1.0, float(intent_success_prob or 0.5)))
+    if soft and intent_conf > 0.65 and intent_prob < 0.35:
+        return False, f"intent classifier: low success probability ({intent_prob:.1%})", "clarify"
+    
+    # Existing checks follow (unchanged)
     if mode_norm == "agentic":
         text_tokens = _tokens(text)
         scoped_outcomes = [
