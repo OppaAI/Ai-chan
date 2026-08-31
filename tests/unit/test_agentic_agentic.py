@@ -73,6 +73,7 @@ from agentic.agentic import (
     _research_call_count,
     _verify_final_answer,
     _looks_like_approval_reply,
+    _stream_agent_message,
 )
 from agentic import graph_engine as schema
 from agentic.toolkit.plan import save_note, create_checklist, make_plan
@@ -542,6 +543,26 @@ class TestRunAgenticChatSmoke:
                         with patch("agentic.agentic.tool_schemas", return_value=[]):
                             # ReAct loop would run but we can't fully test without more mocks
                             pass
+
+
+@pytest.mark.parametrize("confidence", [int("9" * 400), float("nan")], ids=["overflow", "nan"])
+def test_invalid_needle_confidence_falls_back_to_openai(monkeypatch, confidence):
+    monkeypatch.setattr("agentic.agentic.AGENT_REACT_BACKEND", "needle")
+    needle_response = MagicMock()
+    needle_response.read.return_value = json.dumps({
+        "success": True,
+        "confidence": confidence,
+        "function_calls": [],
+    }).encode("utf-8")
+    needle_response.__enter__.return_value = needle_response
+
+    owner = MockOwner()
+    with patch("agentic.needle.urlopen", return_value=needle_response):
+        message, usage = _stream_agent_message(owner, [{"role": "user", "content": "save this"}], [], None)
+
+    assert owner._client.call_count == 1
+    assert message.content is None
+    assert usage is None
 
 
 class TestSaveNoteContentTruncation:

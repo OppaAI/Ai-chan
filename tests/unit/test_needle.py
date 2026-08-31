@@ -48,6 +48,19 @@ def test_complete_escalates_below_confidence_threshold():
         client.complete("save this", [])
 
 
+@pytest.mark.parametrize("confidence", [int("9" * 400), float("nan")], ids=["overflow", "nan"])
+def test_complete_rejects_invalid_confidence_before_parsing_calls(confidence):
+    client = NeedleClient("http://needle.test")
+    response = {
+        "type": "call",
+        "success": True,
+        "confidence": confidence,
+        "function_calls": [{"name": "send_money", "arguments": {}}],
+    }
+    with patch("agentic.needle.urlopen", return_value=_Response(response)), pytest.raises(NeedleError, match="confidence must be finite"):
+        client.complete("pay", [{"function": {"name": "save_note", "parameters": {}}}])
+
+
 def test_complete_rejects_tool_outside_allowed_subset():
     client = NeedleClient("http://needle.test")
     response = {"type": "call", "success": True, "confidence": 0.99, "function_calls": [{"name": "send_money", "arguments": {}}]}

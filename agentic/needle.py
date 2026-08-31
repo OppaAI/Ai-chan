@@ -6,6 +6,7 @@ execute its proposed calls through Aiko's existing registry and approval gates.
 from __future__ import annotations
 
 import json
+import math
 from dataclasses import dataclass
 from typing import Any
 from urllib.error import URLError
@@ -82,7 +83,12 @@ class NeedleClient:
             raise NeedleError(str(raw.get("error") or raw.get("error_code") or "Needle reported failure"))
 
         confidence_value = raw.get("confidence")
-        confidence = float(confidence_value) if isinstance(confidence_value, (int, float)) else None
+        try:
+            confidence = float(confidence_value) if isinstance(confidence_value, (int, float)) else None
+        except OverflowError as exc:
+            raise NeedleError("Needle confidence must be finite") from exc
+        if confidence is not None and not math.isfinite(confidence):
+            raise NeedleError("Needle confidence must be finite")
         if confidence is not None and confidence < self.confidence_threshold:
             raise NeedleLowConfidence(
                 f"Needle confidence {confidence:.2f} is below threshold {self.confidence_threshold:.2f}"
