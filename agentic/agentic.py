@@ -677,7 +677,12 @@ class TaskState:
             from cognition.attention import for_identity
             from system.userspace import current_user_id
             state = for_identity(current_user_id())
-            state.record_tool_result(result.tool, result.ok, result.error_type, result.content)
+            state.record_tool_outcome(
+                result.tool,
+                ok=result.ok,
+                detail=result.content,
+                error_type=result.error_type or "",
+            )
             state.persist()
         except Exception:
             pass

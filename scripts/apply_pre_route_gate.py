@@ -78,7 +78,7 @@ def main() -> int:
     old_agentic_start = '''    def agentic_chat(self, user_input: str, token_callback=None, mem_kb_future=None, query_vec: np.ndarray | None = None) -> str:
         """Delegate task-mode execution to agentic.agentic.
 
-        Runs a bounded self-assessment gate first (attention.should_attempt).
+        Runs a bounded self-assessment gate first (edge_state.should_attempt).
         Critical requests always proceed; discretionary work may degrade to
         chat, defer, or ask for clarification instead of starting the tool loop.
         """
@@ -99,7 +99,7 @@ def main() -> int:
         try:
             from cognition.attention import for_identity
             state = for_identity(current_user_id())
-            kind = action if action in {"defer", "clarify"} else "stance"
+            kind = action if action in {"defer", "clarify", "degrade_chat"} else "other"
             state.record_self_decision(kind, reason)
             state.persist()
         except Exception:
@@ -161,7 +161,7 @@ def main() -> int:
 
     old_gate = '''            # Self-assessment before committing to the agentic tool loop.
             try:
-                from cognition.attention import for_identity
+                from cognition.edge_state import for_identity
                 state = for_identity(user_id)
                 ok, reason, action = state.should_attempt(user_input, mode="agentic")
                 if not ok:

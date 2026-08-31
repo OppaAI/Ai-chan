@@ -1176,7 +1176,7 @@ class AikoThink:
         try:
             from cognition.attention import for_identity
             state = for_identity(current_user_id())
-            kind = action if action in {"defer", "clarify"} else "stance"
+            kind = action if action in {"defer", "clarify", "degrade_chat"} else "other"
             state.record_self_decision(kind, reason)
             state.persist()
         except Exception:

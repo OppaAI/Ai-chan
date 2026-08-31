@@ -427,6 +427,30 @@ class TestTaskState:
         assert state.evidence[0] == "tool1: output"
         assert state.failures[0].tool == "tool2"
 
+    @pytest.mark.parametrize(
+        "error_type",
+        [
+            "schema_validation_failed",
+            "research_limit_reached",
+            "invalid_json",
+            "repeated_tool_call",
+        ],
+    )
+    def test_records_failed_tool_outcomes_for_attempt_gate(self, monkeypatch, error_type):
+        cognitive_state = MagicMock()
+        monkeypatch.setattr("cognition.attention.for_identity", lambda _identity: cognitive_state)
+
+        state = TaskState("test goal")
+        state.record(ToolResult(False, "tool1", {}, "failure detail", error_type=error_type))
+
+        cognitive_state.record_tool_outcome.assert_called_once_with(
+            "tool1",
+            ok=False,
+            detail="failure detail",
+            error_type=error_type,
+        )
+        cognitive_state.persist.assert_called_once_with()
+
     def test_last_tool_result(self):
         state = TaskState("goal")
         state.record(ToolResult(True, "a", {}, "1"))

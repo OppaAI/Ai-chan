@@ -44,6 +44,7 @@ EDGE_COGNITION_MAX_CHARS = max(240, env_int("EDGE_COGNITION_MAX_CHARS", 1200))
 EDGE_COGNITION_MAX_OPEN_LOOPS = max(1, env_int("EDGE_COGNITION_MAX_OPEN_LOOPS", 3))
 EDGE_COGNITION_MAX_GOALS = max(1, env_int("EDGE_COGNITION_MAX_GOALS", 5))
 EDGE_COGNITION_MAX_IDENTITIES = max(1, env_int("EDGE_COGNITION_MAX_IDENTITIES", 16))
+EDGE_COGNITION_MAX_LESSON_EVIDENCE = 64
 
 _CRITICAL_TASK_RE = re.compile(
     r"\b("
@@ -442,7 +443,36 @@ class EdgeCognitiveState:
     def clear(self) -> None:
         """Wipe all dormant state. Engram erasure (rare; identity reset only)."""
         with self._lock:
-            self._events.clear(); self._open_loops.clear(); self._goals.clear(); self._lessons.clear(); self._tool_outcomes.clear(); self._perceptions.clear(); self._activity = ""; self._response_reviews.clear(); self._contradictions.clear(); self._durable_lessons.clear(); self._lesson_counts.clear(); self._self_decisions.clear(); self._self_preference_counts.clear(); self._self_preferences.clear(); self._self_notes.clear(); self._turn_latencies.clear(); self._affect = 0.0; self._energy = 0.5; self._uncertainty = 0.0; self._attention = ""
+            for collection in (
+                self._events, self._open_loops, self._goals, self._lessons,
+                self._tool_outcomes, self._perceptions, self._response_reviews,
+                self._contradictions, self._durable_lessons, self._lesson_counts,
+                self._preferences, self._preference_counts,
+                self._identity_questions, self._intuitions,
+                self._pending_memory_conflicts, self._self_decisions,
+                self._self_preference_counts, self._self_preferences,
+                self._self_notes, self._turn_latencies,
+            ):
+                collection.clear()
+            self._activity = ""
+            self._affect = 0.0
+            self._energy = 0.5
+            self._uncertainty = 0.0
+            self._attention = ""
+            self._persistent_loaded = True
+        if not self._identity or self._identity == "default":
+            return
+        conn = None
+        try:
+            from cognition.memory.vecstore import connect_sqlite_db
+            conn = connect_sqlite_db("memory/memory.db", user_id=self._identity)
+            conn.execute("DELETE FROM cognitive_state WHERE user_id = ?", (self._identity,))
+            conn.commit()
+        except Exception:
+            return
+        finally:
+            if conn is not None:
+                conn.close()
 
     @staticmethod
     def _energy_signal(text: str) -> float:
@@ -631,6 +661,8 @@ class EdgeCognitiveState:
         if not signature:
             return
         count = self._lesson_counts.get(signature, 0) + 1
+        if signature not in self._lesson_counts and len(self._lesson_counts) >= EDGE_COGNITION_MAX_LESSON_EVIDENCE:
+            self._lesson_counts.pop(next(iter(self._lesson_counts)))
         self._lesson_counts[signature] = min(count, 3)
         if count >= 2:
             direction = "Prefer this approach: " if prefix.startswith("The previous approach appeared useful:") else "Avoid repeating: "
@@ -1084,7 +1116,8 @@ class EdgeCognitiveState:
                 self._tool_outcomes = deque([item for item in data.get("tool_outcomes", []) if isinstance(item, dict)][:6], maxlen=6)
                 self._contradictions = deque(data.get("contradictions", [])[:4], maxlen=4)
                 self._durable_lessons = deque(data.get("durable_lessons", [])[:5], maxlen=5)
-                self._lesson_counts = {str(k): min(3, int(v)) for k, v in (data.get("lesson_evidence") or {}).items() if str(k) and str(v).isdigit()}
+                lesson_counts = {str(k): min(3, int(v)) for k, v in (data.get("lesson_evidence") or {}).items() if str(k) and str(v).isdigit()}
+                self._lesson_counts = dict(list(lesson_counts.items())[-EDGE_COGNITION_MAX_LESSON_EVIDENCE:])
                 self._preferences = {str(k): str(v) for k, v in (data.get("preferences") or {}).items()}
                 self._identity_questions = deque(data.get("identity_questions", [])[:3], maxlen=3)
                 self._intuitions = deque(data.get("intuitions", [])[:4], maxlen=4)
