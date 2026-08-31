@@ -112,7 +112,7 @@ def should_attempt(
 ) -> tuple[bool, str, str]:
     """Return (ok, reason, action) with action in proceed|degrade_chat|defer|clarify.
 
-    The gate is intentionally not an "energy" veto. It only checks bounded
+    The gate combines the cheap readiness signal (energy/load) with bounded
     reliability/safety signals that are meaningful for the current prompt:
     uncertainty, recent tool outcomes, contradictions, time sensitivity,
     answer-completeness review flags, and self-consistency review flags.
@@ -124,11 +124,11 @@ def should_attempt(
         return True, "empty input", "proceed"
     if is_critical_task(text):
         return True, "critical or time-sensitive request", "proceed"
-    # Kept for call-site compatibility; energy/load are not decision factors.
-    _ = (energy, load)
 
     mode_norm = (mode or "").strip().lower()
     soft = mode_norm in _SOFT_MODES
+    energy_v = max(0.0, min(1.0, float(energy or 0.0)))
+    load_v = max(0.0, min(1.0, float(load or 0.0)))
     if mode_norm == "agentic":
         text_tokens = _tokens(text)
         scoped_outcomes = [
@@ -155,6 +155,12 @@ def should_attempt(
     latest_flags = [str(f) for f in latest_review.get("flags", [])] if isinstance(latest_review, dict) else []
     incomplete_flag = any("may not answer" in flag or "completeness" in flag for flag in latest_flags)
     self_consistency_flag = any("self" in flag and ("conflict" in flag or "consistency" in flag) for flag in latest_flags)
+
+    if soft and load_v >= 0.75 and energy_v < 0.45:
+        return False, "running hot and energy low; discretionary work can wait", "defer"
+
+    if soft and energy_v < 0.28:
+        return False, "energy low; discretionary work can wait", "defer"
 
     if soft and uncertainty > 0.62:
         if len(text) < 80 and ("?" in text or len(_tokens(text)) <= 6):

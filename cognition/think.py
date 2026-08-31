@@ -650,6 +650,7 @@ class AikoThink:
                 inputs={"user_input": user_input, "mode": "route", "user_id": user_id},
                 outputs={"ok": ok, "reason": reason, "action": action},
                 factors=[
+                    f"energy={snap.get('energy')}",
                     f"uncertainty={snap.get('uncertainty')}",
                     f"recent_tool_failures={sum(1 for o in snap.get('tool_outcomes', []) if not o.get('ok'))}",
                     f"contradictions={len(snap.get('contradictions', []))}",
@@ -1206,10 +1207,9 @@ class AikoThink:
         _agentic_t0 = time.monotonic()
         try:
             # Second self-assessment before committing to the agentic tool loop.
-            # This is not an energy veto; edge_state.should_attempt checks
-            # reliability signals such as uncertainty, tool outcomes,
-            # contradictions, time sensitivity, answer completeness, and
-            # self-consistency.
+            # This combines energy/load readiness with reliability signals:
+            # uncertainty, tool outcomes, contradictions, time sensitivity,
+            # answer completeness, and self-consistency.
             try:
                 from cognition.memory.edge_state import for_identity
                 state = for_identity(user_id)

@@ -164,7 +164,7 @@ def test_tool_outcomes_are_bounded_and_visible():
     assert outcomes[0]["error_type"] == "OSError"
 
 
-def test_should_attempt_uses_contradictions_without_energy_veto():
+def test_should_attempt_uses_contradictions_with_energy_available():
     state = EdgeCognitiveState()
     state.record("I like coffee", "")
     state.record("I do not like coffee", "")
@@ -172,6 +172,16 @@ def test_should_attempt_uses_contradictions_without_energy_veto():
     assert not ok
     assert action == "clarify"
     assert "contradictions" in reason
+
+
+def test_should_attempt_defers_low_energy_discretionary_work():
+    state = EdgeCognitiveState()
+    with state._lock:
+        state._energy = 0.2
+    ok, reason, action = state.should_attempt("Please write a draft plan", mode="route")
+    assert not ok
+    assert action == "defer"
+    assert "energy low" in reason
 
 
 def test_should_attempt_uses_response_review_flags_for_short_followup():
