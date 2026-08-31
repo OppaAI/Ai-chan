@@ -1201,24 +1201,26 @@ class AikoThink:
             self._active_user_ids.add(user_id)
         _agentic_t0 = time.monotonic()
         try:
-            # Self-assessment before committing to the agentic tool loop
-            # (covers scheduled/direct agentic entry; normal turns already gated in route).
-            try:
-                from cognition.memory.edge_state import for_identity
-                state = for_identity(user_id)
-                ok, reason, action = state.should_attempt(user_input, mode="agentic")
-                if not ok:
-                    log.info("[agentic_chat] should_attempt action=%s reason=%s", action, reason)
-                    return self._soft_gate_reply(
-                        user_input,
-                        action,
-                        reason,
-                        token_callback=token_callback,
-                        mem_kb_future=mem_kb_future,
-                        query_vec=query_vec,
-                    )
-            except Exception as exc:
-                log.debug("[agentic_chat] should_attempt skipped: %s", exc)
+            # Self-assessment before committing to the agentic tool loop.
+            # route() already ran the user-facing energy/uncertainty gate for
+            # normal turns; repeat it only for direct/scheduled agentic entry.
+            if not _from_route:
+                try:
+                    from cognition.memory.edge_state import for_identity
+                    state = for_identity(user_id)
+                    ok, reason, action = state.should_attempt(user_input, mode="agentic")
+                    if not ok:
+                        log.info("[agentic_chat] should_attempt action=%s reason=%s", action, reason)
+                        return self._soft_gate_reply(
+                            user_input,
+                            action,
+                            reason,
+                            token_callback=token_callback,
+                            mem_kb_future=mem_kb_future,
+                            query_vec=query_vec,
+                        )
+                except Exception as exc:
+                    log.debug("[agentic_chat] should_attempt skipped: %s", exc)
 
             memorize = self._get_memorize()
             embedder = memorize._mem._embedder if memorize is not None else None
