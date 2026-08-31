@@ -6,6 +6,11 @@ salient recent turns, open questions/tasks, and a coarse affect cue. It uses no 
 This is deliberately one bounded module rather than a collection of tiny
 "emotion", "goals", and "working memory" stores. It is the fast internal
 state layer between the current turn and long-term memory.
+
+It monitors only compact conversational signals: recent turns, open loops,
+goals, affect/energy/uncertainty, contradictions, tool outcomes, response
+reviews, preferences, and self-consistency cues. Long-term storage remains in
+cognition.memory; this module only snapshots and gates current behavior.
 """
 from __future__ import annotations
 
@@ -17,7 +22,7 @@ import time
 from collections import OrderedDict, deque
 from dataclasses import dataclass
 
-from .env import env_bool, env_flag, env_int
+from cognition.memory.env import env_bool, env_flag, env_int
 try:
     from system import brain_trace as _brain_trace
 except Exception:
@@ -546,11 +551,11 @@ class EdgeCognitiveState:
 
     def capability_for(self, domain: str = "") -> dict:
         """Synthesize recent tool outcomes into a coarse domain confidence."""
-        from cognition.memory.attempt_gate import capability_from_outcomes
+        from cognition.attempt_gate import capability_from_outcomes
         return capability_from_outcomes(list(self.snapshot().get("tool_outcomes") or []), domain)
 
     def is_critical_task(self, user_input: str) -> bool:
-        from cognition.memory.attempt_gate import is_critical_task as _crit
+        from cognition.attempt_gate import is_critical_task as _crit
         return _crit(user_input)
 
     def record_turn_latency(self, seconds: float) -> None:
@@ -586,7 +591,7 @@ class EdgeCognitiveState:
         Returns (ok, reason, action): proceed | degrade_chat | defer | clarify.
         Critical tasks always proceed. Toggle with EDGE_ATTEMPT_GATE.
         """
-        from cognition.memory.attempt_gate import should_attempt as _should
+        from cognition.attempt_gate import should_attempt as _should
         if not EDGE_COGNITION_ENABLED:
             return True, "edge cognition disabled", "proceed"
         snap = self.snapshot()
@@ -596,6 +601,8 @@ class EdgeCognitiveState:
             energy=float(snap.get("energy") or 0.5),
             uncertainty=float(snap.get("uncertainty") or 0.0),
             tool_outcomes=list(snap.get("tool_outcomes") or []),
+            contradictions=list(snap.get("contradictions") or []),
+            response_reviews=list(snap.get("response_reviews") or []),
             load=self.load_signal(),
             enabled=env_flag("EDGE_ATTEMPT_GATE", "1"),
         )

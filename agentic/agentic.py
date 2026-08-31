@@ -547,8 +547,49 @@ def _persist_pending_approval(ctx: AgentContext, tool: str, args: dict[str, Any]
     _pending_approval_path(ctx).write_text(json.dumps(payload, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
 
 
+_APPROVAL_REJECT_RE = re.compile(
+    r"\b(?:no|nope|nah|deny|decline|reject|cancel|stop|not\s+now|later|wait|hold\s+off)\b",
+    re.I,
+)
+_APPROVAL_ACCEPT_RE = re.compile(
+    r"\b(?:y|yes|yeah|yep|sure|ok(?:ay)?|confirm|approve|approved|resume|continue|go\s+ahead|do\s+it|proceed)\b",
+    re.I,
+)
+
+
+def _looks_like_approval_reply(user_input: str) -> bool:
+    """Conservative approval parser for pending-tool resumes.
+
+    This runs before normal routing, so it must accept common short approvals
+    ("yeah", "sure") while refusing mixed or delayed replies such as
+    "yes, but not now" instead of trying to infer user intent semantically.
+    """
+    text = (user_input or "").strip()
+    if not text or _APPROVAL_REJECT_RE.search(text):
+        return False
+    if not _APPROVAL_ACCEPT_RE.search(text):
+        return False
+    # Avoid hijacking ordinary chat that happens to contain an approval word.
+    return bool(
+        re.fullmatch(
+            r"[\s.!?,;:-]*(?:y|yes|yeah|yep|sure|ok(?:ay)?|confirm|approve|approved|resume|continue|go\s+ahead|do\s+it|proceed)"
+            r"(?:\s+(?:please|pls|now))?[\s.!?,;:-]*(?:\b(?:run-[0-9]+|r\d[0-9A-Za-z_-]*)\b)?[\s.!?,;:-]*",
+            text,
+            re.I,
+        )
+        or bool(
+            re.fullmatch(
+                r"[\s.!?,;:-]*(?:(?:y|yes|yeah|yep|sure|ok(?:ay)?|confirm|approve|approved|resume|continue|go\s+ahead|do\s+it|proceed)[\s.!?,;:-]+)?"
+                r"(?:approve|confirm|resume|continue)\s+(?:run-[0-9]+|r\d[0-9A-Za-z_-]*)[\s.!?,;:-]*",
+                text,
+                re.I,
+            )
+        )
+    )
+
+
 def _maybe_resume_approval(owner, user_input: str, token_callback=None) -> str | None:
-    if not re.search(r"\b(yes|confirm|approve|approved|resume|continue)\b", user_input or "", re.I):
+    if not _looks_like_approval_reply(user_input):
         return None
     base_ctx = _agent_context(owner)
     match = re.search(r"\b(run-[0-9]+|r\d[0-9A-Za-z_-]*)\b", user_input or "")
@@ -625,7 +666,7 @@ class TaskState:
     def record(self, result: ToolResult) -> None:
         """Record a tool execution result and update agent state."""
         try:
-            from cognition.memory.edge_state import for_identity
+            from cognition.edge_state import for_identity
             from system.userspace import current_user_id
             state = for_identity(current_user_id())
             state.record_tool_result(result.tool, result.ok, result.error_type, result.content)
@@ -967,7 +1008,7 @@ def dispatch_tool(name: str, args: dict, owner=None) -> str:
         detail = str(exc)[:240]
         error_type = type(exc).__name__
     try:
-        from cognition.memory.edge_state import for_identity
+        from cognition.edge_state import for_identity
         from system.userspace import current_user_id
         for_identity(current_user_id()).record_tool_outcome(name, ok=ok, detail=detail, error_type=error_type)
     except Exception:
@@ -1011,7 +1052,7 @@ _PREFERENCE_READ_ONLY_TOOLS = frozenset({
 
 def _preference_requires_approval(name: str) -> bool:
     try:
-        from cognition.memory.edge_state import for_identity
+        from cognition.edge_state import for_identity
         preferences = for_identity(current_user_id()).snapshot().get("preferences", {})
         return preferences.get("action_confirmation") == "ask_before_acting" and name not in _PREFERENCE_READ_ONLY_TOOLS
     except Exception:

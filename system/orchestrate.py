@@ -1279,7 +1279,7 @@ def run_session(ui, args) -> None:
                 voice_info = result[1] if isinstance(result, tuple) and len(result) > 1 and isinstance(result[1], dict) else None
                 if voice_info:
                     try:
-                        from cognition.memory.edge_state import for_identity
+                        from cognition.edge_state import for_identity
                         from system.userspace import current_user_id
                         started = voice_info.get("listen_started_at")
                         stopped = voice_info.get("recording_stopped_at")

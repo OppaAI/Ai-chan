@@ -1,4 +1,4 @@
-from cognition.memory.edge_state import EdgeCognitiveState
+from cognition.edge_state import EdgeCognitiveState
 
 
 def test_edge_state_is_bounded_and_retrieves_current_focus():
@@ -162,6 +162,43 @@ def test_tool_outcomes_are_bounded_and_visible():
     assert outcomes[0]["tool"] == "write_report"
     assert outcomes[0]["ok"] is False
     assert outcomes[0]["error_type"] == "OSError"
+
+
+def test_should_attempt_uses_contradictions_with_energy_available():
+    state = EdgeCognitiveState()
+    state.record("I like coffee", "")
+    state.record("I do not like coffee", "")
+    ok, reason, action = state.should_attempt("Please update my coffee preference", mode="agentic")
+    assert not ok
+    assert action == "clarify"
+    assert "contradictions" in reason
+
+
+def test_should_attempt_defers_low_energy_discretionary_work():
+    state = EdgeCognitiveState()
+    with state._lock:
+        state._energy = 0.2
+    ok, reason, action = state.should_attempt("Please write a draft plan", mode="route")
+    assert not ok
+    assert action == "defer"
+    assert "energy low" in reason
+
+
+def test_should_attempt_uses_response_review_flags_for_short_followup():
+    state = EdgeCognitiveState()
+    state.review_response("What failed?", "No.")
+    ok, reason, action = state.should_attempt("fix?", mode="route")
+    assert not ok
+    assert action == "clarify"
+    assert "answer review" in reason
+
+
+def test_should_attempt_proceeds_for_time_sensitive_prompt():
+    state = EdgeCognitiveState()
+    ok, reason, action = state.should_attempt("What is the latest status today?", mode="route")
+    assert ok
+    assert action == "proceed"
+    assert "time-sensitive" in reason
 
 
 def test_repeated_tool_failure_becomes_a_durable_lesson():

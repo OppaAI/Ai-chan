@@ -72,6 +72,7 @@ from agentic.agentic import (
     AGENT_RESEARCH_MAX_CALLS,
     _research_call_count,
     _verify_final_answer,
+    _looks_like_approval_reply,
 )
 from agentic import graph_engine as schema
 from agentic.toolkit.plan import save_note, create_checklist, make_plan
@@ -635,6 +636,22 @@ def test_resume_approval_runs_pending_tool(monkeypatch, tmp_path):
     resumed = _maybe_resume_approval(owner, "yes approve r2")
     assert resumed is not None
     assert calls == [{"draft_dir": "d"}]
+
+
+@pytest.mark.parametrize(
+    "text",
+    ["yes", "yeah", "sure", "ok", "go ahead", "do it", "approve r2", "yes approve r2", "continue run-123"],
+)
+def test_approval_parser_accepts_common_short_replies(text):
+    assert _looks_like_approval_reply(text)
+
+
+@pytest.mark.parametrize(
+    "text",
+    ["yes, but not now", "sure later", "no", "continue the story", "are you sure?", "I approve of this idea", "I don't approve r2", "I approve r2 of this idea"],
+)
+def test_approval_parser_rejects_mixed_or_general_chat(text):
+    assert not _looks_like_approval_reply(text)
 
 
 def test_skill_proposal_written_for_multistep_run(monkeypatch, tmp_path):

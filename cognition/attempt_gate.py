@@ -3,6 +3,12 @@
 Used by EdgeCognitiveState.should_attempt and AikoThink.route / agentic_chat.
 Keeps thresholds conservative: critical work always proceeds.
 
+This module is intentionally outside cognition.memory because it does not read
+or write long-term memory.  It is a pure decision helper over the bounded
+per-user state snapshot: energy/load readiness, uncertainty, recent tool
+outcomes, contradictions, time sensitivity, answer-completeness review flags,
+and self-consistency review flags.
+
 mode:
   - agentic — gate before the tool loop (legacy path; also used for direct agentic entry)
   - route   — gate *before* quaternary semantic routing so localchat/webchat
@@ -22,6 +28,10 @@ _CRITICAL_TASK_RE = re.compile(
     re.I,
 )
 _WORD_RE = re.compile(r"[a-z0-9_]{3,}")
+_TIME_SENSITIVE_RE = re.compile(
+    r"\b(?:latest|today|tonight|tomorrow|yesterday|now|current|recent|live|breaking|right now|asap|deadline|due)\b",
+    re.I,
+)
 # Modes where soft opt-out (defer/clarify/degrade) is allowed.
 _SOFT_MODES = frozenset({"agentic", "route"})
 
@@ -32,6 +42,10 @@ def _tokens(text: str) -> set[str]:
 
 def is_critical_task(user_input: str) -> bool:
     return bool(_CRITICAL_TASK_RE.search(user_input or ""))
+
+
+def is_time_sensitive(user_input: str) -> bool:
+    return bool(_TIME_SENSITIVE_RE.search(user_input or ""))
 
 
 def capability_from_outcomes(outcomes: list[dict], domain: str = "") -> dict:
@@ -97,12 +111,17 @@ def should_attempt(
     energy: float = 0.5,
     uncertainty: float = 0.0,
     tool_outcomes: list[dict] | None = None,
+    contradictions: list[str] | None = None,
+    response_reviews: list[dict] | None = None,
     load: float = 0.0,
     enabled: bool = True,
 ) -> tuple[bool, str, str]:
     """Return (ok, reason, action) with action in proceed|degrade_chat|defer|clarify.
 
-    load — coarse 0..1 "running hot" from recent turn latency (optional).
+    The gate combines the cheap readiness signal (energy/load) with bounded
+    reliability/safety signals that are meaningful for the current prompt:
+    uncertainty, recent tool outcomes, contradictions, time sensitivity,
+    answer-completeness review flags, and self-consistency review flags.
     """
     if not enabled:
         return True, "attempt gate disabled", "proceed"
@@ -110,12 +129,14 @@ def should_attempt(
     if not text:
         return True, "empty input", "proceed"
     if is_critical_task(text):
-        return True, "critical or time-sensitive request", "proceed"
+        return True, "critical request", "proceed"
+    if is_time_sensitive(text):
+        return True, "time-sensitive request should proceed with verification discipline", "proceed"
 
     mode_norm = (mode or "").strip().lower()
     soft = mode_norm in _SOFT_MODES
+    energy_v = max(0.0, min(1.0, float(energy or 0.0)))
     load_v = max(0.0, min(1.0, float(load or 0.0)))
-
     if mode_norm == "agentic":
         text_tokens = _tokens(text)
         scoped_outcomes = [
@@ -133,11 +154,20 @@ def should_attempt(
             "avoid": False,
         }
 
-    # Running hot + discretionary: prefer defer over heavy path.
-    if soft and load_v >= 0.75 and energy < 0.45:
-        return False, "running hot and energy soft; discretionary work can wait", "defer"
+    text_tokens = _tokens(text)
+    related_contradictions = [
+        c for c in (contradictions or [])
+        if len(text_tokens & _tokens(c)) >= 1
+    ]
+    latest_review = (response_reviews or [{}])[0] if response_reviews else {}
+    latest_flags = [str(f) for f in latest_review.get("flags", [])] if isinstance(latest_review, dict) else []
+    incomplete_flag = any("may not answer" in flag or "completeness" in flag for flag in latest_flags)
+    self_consistency_flag = any("self" in flag and ("conflict" in flag or "consistency" in flag) for flag in latest_flags)
 
-    if soft and energy < 0.28:
+    if soft and load_v >= 0.75 and energy_v < 0.45:
+        return False, "running hot and energy low; discretionary work can wait", "defer"
+
+    if soft and energy_v < 0.28:
         return False, "energy low; discretionary work can wait", "defer"
 
     if soft and uncertainty > 0.62:
@@ -145,7 +175,13 @@ def should_attempt(
             return False, "uncertainty elevated; need a clearer ask", "clarify"
         return False, "uncertainty elevated; prefer lighter chat path", "degrade_chat"
 
+    if soft and related_contradictions:
+        return False, "current prompt overlaps unresolved contradictions; clarify before acting", "clarify"
+
     if soft and cap.get("avoid") and (cap.get("samples") or 0) >= 3:
         return False, "recent tool outcomes are weak; prefer lighter path", "degrade_chat"
+
+    if soft and (incomplete_flag or self_consistency_flag) and len(text_tokens) <= 6:
+        return False, "last answer review found a likely issue; clarify the follow-up before acting", "clarify"
 
     return True, "self-assessment clear", "proceed"

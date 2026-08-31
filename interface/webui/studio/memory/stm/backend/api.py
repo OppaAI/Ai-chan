@@ -109,7 +109,7 @@ def health():
 @app.get("/api/cognition")
 def cognition():
     try:
-        from cognition.memory.edge_state import for_identity
+        from cognition.edge_state import for_identity
         from system.userspace import current_user_id
         state = for_identity(current_user_id())
         return {"ok": True, "evaluation": state.evaluation_snapshot(), "health": state.cognitive_health()}

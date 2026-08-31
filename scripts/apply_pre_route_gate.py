@@ -54,7 +54,7 @@ def main() -> int:
         # Self-assessment *before* quaternary routing so localchat/webchat
         # also get executable soft outcomes (defer / clarify / degrade_chat).
         try:
-            from cognition.memory.edge_state import for_identity
+            from cognition.edge_state import for_identity
             state = for_identity(user_id)
             ok, reason, action = state.should_attempt(user_input, mode="route")
             if not ok:
@@ -97,7 +97,7 @@ def main() -> int:
         Used by route() (pre-routing) and agentic_chat() (direct agentic entry).
         """
         try:
-            from cognition.memory.edge_state import for_identity
+            from cognition.edge_state import for_identity
             state = for_identity(current_user_id())
             kind = action if action in {"defer", "clarify"} else "stance"
             state.record_self_decision(kind, reason)
@@ -161,7 +161,7 @@ def main() -> int:
 
     old_gate = '''            # Self-assessment before committing to the agentic tool loop.
             try:
-                from cognition.memory.edge_state import for_identity
+                from cognition.edge_state import for_identity
                 state = for_identity(user_id)
                 ok, reason, action = state.should_attempt(user_input, mode="agentic")
                 if not ok:
@@ -216,7 +216,7 @@ def main() -> int:
     new_gate = '''            # Self-assessment before committing to the agentic tool loop
             # (covers scheduled/direct agentic entry; normal turns already gated in route).
             try:
-                from cognition.memory.edge_state import for_identity
+                from cognition.edge_state import for_identity
                 state = for_identity(user_id)
                 ok, reason, action = state.should_attempt(user_input, mode="agentic")
                 if not ok:
