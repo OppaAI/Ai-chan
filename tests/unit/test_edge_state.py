@@ -164,6 +164,33 @@ def test_tool_outcomes_are_bounded_and_visible():
     assert outcomes[0]["error_type"] == "OSError"
 
 
+def test_should_attempt_uses_contradictions_without_energy_veto():
+    state = EdgeCognitiveState()
+    state.record("I like coffee", "")
+    state.record("I do not like coffee", "")
+    ok, reason, action = state.should_attempt("Please update my coffee preference", mode="agentic")
+    assert not ok
+    assert action == "clarify"
+    assert "contradictions" in reason
+
+
+def test_should_attempt_uses_response_review_flags_for_short_followup():
+    state = EdgeCognitiveState()
+    state.review_response("What failed?", "No.")
+    ok, reason, action = state.should_attempt("fix?", mode="route")
+    assert not ok
+    assert action == "clarify"
+    assert "answer review" in reason
+
+
+def test_should_attempt_proceeds_for_time_sensitive_prompt():
+    state = EdgeCognitiveState()
+    ok, reason, action = state.should_attempt("What is the latest status today?", mode="route")
+    assert ok
+    assert action == "proceed"
+    assert "time-sensitive" in reason
+
+
 def test_repeated_tool_failure_becomes_a_durable_lesson():
     state = EdgeCognitiveState()
     state.record_tool_outcome("calendar", ok=False, detail="unavailable", error_type="TimeoutError")

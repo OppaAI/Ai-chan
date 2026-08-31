@@ -643,16 +643,20 @@ class AikoThink:
             from cognition.memory.edge_state import for_identity
             state = for_identity(user_id)
             ok, reason, action = state.should_attempt(user_input, mode="route")
+            snap = state.snapshot()
             _brain_trace.record_step(
                 "edge_state.should_attempt",
                 layer="gate",
                 inputs={"user_input": user_input, "mode": "route", "user_id": user_id},
                 outputs={"ok": ok, "reason": reason, "action": action},
                 factors=[
-                    f"energy={state.snapshot().get('energy')}",
-                    f"uncertainty={state.snapshot().get('uncertainty')}",
-                    f"recent_tool_failures={sum(1 for o in state.snapshot().get('tool_outcomes', []) if not o.get('ok'))}",
-                    f"load_signal={state.load_signal():.2f}",
+                    f"uncertainty={snap.get('uncertainty')}",
+                    f"recent_tool_failures={sum(1 for o in snap.get('tool_outcomes', []) if not o.get('ok'))}",
+                    f"contradictions={len(snap.get('contradictions', []))}",
+                    f"response_review_flags={snap.get('response_reviews', [{}])[0].get('flags', []) if snap.get('response_reviews') else []}",
+                    "time_sensitivity=checked in attempt_gate",
+                    "answer_completeness=checked from latest response review",
+                    "self_consistency=checked from latest response review",
                 ],
             )
             if not ok:
@@ -1201,26 +1205,27 @@ class AikoThink:
             self._active_user_ids.add(user_id)
         _agentic_t0 = time.monotonic()
         try:
-            # Self-assessment before committing to the agentic tool loop.
-            # route() already ran the user-facing energy/uncertainty gate for
-            # normal turns; repeat it only for direct/scheduled agentic entry.
-            if not _from_route:
-                try:
-                    from cognition.memory.edge_state import for_identity
-                    state = for_identity(user_id)
-                    ok, reason, action = state.should_attempt(user_input, mode="agentic")
-                    if not ok:
-                        log.info("[agentic_chat] should_attempt action=%s reason=%s", action, reason)
-                        return self._soft_gate_reply(
-                            user_input,
-                            action,
-                            reason,
-                            token_callback=token_callback,
-                            mem_kb_future=mem_kb_future,
-                            query_vec=query_vec,
-                        )
-                except Exception as exc:
-                    log.debug("[agentic_chat] should_attempt skipped: %s", exc)
+            # Second self-assessment before committing to the agentic tool loop.
+            # This is not an energy veto; edge_state.should_attempt checks
+            # reliability signals such as uncertainty, tool outcomes,
+            # contradictions, time sensitivity, answer completeness, and
+            # self-consistency.
+            try:
+                from cognition.memory.edge_state import for_identity
+                state = for_identity(user_id)
+                ok, reason, action = state.should_attempt(user_input, mode="agentic")
+                if not ok:
+                    log.info("[agentic_chat] should_attempt action=%s reason=%s", action, reason)
+                    return self._soft_gate_reply(
+                        user_input,
+                        action,
+                        reason,
+                        token_callback=token_callback,
+                        mem_kb_future=mem_kb_future,
+                        query_vec=query_vec,
+                    )
+            except Exception as exc:
+                log.debug("[agentic_chat] should_attempt skipped: %s", exc)
 
             memorize = self._get_memorize()
             embedder = memorize._mem._embedder if memorize is not None else None

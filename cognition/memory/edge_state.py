@@ -593,9 +593,10 @@ class EdgeCognitiveState:
         return _should(
             user_input=user_input,
             mode=mode,
-            energy=float(snap.get("energy") or 0.5),
             uncertainty=float(snap.get("uncertainty") or 0.0),
             tool_outcomes=list(snap.get("tool_outcomes") or []),
+            contradictions=list(snap.get("contradictions") or []),
+            response_reviews=list(snap.get("response_reviews") or []),
             load=self.load_signal(),
             enabled=env_flag("EDGE_ATTEMPT_GATE", "1"),
         )
