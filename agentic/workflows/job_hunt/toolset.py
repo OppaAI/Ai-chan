@@ -97,6 +97,9 @@ def _is_sender_placeholder_org(org: str) -> bool:
 
 _HTML_TAG_RE = re.compile(r"<[^>]+>")
 _WS_RE = re.compile(r"\s+")
+_INLINE_WS_RE = re.compile(r"[^\S\r\n]+")
+_BLOCK_END_TAG_RE = re.compile(r"</(?:p|div|tr|td|th|li|h[1-6]|section|article|br)\s*>", re.IGNORECASE)
+_BR_TAG_RE = re.compile(r"<br\s*/?>", re.IGNORECASE)
 
 # Tags whose entire contents (including the tags themselves) should be
 # dropped outright before any text extraction — these never contain
@@ -252,6 +255,53 @@ def _has_any_keyword(text: str, keywords: list[str]) -> bool:
     if not keywords:
         return True
     return any(kw in text.casefold() for kw in keywords)
+
+
+def _matches_job_keyword(text: str, keyword: str) -> bool:
+    """Match a job keyword as a word/phrase, never as a substring.
+
+    Job configuration commonly includes short terms such as ``ai`` and ``qa``.
+    A substring match turns unrelated text such as ``training`` into an AI hit,
+    which was allowing administrative roles to consume Lane D's result cap.
+    Subject-keyword matching deliberately continues to use substring semantics
+    (for stems such as ``appl``); only job relevance uses this stricter helper.
+    """
+    word = keyword.casefold().strip()
+    if not word:
+        return False
+    return re.search(rf"(?<!\w){re.escape(word)}(?!\w)", text.casefold()) is not None
+
+
+def _matches_job_keywords(text: str, keywords: list[str]) -> bool:
+    """Return whether a posting matches one configured job keyword/phrase."""
+    return not keywords or any(_matches_job_keyword(text, keyword) for keyword in keywords)
+
+
+_NON_TECH_TITLE_RE = re.compile(
+    r"\b(?:administrative|admin(?:istration)?|executive|office|legal)\s+assistant\b|"
+    r"\b(?:receptionist|bookkeeper|cashier|barista|server|sales associate)\b",
+    re.IGNORECASE,
+)
+
+
+def _job_relevance_score(posting: dict[str, Any], keywords: list[str]) -> int:
+    """Rank IT-relevant jobs ahead of broad-keyword false positives.
+
+    Filtering remains inclusive: a role matching only a description keyword is
+    still eligible, but title matches dominate the final Lane D selection.
+    """
+    title = str(posting.get("title") or "")
+    summary = str(posting.get("summary") or posting.get("description") or "")
+    score = sum(12 for keyword in keywords if _matches_job_keyword(title, keyword))
+    score += sum(2 for keyword in keywords if _matches_job_keyword(summary, keyword))
+    if _NON_TECH_TITLE_RE.search(title):
+        score -= 20
+    return score
+
+
+def _rank_job_postings(postings: list[dict], keywords: list[str]) -> list[dict]:
+    """Stable relevance ordering applied before Lane D's global result cap."""
+    return sorted(postings, key=lambda posting: -_job_relevance_score(posting, keywords))
 
 
 def _passes_domain_filter(sender: str, domains: list[str]) -> bool:
@@ -416,6 +466,14 @@ def _html_links_to_markdown(text: str) -> str:
     return _A_HREF_RE.sub(_a_to_md, text)
 
 
+def _normalize_email_text(text: str) -> str:
+    """Normalize email text while retaining job-card line boundaries."""
+    text = text.replace("\r\n", "\n").replace("\r", "\n")
+    text = _INLINE_WS_RE.sub(" ", text)
+    text = re.sub(r" *\n *", "\n", text)
+    return re.sub(r"\n{3,}", "\n\n", text).strip()
+
+
 def _strip_html(text: str, max_chars: int | None = None, config: dict[str, Any] | None = None) -> str:
     """Best-effort markdown/plain text from HTML.
 
@@ -436,6 +494,9 @@ def _strip_html(text: str, max_chars: int | None = None, config: dict[str, Any] 
     # 2) Strip inline style attributes (double- and single-quoted).
     text = _INLINE_STYLE_ATTR_RE.sub("", text)
     text = _INLINE_STYLE_ATTR_SQ_RE.sub("", text)
+    # Preserve table/card boundaries before either converter sees the markup.
+    text = _BR_TAG_RE.sub("\n", text)
+    text = _BLOCK_END_TAG_RE.sub("\n", text)
 
     # 3) Tag-density bailout: bloated/dense markup skips markitdown.
     tag_count = len(_HTML_TAG_RE.findall(text))
@@ -449,7 +510,7 @@ def _strip_html(text: str, max_chars: int | None = None, config: dict[str, Any] 
         text = _html_links_to_markdown(text)
         plain = _HTML_TAG_RE.sub(" ", text)
         plain = html.unescape(plain)
-        plain = _WS_RE.sub(" ", plain).strip()
+        plain = _normalize_email_text(plain)
         if max_chars is None:
             max_chars = _cfg(config, "max_email_chars", "JOB_HUNT_MAX_EMAIL_CHARS", 15000, "int") if config else 15000
         return plain[:max_chars]
@@ -465,7 +526,9 @@ def _strip_html(text: str, max_chars: int | None = None, config: dict[str, Any] 
         text = _html_links_to_markdown(text)
         plain = _HTML_TAG_RE.sub(" ", text)
         plain = html.unescape(plain)
-        plain = _WS_RE.sub(" ", plain).strip()
+        plain = _normalize_email_text(plain)
+
+    plain = _normalize_email_text(plain)
 
     if max_chars is None and config is not None:
         max_chars = _cfg(config, "max_email_chars", "JOB_HUNT_MAX_EMAIL_CHARS", 15000, "int")
@@ -761,7 +824,7 @@ def fetch_today_jobs_from_rss(config: dict[str, Any] | None = None, filter_keywo
 
             if filter_date and (not posted or posted.date() < today - timedelta(days=max_days - 1)):
                 continue
-            if not _has_any_keyword(f"{title} {summary}", keywords):
+            if not _matches_job_keywords(f"{title} {summary}", keywords):
                 continue
 
             link_key, guid_key = _dedupe_key(link, guid)
@@ -914,7 +977,7 @@ def fetch_today_jobs_from_greenhouse(
                 continue
             summary = _strip_html(str(job.get("content") or ""), config=config)
             title = re.sub(r"\s+", " ", str(job.get("title") or "")).strip()
-            if not _has_any_keyword(f"{title} {summary}", keywords):
+            if not _matches_job_keywords(f"{title} {summary}", keywords):
                 continue
             link = str(job.get("absolute_url") or f"https://boards.greenhouse.io/{token}/jobs/{job.get('id', '')}").strip()
             guid = f"greenhouse:{token}:{job.get('id') or link}"
@@ -975,7 +1038,12 @@ def _job_board_tokens(config: dict[str, Any], source_key: str, env_keys: tuple[s
     return tokens
 
 
-def fetch_today_jobs_from_lever(config: dict[str, Any] | None = None, filter_keywords: bool = True, filter_date: bool = True) -> list[dict]:
+def fetch_today_jobs_from_lever(
+    config: dict[str, Any] | None = None,
+    filter_keywords: bool = True,
+    filter_date: bool = True,
+    company_tokens: list[str] | None = None,
+) -> list[dict]:
     """
     Fetch configured Lever job postings and normalize their relevant details.
     
@@ -989,7 +1057,7 @@ def fetch_today_jobs_from_lever(config: dict[str, Any] | None = None, filter_key
     """
     config = config or _job_config()
     source_cfg = config.get("lever_source") if isinstance(config.get("lever_source"), dict) else {}
-    tokens = _job_board_tokens(config, "lever_source", ("LEVER_COMPANY_TOKENS", "JOB_HUNT_LEVER_COMPANY_TOKENS"))
+    tokens = company_tokens if company_tokens is not None else _job_board_tokens(config, "lever_source", ("LEVER_COMPANY_TOKENS", "JOB_HUNT_LEVER_COMPANY_TOKENS"))
     keywords = [kw.casefold() for kw in _cfg(config, "job_keywords", "JOB_KEYWORDS", [], "list")] if filter_keywords else []
     today = local_now().date()
     max_days = _cfg(config, "date_range_days", "JOB_HUNT_DATE_RANGE_DAYS", 1, "int")
@@ -1013,7 +1081,7 @@ def fetch_today_jobs_from_lever(config: dict[str, Any] | None = None, filter_key
                 continue
             text = _strip_html("\n".join(str(x) for x in (job.get("descriptionPlain"), job.get("description"), job.get("additionalPlain")) if x), config=config)
             title = str(job.get("text") or "").strip()
-            if not _has_any_keyword(f"{title} {text}", keywords):
+            if not _matches_job_keywords(f"{title} {text}", keywords):
                 continue
             cats = job.get("categories") if isinstance(job.get("categories"), dict) else {}
             kept.append({
@@ -1025,7 +1093,12 @@ def fetch_today_jobs_from_lever(config: dict[str, Any] | None = None, filter_key
     return kept
 
 
-def fetch_today_jobs_from_ashby(config: dict[str, Any] | None = None, filter_keywords: bool = True, filter_date: bool = True) -> list[dict]:
+def fetch_today_jobs_from_ashby(
+    config: dict[str, Any] | None = None,
+    filter_keywords: bool = True,
+    filter_date: bool = True,
+    company_tokens: list[str] | None = None,
+) -> list[dict]:
     """
     Fetch configured Ashby job-board postings that match the selected filters.
     
@@ -1039,7 +1112,7 @@ def fetch_today_jobs_from_ashby(config: dict[str, Any] | None = None, filter_key
     """
     config = config or _job_config()
     source_cfg = config.get("ashby_source") if isinstance(config.get("ashby_source"), dict) else {}
-    tokens = _job_board_tokens(config, "ashby_source", ("ASHBY_ORG_TOKENS", "JOB_HUNT_ASHBY_ORG_TOKENS"))
+    tokens = company_tokens if company_tokens is not None else _job_board_tokens(config, "ashby_source", ("ASHBY_ORG_TOKENS", "JOB_HUNT_ASHBY_ORG_TOKENS"))
     keywords = [kw.casefold() for kw in _cfg(config, "job_keywords", "JOB_KEYWORDS", [], "list")] if filter_keywords else []
     today = local_now().date()
     max_days = _cfg(config, "date_range_days", "JOB_HUNT_DATE_RANGE_DAYS", 1, "int")
@@ -1058,12 +1131,12 @@ def fetch_today_jobs_from_ashby(config: dict[str, Any] | None = None, filter_key
         for job in jobs:
             if not isinstance(job, dict):
                 continue
-            posted = _parse_rss_datetime(str(job.get("publishedDate") or job.get("updatedAt") or ""))
+            posted = _parse_rss_datetime(str(job.get("publishedDate") or job.get("publishedAt") or job.get("updatedAt") or job.get("datePosted") or ""))
             if filter_date and (not posted or posted.date() < today - timedelta(days=max_days - 1)):
                 continue
             summary = _strip_html(str(job.get("descriptionHtml") or job.get("descriptionPlain") or ""), config=config)
             title = str(job.get("title") or "").strip()
-            if not _has_any_keyword(f"{title} {summary}", keywords):
+            if not _matches_job_keywords(f"{title} {summary}", keywords):
                 continue
             comp = job.get("compensation") if isinstance(job.get("compensation"), dict) else {}
             kept.append({
@@ -1416,6 +1489,13 @@ def _extract_jobs_from_cleaned_email(
     # 4) Build postings
     jobs: list[dict] = []
     if digest_cards and len(digest_cards) >= len(urls):
+        # _extract_digest_cards runs before URL collection and therefore cannot
+        # know which card owns which link. Preserve email order here so each
+        # listing gets its own URL instead of every card inheriting the first
+        # link and being collapsed by the dedupe ledger.
+        for index, job in enumerate(digest_cards):
+            if index < len(urls):
+                job["url"] = urls[index][1]
         log.info("[job_hunt] extracted %d digest-card job(s) from cleaned email", len(digest_cards))
         return digest_cards
     now_iso = local_now().isoformat()
@@ -1688,7 +1768,7 @@ def fetch_today_jobs_from_email(config: dict[str, Any] | None = None, email_idx:
             cleaned = _strip_html(str(msg.get("snippet") or ""), config=config)
 
         content_l = f"{subject} {sender} {cleaned}"
-        if not _has_any_keyword(content_l, keywords):
+        if not _matches_job_keywords(content_l, keywords):
             log.debug("[job_hunt] email rejected: no job keywords. subject=%s", subject[:60])
             _job_write_email_msg_cache(date_str, msg_idx, msg, None)
             continue
@@ -1757,7 +1837,7 @@ def _email_message_to_posting(msg: dict, today: Any, max_days: int, config: dict
         return None
 
     keywords = [kw.casefold() for kw in _cfg(config, "job_keywords", "JOB_KEYWORDS", [], "list")]
-    if not _has_any_keyword(f"{subject} {sender} {cleaned}", keywords):
+    if not _matches_job_keywords(f"{subject} {sender} {cleaned}", keywords):
         return None
 
     jobs = _extract_jobs_from_cleaned_email(
@@ -2117,7 +2197,7 @@ def process_and_merge_job_cache(date_str: str | None = None, config: dict[str, A
         """
         title = str(job.get("title", "")).casefold()
         summary = str(job.get("summary", "") or job.get("cleaned_summary", "")).casefold()
-        return _has_any_keyword(f"{title} {summary}", keywords)
+        return _matches_job_keywords(f"{title} {summary}", keywords)
 
     filtered_rss = [j for j in rss_jobs if has_keywords(j)]
     filtered_api_jobs = {source: [j for j in jobs if has_keywords(j)] for source, jobs in api_jobs_by_source.items()}
@@ -2278,7 +2358,7 @@ def _fetch_one_rss_feed(
     def _filter_by_keyword_then_cap(items: list[dict]) -> list[dict]:
         items = [
             p for p in items
-            if _has_any_keyword(f"{p.get('title', '')} {p.get('summary', '')}", keywords)
+            if _matches_job_keywords(f"{p.get('title', '')} {p.get('summary', '')}", keywords)
         ]
         return items[:rss_cap]
 
@@ -2379,7 +2459,7 @@ def _fetch_one_api_board(
         Returns:
         	list[dict]: Matching postings, capped at the configured maximum.
         """
-        filtered = [p for p in items if _has_any_keyword(f"{p.get('title', '')} {p.get('summary', '')}", keywords)]
+        filtered = [p for p in items if _matches_job_keywords(f"{p.get('title', '')} {p.get('summary', '')}", keywords)]
         return filtered[:cap]
 
     cache_path = _job_source_cache_path(date_str, source, idx)
@@ -2396,10 +2476,6 @@ def _fetch_one_api_board(
     try:
         log.info("[job_hunt] processing %s board %d: %s", source, idx, token)
         cfg = dict(config)
-        if source == "lever":
-            cfg["lever_source_tokens"] = [token]
-        elif source == "ashby":
-            cfg["ashby_source_tokens"] = [token]
         if source == "greenhouse":
             postings = fetcher(
                 cfg,
@@ -2407,6 +2483,8 @@ def _fetch_one_api_board(
                 filter_date=True,
                 board_tokens=[token],
             )
+        elif source in {"lever", "ashby"}:
+            postings = fetcher(cfg, filter_keywords=False, filter_date=True, company_tokens=[token])
         else:
             postings = fetcher(cfg, filter_keywords=False, filter_date=True)
         raw_count = len(postings)
@@ -2457,7 +2535,7 @@ def _fetch_one_greenhouse_board(
         """
         items = [
             p for p in items
-            if _has_any_keyword(f"{p.get('title', '')} {p.get('summary', '')}", keywords)
+            if _matches_job_keywords(f"{p.get('title', '')} {p.get('summary', '')}", keywords)
         ]
         return items[:cap]
 
@@ -2685,7 +2763,11 @@ def fetch_rss_and_email_into_state(plan_json: str, *, state=None) -> str:
                 if failure:
                     source_failures.append(failure)
 
-    all_postings = all_postings[:max_results]
+    keywords = [kw.casefold() for kw in _cfg(config, "job_keywords", "JOB_KEYWORDS", [], "list")]
+    # Source tasks complete in configuration order, not relevance order. Rank
+    # the combined result before the global cap so the first broad feed cannot
+    # crowd out IT jobs discovered by later feeds or email digests.
+    all_postings = _rank_job_postings(all_postings, keywords)[:max_results]
     overall_status = "complete" if not source_failures else f"partial_{'_'.join(source_failures)}"
     log.info("[job_hunt] fetch_rss_and_email_into_state: total=%d postings, status=%s",
              len(all_postings), overall_status)

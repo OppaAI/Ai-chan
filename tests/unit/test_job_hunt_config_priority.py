@@ -264,3 +264,63 @@ $32 - $40 (Employer Est.)
     assert jobs[0]["organization"] == "W3Global 3.8 ★"
     assert jobs[0]["location"] == "Vancouver"
     assert jobs[1]["salary"] == "$19 - $20 (Employer Est.)"
+
+
+def test_html_email_preserves_multiple_job_cards_and_links(monkeypatch):
+    from agentic.workflows.job_hunt import toolset
+
+    monkeypatch.setitem(__import__("sys").modules, "markitdown", None)
+    html = """
+    <style>.irrelevant { color: red; }</style>
+    <table><tr><td><a href="https://www.linkedin.com/jobs/view/1">Platform Engineer</a></td></tr>
+    <tr><td>Example Co · Vancouver, BC</td></tr>
+    <tr><td><a href="https://ca.indeed.com/viewjob?jk=2">Data Engineer</a></td></tr>
+    <tr><td>Other Co · Remote</td></tr></table>
+    """
+
+    cleaned = toolset._strip_html(html, config={})
+    jobs = toolset._extract_jobs_from_cleaned_email(cleaned, sender="alerts@linkedin.com", subject="Jobs", config={})
+
+    assert "\n" in cleaned
+    assert len(jobs) == 2
+    assert [job["title"] for job in jobs] == ["Platform Engineer", "Data Engineer"]
+    assert [job["url"] for job in jobs] == [
+        "https://www.linkedin.com/jobs/view/1",
+        "https://ca.indeed.com/viewjob?jk=2",
+    ]
+
+
+def test_job_keyword_match_rejects_short_keyword_substrings_and_ranks_tech_titles_first():
+    from agentic.workflows.job_hunt.toolset import _matches_job_keywords, _rank_job_postings
+
+    assert not _matches_job_keywords("Administrative role with paid training", ["ai"])
+    assert _matches_job_keywords("AI Platform Engineer", ["ai"])
+
+    ranked = _rank_job_postings([
+        {"title": "Administrative Assistant", "summary": "AI systems training", "posted_date": "2026-08-01"},
+        {"title": "Platform Engineer", "summary": "Build AI infrastructure", "posted_date": "2026-08-01"},
+    ], ["ai", "engineer"])
+
+    assert [job["title"] for job in ranked] == ["Platform Engineer", "Administrative Assistant"]
+
+
+@pytest.mark.parametrize("source", ["lever", "ashby"])
+def test_api_workers_pass_exactly_one_company_token(monkeypatch, tmp_path, source):
+    from agentic.workflows.job_hunt import toolset
+
+    received = []
+
+    def fetcher(_config, *, filter_keywords, filter_date, company_tokens=None):
+        received.append(company_tokens)
+        return [{"title": "Software Engineer", "summary": "Python", "url": "https://example.test/job"}]
+
+    monkeypatch.setattr(toolset, "_job_cache_dir", lambda: tmp_path)
+    monkeypatch.setattr(toolset, "_cache_is_fresh_simple", lambda *_args: False)
+    postings, info, failure = toolset._fetch_one_api_board(
+        "2026-08-31", {"job_keywords": ["software"]}, False, source, 0, "acme", fetcher,
+    )
+
+    assert received == [["acme"]]
+    assert failure is None
+    assert info["matched_count"] == 1
+    assert postings[0]["_source_name"] == f"{source}_0"
