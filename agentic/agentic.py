@@ -577,7 +577,14 @@ def _looks_like_approval_reply(user_input: str) -> bool:
             text,
             re.I,
         )
-        or bool(re.search(r"\b(?:approve|confirm|resume|continue)\s+(?:run-[0-9]+|r\d[0-9A-Za-z_-]*)\b", text, re.I))
+        or bool(
+            re.fullmatch(
+                r"[\s.!?,;:-]*(?:(?:y|yes|yeah|yep|sure|ok(?:ay)?|confirm|approve|approved|resume|continue|go\s+ahead|do\s+it|proceed)[\s.!?,;:-]+)?"
+                r"(?:approve|confirm|resume|continue)\s+(?:run-[0-9]+|r\d[0-9A-Za-z_-]*)[\s.!?,;:-]*",
+                text,
+                re.I,
+            )
+        )
     )
 
 

@@ -640,7 +640,7 @@ def test_resume_approval_runs_pending_tool(monkeypatch, tmp_path):
 
 @pytest.mark.parametrize(
     "text",
-    ["yes", "yeah", "sure", "ok", "go ahead", "do it", "approve r2", "continue run-123"],
+    ["yes", "yeah", "sure", "ok", "go ahead", "do it", "approve r2", "yes approve r2", "continue run-123"],
 )
 def test_approval_parser_accepts_common_short_replies(text):
     assert _looks_like_approval_reply(text)
@@ -648,7 +648,7 @@ def test_approval_parser_accepts_common_short_replies(text):
 
 @pytest.mark.parametrize(
     "text",
-    ["yes, but not now", "sure later", "no", "continue the story", "are you sure?", "I approve of this idea"],
+    ["yes, but not now", "sure later", "no", "continue the story", "are you sure?", "I approve of this idea", "I don't approve r2", "I approve r2 of this idea"],
 )
 def test_approval_parser_rejects_mixed_or_general_chat(text):
     assert not _looks_like_approval_reply(text)
