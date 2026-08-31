@@ -1220,7 +1220,7 @@ animate();
 const loader = new GLTFLoader();
 loader.register(parser => new VRMLoaderPlugin(parser));
 
-const VRM_URL = './assets/Aiko.vrm';
+const VRM_URL = './assets/Aiko_Yukata.vrm';
 
 if (window.location.protocol === 'file:') {
   loadMsg.textContent = 'error: open Aiko via `python main.py` or http://localhost:8787/ — browsers block VRM fetches from file://';
