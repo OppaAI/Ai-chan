@@ -2440,11 +2440,35 @@ class AikoMemorize:
                 self._maybe_clear_search_cache()
                 self._mem._invalidate_entity_importance(user_id)
                 log.info(f"Saved {len(ids)} memories in {elapsed:.2f}s")
+                if _brain_trace and _brain_trace.TRACE_ENABLED:
+                    _brain_trace.record_step(
+                        "semantic.add",
+                        layer="write",
+                        outputs={"memories_saved": len(ids),
+                                 "elapsed_s": round(elapsed, 3)},
+                        factors=[
+                            f"LLM extracted {len(ids)} fact(s) → stored in memories table",
+                            "search cache invalidated; entity importance map invalidated",
+                        ],
+                    )
             else:
                 log.debug(f"No facts extracted ({elapsed:.2f}s) — nothing saved.")
+                if _brain_trace and _brain_trace.TRACE_ENABLED:
+                    _brain_trace.record_step(
+                        "semantic.add",
+                        layer="write",
+                        outputs={"memories_saved": 0, "elapsed_s": round(elapsed, 3)},
+                        factors=["no durable facts in this turn (greeting/no-op/dedup)"],
+                    )
             return True
         except Exception as e:
             log.error(f"Save failed: {e}")
+            if _brain_trace and _brain_trace.TRACE_ENABLED:
+                _brain_trace.record_step(
+                    "semantic.add",
+                    layer="write",
+                    outputs={"error": str(e)},
+                )
             return False
 
     def pin(self, messages: list[dict], user_id: str | None = None, display_name: str | None = None) -> bool:
@@ -2531,6 +2555,19 @@ class AikoMemorize:
         with self._user_switch_lock:
             user_id = self._resolve_user_id(user_id)  # resolved here, on the caller's thread — not in _write_loop
             display_name = display_name or current_display_name()
+            if _brain_trace and _brain_trace.TRACE_ENABLED:
+                _brain_trace.record_step(
+                    "semantic.queue_write",
+                    layer="write",
+                    inputs={"user_chars": len(user_input or ""),
+                            "response_chars": len(response_text or ""),
+                            "user_id": user_id,
+                            "queue_depth": self._write_queue.qsize()},
+                    factors=[
+                        "semantic memory (durable facts) — written async on write-worker thread",
+                        "will wait for idle window before LLM fact extraction (when is_active_turn given)",
+                    ],
+                )
             self._write_queue.put((user_input, response_text, user_id, display_name, is_active_turn, idle_since))
 
     def _write_loop(self) -> None:
@@ -2542,6 +2579,17 @@ class AikoMemorize:
                     return
                 user_input, response_text, user_id, display_name, is_active_turn, idle_since = item
                 self._wait_for_write_window(is_active_turn, idle_since)
+                if _brain_trace and _brain_trace.TRACE_ENABLED:
+                    _brain_trace.record_step(
+                        "semantic.write_loop",
+                        layer="write",
+                        inputs={"user_id": user_id,
+                                "user_chars": len(user_input or ""),
+                                "response_chars": len(response_text or "")},
+                        factors=[
+                            "write worker dequeued item; calling _MemoryBackend.add() for LLM fact extraction",
+                        ],
+                    )
                 self.add([
                     {"role": "user", "content": user_input[:500]},
                     {"role": "assistant", "content": response_text[:800]},

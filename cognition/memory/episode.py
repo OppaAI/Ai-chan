@@ -45,6 +45,10 @@ import sqlite_vec
 
 from system.log import get_logger
 from system.userspace import current_user_id
+try:
+    from system import brain_trace as _brain_trace
+except Exception:
+    _brain_trace = None
 from cognition.memory.vecstore import HarrierEmbedder, initialize_store_db
 from cognition.memory.env import env_bool, env_int, env_float
 from cognition.memory.vecstore import KNN_MATCH_K_MIN, KNN_MATCH_OVERSCAN
@@ -503,6 +507,15 @@ class EpisodicStore:
             return -1
         if _is_trivial_turn(user_text, assistant_text):
             log.debug("EMC ingest skipped (trivial turn)")
+            if _brain_trace and _brain_trace.TRACE_ENABLED:
+                _brain_trace.record_step(
+                    "episodic.ingest_turn",
+                    layer="write",
+                    inputs={"user_chars": len(user_text or ""),
+                            "assistant_chars": len(assistant_text or "")},
+                    outputs={"staged": False},
+                    factors=["trivial turn (below EMC_EVICT_MIN_CHARS or _is_trivial_input)"],
+                )
             return -1
 
         trace = _format_turn_trace(user_text, assistant_text)
@@ -516,6 +529,20 @@ class EpisodicStore:
                 "EMC ingest_turn: user_id mismatch (provided=%s, instance=%s). "
                 "Using instance user_id to prevent orphaned staging rows.",
                 user_id, self._user_id
+            )
+
+        if _brain_trace and _brain_trace.TRACE_ENABLED:
+            _brain_trace.record_step(
+                "episodic.ingest_turn",
+                layer="write",
+                inputs={"user_chars": len(user_text or ""),
+                        "assistant_chars": len(assistant_text or ""),
+                        "trace_chars": len(trace),
+                        "staging_before": self.staging_count()},
+                factors=[
+                    "EMC-2: turn written to emc_staging; embed deferred until flush",
+                    f"auto-flush trigger: staging>={EMC_FLUSH_ON_STAGING} or turns>={EMC_FLUSH_EVERY_TURNS}",
+                ],
             )
 
         staging_id = self.bind(
@@ -534,9 +561,17 @@ class EpisodicStore:
         with self._lock:
             self._turns_since_flush += 1
 
+        flushed = 0
         if auto_flush and staging_id > 0:
-            self.maybe_flush()
+            flushed = self.maybe_flush()
 
+        if _brain_trace and _brain_trace.TRACE_ENABLED:
+            _brain_trace.record_step(
+                "episodic.ingest_turn",
+                layer="write",
+                outputs={"staging_id": staging_id, "flushed_to_storage": flushed,
+                         "staging_after": self.staging_count()},
+            )
         return staging_id
 
     def maybe_flush(self) -> int:
@@ -686,6 +721,18 @@ class EpisodicStore:
                 # New episodes make cached recall results stale.
                 with self._recall_cache_lock:
                     self._recall_cache.clear()
+            if _brain_trace and _brain_trace.TRACE_ENABLED and flushed:
+                grouped = sum(1 for g in (groups or []) if len(g) > 1)
+                _brain_trace.record_step(
+                    "episodic.flush_staging",
+                    layer="write",
+                    inputs={"staging_rows": flushed, "batch_limit": batch},
+                    outputs={"episodes_written": flushed, "groups_merged": grouped},
+                    factors=[
+                        f"EMC-6 grouping: {grouped} group(s) merged from staging turns",
+                        f"embed queue: {'enqueued' if EMC_EMBED_ON_FLUSH else 'skipped (EMC_EMBED_ON_FLUSH=0)'}",
+                    ],
+                )
             return flushed
 
     def _inscribe(self, row: sqlite3.Row | tuple) -> int:

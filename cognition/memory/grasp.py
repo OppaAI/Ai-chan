@@ -27,6 +27,15 @@ from .env import env_flag, env_float, env_int, env_str
 
 log = logging.getLogger("aiko.grasp")
 
+# brain_trace is the optional per-step tracer (--trace). Imported lazily to
+# avoid a hard dep when --trace is off; the import resolves at first use.
+try:
+    from system import brain_trace as _brain_trace
+    _BRAIN_TRACE_OK = True
+except Exception:
+    _BRAIN_TRACE_OK = False
+    _brain_trace = None
+
 GRASP_ENABLED = env_flag("GRASP_ENABLED", "1")
 GRASP_MILLER_MIN = max(1, env_int("GRASP_MILLER_MIN", 5))
 GRASP_MILLER_MAX = max(GRASP_MILLER_MIN, env_int("GRASP_MILLER_MAX", 9))
@@ -594,6 +603,14 @@ def record_turn(
     if not user and not assistant:
         return []
     ident = _resolve_identity(identity)
+    if _BRAIN_TRACE_OK and _brain_trace and _brain_trace.TRACE_ENABLED:
+        _brain_trace.record_step(
+            "grasp.record_turn",
+            layer="write",
+            inputs={"identity": ident, "user_chars": len(user),
+                    "assistant_chars": len(assistant)},
+            factors=[f"working-memory live buffer (capacity={GRASP_LIVE_CAPACITY})"],
+        )
     buf = get_live_buffer(identity=ident)
     with _lock:
         evicted = buf.fill(
@@ -607,6 +624,13 @@ def record_turn(
         except Exception:
             pass
         _publish_unlocked(identity=ident)
+        if _BRAIN_TRACE_OK and _brain_trace and _brain_trace.TRACE_ENABLED:
+            _brain_trace.record_step(
+                "grasp.record_turn",
+                layer="write",
+                outputs={"buffer_filled": True, "evicted_count": len(evicted)},
+                factors=[f"eviction pushes oldest turn(s) out of working memory"],
+            )
         return list(evicted)
 
 
