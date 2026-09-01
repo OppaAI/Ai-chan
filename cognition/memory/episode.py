@@ -13,16 +13,25 @@ Design rules:
 
 EMC-1: storage + bind/flush API
 EMC-2: turn ingest + buffer drain (eviction path)
+EMC-3: KNN + FTS5 + RRF recall + context formatting
+EMC-4: dream-time distillation of episodic memory → semantic facts
 EMC-6: coherent episode formation — group related staging rows on flush
 
 Public surface:
-    from cognition.memory.episode import EpisodicStore, ensure_episode_schema
+    from cognition.memory.episode import (
+        EpisodicStore,
+        ensure_episode_schema,
+        distill_episodes,
+        attach_recall_to_store,
+        attach_dream_hook,
+    )
 """
 from __future__ import annotations
 
 import json
 import os
 import queue
+import re
 import sqlite3
 import struct
 import threading
@@ -32,15 +41,15 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
 
+import sqlite_vec
+
 from system.log import get_logger
 from system.userspace import current_user_id
 from cognition.memory.vecstore import HarrierEmbedder, initialize_store_db
 from cognition.memory.env import env_bool, env_int, env_float
-from cognition.memory.episode_group import (
-    EMC_GROUP_ENABLED,
-    group_staging_rows as _group_staging_rows,
-    merge_staging_group as _merge_staging_group,
-)
+from cognition.memory.vecstore import KNN_MATCH_K_MIN, KNN_MATCH_OVERSCAN
+from cognition.memory.search import _sanitize_fts_query
+from cognition.memory.lifecycle import DREAM_MERGE_THRESHOLD
 
 log = get_logger(__name__)
 
@@ -56,8 +65,32 @@ EMC_EVICT_ENABLED = env_bool("EMC_EVICT_ENABLED", "1")
 EMC_EVICT_MIN_CHARS = max(1, env_int("EMC_EVICT_MIN_CHARS", 40))
 EMC_FLUSH_EVERY_TURNS = max(0, env_int("EMC_FLUSH_EVERY_TURNS", 8))
 MEMORY_WM_CAPACITY = max(1, env_int("MEMORY_WM_CAPACITY", "7"))
-MEMORY_WM_CAPACITY = max(1, env_int("MEMORY_WM_CAPACITY", "7"))
 EMC_FLUSH_ON_STAGING = max(1, env_int("EMC_FLUSH_ON_STAGING", 24))
+
+# EMC-3: recall
+EMC_RECALL_ENABLED = env_bool("EMC_RECALL_ENABLED", "1")
+EMC_RECALL_LIMIT = max(0, env_int("EMC_RECALL_LIMIT", 2))
+EMC_KNN_LIMIT = max(1, env_int("EMC_KNN_LIMIT", 12))
+EMC_FTS_LIMIT = max(1, env_int("EMC_FTS_LIMIT", 12))
+EMC_RRF_K = max(1, env_int("EMC_RRF_K", 60))
+EMC_CONTEXT_CHARS = max(100, env_int("EMC_CONTEXT_CHARS", 600))
+EMC_CONTEXT_EPISODE_CHARS = max(40, env_int("EMC_CONTEXT_EPISODE_CHARS", 280))
+EMC_JOINT_BUDGET = env_bool("EMC_JOINT_BUDGET", "1")
+EMC_RECALL_CACHE_SIZE = max(1, env_int("EMC_RECALL_CACHE_SIZE", 128))
+EMC_RECALL_CACHE_TTL = max(1.0, env_float("EMC_RECALL_CACHE_TTL", 20.0))
+
+# EMC-4: dream distillation
+EMC_DREAM_ENABLED = env_bool("EMC_DREAM_ENABLED", "1")
+EMC_DREAM_LIMIT = max(0, env_int("EMC_DREAM_LIMIT", 12))
+EMC_DREAM_BATCH = max(1, env_int("EMC_DREAM_BATCH", 4))
+EMC_DREAM_MIN_CHARS = max(20, env_int("EMC_DREAM_MIN_CHARS", 60))
+EMC_DREAM_MAX_TOKENS = max(64, env_int("EMC_DREAM_MAX_TOKENS", 256))
+
+# EMC-6: coherent episode formation
+EMC_GROUP_ENABLED = env_bool("EMC_GROUP_ENABLED", "1")
+EMC_GROUP_MAX_GAP_SEC = max(0, env_int("EMC_GROUP_MAX_GAP_SEC", 900))
+EMC_GROUP_MAX_TURNS = max(1, env_int("EMC_GROUP_MAX_TURNS", 6))
+EMC_GROUP_MAX_CHARS = max(200, env_int("EMC_GROUP_MAX_CHARS", 2000))
 
 EMBED_DIMS = int(os.getenv("EMBED_DIMS", "640"))
 
@@ -205,6 +238,120 @@ def _is_trivial_turn(user_text: str, assistant_text: str) -> bool:
     return False
 
 
+# ── EMC-6: coherent episode formation helpers ─────────────────────────────────
+
+def _parse_ts(value: Any) -> float | None:
+    s = str(value or "").strip()
+    if not s:
+        return None
+    try:
+        if s.endswith("Z"):
+            s = s[:-1] + "+00:00"
+        # Truncate fractional seconds to 6 digits without breaking the offset
+        if "." in s:
+            head, rest = s.split(".", 1)
+            i = 0
+            while i < len(rest) and rest[i].isdigit():
+                i += 1
+            digits, suffix = rest[:i], rest[i:]
+            s = head + "." + digits[:6] + suffix
+        return datetime.fromisoformat(s).timestamp()
+    except Exception:
+        return None
+
+
+def _group_staging_rows(rows: list) -> list[list]:
+    """Partition ordered staging rows into coherent episode groups.
+
+    Row tuple layout (from flush_staging SELECT):
+      0 id, 1 user_id, 2 timestamp, 3 date, 4 trace,
+      5 valence_tag, 6 arousal_score, 7 salience_score,
+      8 entities, 9 source, 10 session_id, 11 cognitive_json)
+    """
+    if not rows:
+        return []
+    groups: list[list] = [[rows[0]]]
+    for row in rows[1:]:
+        cur = groups[-1]
+        prev = cur[-1]
+        same_session = (prev[10] or None) == (row[10] or None)
+        t_prev = _parse_ts(prev[2])
+        t_cur = _parse_ts(row[2])
+        if EMC_GROUP_MAX_GAP_SEC == 0:
+            gap_ok = True
+        elif t_prev is not None and t_cur is not None:
+            gap_ok = abs(t_cur - t_prev) <= float(EMC_GROUP_MAX_GAP_SEC)
+        else:
+            gap_ok = False
+        turns_ok = len(cur) < EMC_GROUP_MAX_TURNS
+        existing = sum(len(str(r[4] or "")) for r in cur)
+        added = len(str(row[4] or ""))
+        chars_ok = (existing + added + 8 * len(cur)) <= EMC_GROUP_MAX_CHARS
+        if same_session and gap_ok and turns_ok and chars_ok:
+            cur.append(row)
+        else:
+            groups.append([row])
+    return groups
+
+
+def _merge_staging_group(group: list) -> tuple:
+    """Collapse a group into one row-shaped tuple for _inscribe."""
+    if len(group) == 1:
+        return group[0]
+    first = group[0]
+    traces = [str(r[4] or "").strip() for r in group if str(r[4] or "").strip()]
+    trace = "\n\n".join(traces)
+    valence_tag = None
+    for r in group:
+        if r[5] is not None and str(r[5]).strip():
+            valence_tag = r[5]
+            break
+    arousal_vals = [float(r[6]) for r in group if r[6] is not None]
+    arousal_score = max(arousal_vals) if arousal_vals else None
+    salience_vals = [float(r[7]) for r in group if r[7] is not None]
+    salience_score = max(salience_vals) if salience_vals else None
+    ents: list[str] = []
+    seen: set[str] = set()
+    for r in group:
+        raw = r[8]
+        if raw is None or raw == "":
+            continue
+        try:
+            data = json.loads(raw) if isinstance(raw, str) else raw
+        except (TypeError, json.JSONDecodeError):
+            continue
+        if isinstance(data, list):
+            for e in data:
+                s = str(e).strip()
+                key = s.casefold()
+                if s and key not in seen:
+                    seen.add(key)
+                    ents.append(s)
+    entities = json.dumps(ents, ensure_ascii=False) if ents else None
+    source = None
+    for r in group:
+        if r[9] is not None and str(r[9]).strip():
+            source = r[9]
+            break
+    if source is None:
+        source = "emc_group"
+    session_id = None
+    for r in group:
+        if r[10] is not None and str(r[10]).strip():
+            session_id = r[10]
+            break
+    cognitive_json = None
+    for r in reversed(group):
+        if len(r) > 11 and r[11] is not None and str(r[11]).strip():
+            cognitive_json = r[11]
+            break
+    return (
+        first[0], first[1], first[2], first[3], trace,
+        valence_tag, arousal_score, salience_score,
+        entities, source, session_id, cognitive_json,
+    )
+
+
 # ── data class ────────────────────────────────────────────────────────────────
 
 @dataclass
@@ -241,6 +388,9 @@ class EpisodicStore:
         maybe_flush()  →  flush when staging high or every N turns
         flush_all() / close() on session end
 
+    EMC-3: search() — KNN + FTS5 + RRF over emc_storage
+           format_for_context() — render hits as <episodic_context> block
+
     EMC-6 (on flush_staging when EMC_GROUP_ENABLED):
         consecutive staging rows that share session_id and fall within
         the time gap are merged into one emc_storage episode.
@@ -259,7 +409,7 @@ class EpisodicStore:
         self._embedder = embedder or HarrierEmbedder(cache_path=embed_cache)
         self._lock = threading.RLock()
         self._conn = self._connect()
-        # EMC recall result cache (see episode_recall.search). Keyed by
+        # EMC recall result cache (see search()). Keyed by
         # (user_id, query, limit); bounded + TTL so episodic recall doesn't
         # re-run KNN+FTS (and the per-id touch loop) on every turn.
         self._recall_cache: OrderedDict[tuple[str, str, int], tuple[float, list[dict]]] = OrderedDict()
@@ -289,6 +439,8 @@ class EpisodicStore:
             user_id=self._user_id,
             vector=True,
         )
+
+    # ── EMC-1 / EMC-2: bind, flush, ingest ─────────────────────────────────────
 
     def bind(
         self,
@@ -649,6 +801,223 @@ class EpisodicStore:
             "embed_on_flush": EMC_EMBED_ON_FLUSH,
         }
 
+    # ── EMC-3: KNN + FTS5 + RRF recall ────────────────────────────────────────
+
+    def search(
+        self,
+        query: str,
+        *,
+        limit: int | None = None,
+        query_vector: list[float] | None = None,
+        user_id: str | None = None,
+    ) -> list[dict]:
+        """KNN + FTS5 → RRF over emc_storage. Returns payload dicts."""
+        if not EMC_ENABLED or not EMC_RECALL_ENABLED:
+            return []
+        top_k = EMC_RECALL_LIMIT if limit is None else max(0, int(limit))
+        if top_k <= 0:
+            return []
+        uid = user_id or self._user_id
+        q = (query or "").strip()
+        if not q:
+            return []
+
+        # ── recall result cache ───────────────────────────────────────────────
+        # Short-TTL per (user, query, limit) cache so every non-greeting turn
+        # doesn't re-run KNN+FTS+RRF against emc_vec/emc_fts.
+        cache_key = (uid, " ".join(q.casefold().split()), int(top_k))
+        now = time.monotonic()
+        with self._recall_cache_lock:
+            cached = self._recall_cache.get(cache_key)
+            if cached and now - cached[0] <= EMC_RECALL_CACHE_TTL:
+                self._recall_cache.move_to_end(cache_key)
+                hits = [dict(r) for r in cached[1]]
+                try:
+                    self._touch_episodes([r["id"] for r in hits])
+                except Exception:
+                    pass
+                return hits
+            if cached:
+                self._recall_cache.pop(cache_key, None)
+
+        vector = None
+        try:
+            if query_vector is not None:
+                vector = list(query_vector)
+            else:
+                emb = self._embedder
+                if hasattr(emb, "embed_query"):
+                    vector = list(emb.embed_query(q))
+                else:
+                    vector = list(emb.embed([q]))[0]
+        except Exception as e:
+            log.debug("EMC search embed failed: %s", e)
+
+        fts_query = _sanitize_fts_query(q)
+
+        with self._lock:
+            rank_knn: dict[int, int] = {}
+            rank_fts: dict[int, int] = {}
+            if vector is not None:
+                try:
+                    vec_blob = sqlite_vec.serialize_float32(vector)
+                    k = max(int(EMC_KNN_LIMIT) * KNN_MATCH_OVERSCAN, KNN_MATCH_K_MIN)
+                    knn_rows = self._conn.execute(
+                        """
+                        SELECT v.rowid AS id, v.distance AS dist
+                        FROM emc_vec v
+                        JOIN emc_storage s ON s.id = v.rowid
+                        WHERE v.embedding MATCH ?
+                          AND v.k = ?
+                          AND s.user_id = ?
+                          AND (s.superseded_by IS NULL)
+                        ORDER BY v.distance ASC
+                        LIMIT ?
+                        """,
+                        (vec_blob, k, uid, EMC_KNN_LIMIT),
+                    ).fetchall()
+                    rank_knn = {int(r[0]): i + 1 for i, r in enumerate(knn_rows)}
+                except Exception as e:
+                    log.debug("EMC KNN failed: %s", e)
+
+            if fts_query:
+                try:
+                    fts_rows = self._conn.execute(
+                        """
+                        SELECT s.id
+                        FROM emc_fts
+                        JOIN emc_storage s ON s.id = emc_fts.rowid
+                        WHERE emc_fts MATCH ?
+                          AND s.user_id = ?
+                          AND (s.superseded_by IS NULL)
+                        ORDER BY rank
+                        LIMIT ?
+                        """,
+                        (fts_query, uid, EMC_FTS_LIMIT),
+                    ).fetchall()
+                    rank_fts = {int(r[0]): i + 1 for i, r in enumerate(fts_rows)}
+                except Exception as e:
+                    log.debug("EMC FTS failed: %s", e)
+
+            candidate_ids = set(rank_knn) | set(rank_fts)
+            if not candidate_ids:
+                return []
+
+            scores: dict[int, float] = {}
+            for eid in candidate_ids:
+                s = 0.0
+                if eid in rank_knn:
+                    s += 1.0 / (EMC_RRF_K + rank_knn[eid])
+                if eid in rank_fts:
+                    s += 1.0 / (EMC_RRF_K + rank_fts[eid])
+                scores[eid] = s
+
+            ordered = sorted(scores.keys(), key=lambda i: scores[i], reverse=True)[:top_k]
+            if not ordered:
+                return []
+
+            placeholders = ",".join("?" * len(ordered))
+            rows = self._conn.execute(
+                f"""
+                SELECT id, timestamp, date, trace, valence_tag, arousal_score,
+                       salience_score, entities, source, session_id, recall_count, cognitive_json
+                FROM emc_storage
+                WHERE id IN ({placeholders})
+                """,
+                ordered,
+            ).fetchall()
+            by_id = {int(r[0]): r for r in rows}
+
+            results: list[dict] = []
+            for eid in ordered:
+                row = by_id.get(eid)
+                if not row:
+                    continue
+                entities = None
+                if row[7]:
+                    try:
+                        entities = json.loads(row[7])
+                    except Exception:
+                        entities = None
+                results.append({
+                    "id": int(row[0]),
+                    "timestamp": row[1],
+                    "date": row[2],
+                    "trace": row[3],
+                    "memory": row[3],
+                    "valence_tag": row[4],
+                    "arousal_score": row[5],
+                    "salience_score": row[6],
+                    "entities": entities,
+                    "source": row[8],
+                    "session_id": row[9],
+                    "recall_count": int(row[10] or 0),
+                    "cognitive_state": json.loads(row[11]) if row[11] else None,
+                    "_recall_score": scores.get(eid, 0.0),
+                    "_emc": True,
+                })
+
+            self._touch_episodes([r["id"] for r in results])
+            with self._recall_cache_lock:
+                self._recall_cache[cache_key] = (now, [dict(r) for r in results])
+                while len(self._recall_cache) > EMC_RECALL_CACHE_SIZE:
+                    self._recall_cache.popitem(last=False)
+            return results
+
+    def _touch_episodes(self, ids: list[int]) -> None:
+        if not ids:
+            return
+        now = _utc_now_iso()
+        try:
+            placeholders = ",".join("?" * len(ids))
+            self._conn.execute(
+                f"""
+                UPDATE emc_storage
+                SET recall_count = recall_count + 1,
+                    last_recalled_at = ?
+                WHERE id IN ({placeholders})
+                """,
+                [now] + ids,
+            )
+            self._conn.commit()
+        except Exception as e:
+            log.debug("EMC touch failed: %s", e)
+
+    def format_for_context(self, episodes: list[dict], *, max_chars: int | None = None) -> str | None:
+        """Format episodic hits as a compact <episodic_context> block."""
+        if not episodes:
+            return None
+        budget = EMC_CONTEXT_CHARS if max_chars is None else max(40, int(max_chars))
+        lines = [
+            "<episodic_context>",
+            "Past conversation moments (what happened), not durable facts. "
+            "Use silently for continuity. Never quote this block or claim total recall.",
+            "",
+        ]
+        kept = False
+        for ep in episodes:
+            trace = (ep.get("trace") or ep.get("memory") or "").strip()
+            if not trace:
+                continue
+            kept = True
+            if len(trace) > EMC_CONTEXT_EPISODE_CHARS:
+                trace = trace[:EMC_CONTEXT_EPISODE_CHARS].rstrip() + "…"
+            when = ep.get("date") or (ep.get("timestamp") or "")[:10] or ""
+            if when:
+                lines.append(f"  - [{when}] {trace}")
+            else:
+                lines.append(f"  - {trace}")
+        if not kept:
+            return None
+        lines.append("</episodic_context>")
+        block = "\n".join(lines)
+        closing_tag = "\n</episodic_context>"
+        if len(block) > budget:
+            block = block[:budget - len(closing_tag)].rstrip() + closing_tag
+        return block
+
+    # ── lifecycle ─────────────────────────────────────────────────────────────
+
     def close(self) -> None:
         try:
             self.flush_all()
@@ -666,3 +1035,277 @@ class EpisodicStore:
                 self._conn.close()
             except Exception:
                 pass
+
+
+# ── EMC-3: backward-compat attach (idempotent) ───────────────────────────────
+# Previously episode_recall.py monkey-patched search/format_for_context onto
+# EpisodicStore at boot. With the merge they're already methods, but callers
+# that still call attach_recall_to_store() keep working as a no-op.
+
+def attach_recall_to_store() -> None:
+    """No-op stub kept for backward-compat. Methods are now defined directly
+    on EpisodicStore. Kept idempotent so existing boot code keeps working."""
+    log.debug("EMC-3 attach_recall_to_store: no-op (methods are native)")
+
+
+# ── EMC-4: dream distillation ────────────────────────────────────────────────
+
+_DISTILL_PROMPT = """\
+You extract durable long-term facts from past conversation moments.
+Only keep stable facts about the user (preferences, identity, plans, relationships).
+Skip greetings, one-off logistics, and anything already ephemeral.
+Output a JSON array of strings. Empty array if nothing durable.
+Each fact must be a single short sentence in third person about the user.
+
+Moments:
+{moments}
+
+JSON array:
+"""
+
+
+def ensure_distilled_column(conn) -> None:
+    """Add distilled_at + distilled_into to emc_storage if missing (idempotent).
+
+    distilled_into is a JSON array of semantic-memory ids the episode
+    consolidated into (EM→SM link used by the LTM/ITM studios).
+    """
+    try:
+        cols = {r[1] for r in conn.execute("PRAGMA table_info(emc_storage)").fetchall()}
+        if "distilled_at" not in cols:
+            conn.execute("ALTER TABLE emc_storage ADD COLUMN distilled_at TEXT")
+            conn.commit()
+            log.info("EMC-4: added emc_storage.distilled_at")
+        if "distilled_into" not in cols:
+            conn.execute("ALTER TABLE emc_storage ADD COLUMN distilled_into TEXT")
+            conn.commit()
+            log.info("EMC-4: added emc_storage.distilled_into")
+    except Exception as e:
+        log.debug("EMC-4 distilled_at migration: %s", e)
+
+
+def _parse_facts(raw: str) -> list[str]:
+    text = (raw or "").strip()
+    if not text:
+        return []
+    text = re.sub(r"^```(?:json)?\s*", "", text)
+    text = re.sub(r"\s*```$", "", text)
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError:
+        m = re.search(r"\[.*\]", text, re.DOTALL)
+        if not m:
+            return []
+        try:
+            data = json.loads(m.group(0))
+        except json.JSONDecodeError:
+            return []
+    out: list[str] = []
+    if isinstance(data, list):
+        for item in data:
+            if isinstance(item, str) and item.strip():
+                out.append(item.strip())
+            elif isinstance(item, dict):
+                fact = (item.get("fact") or item.get("text") or "").strip()
+                if fact:
+                    out.append(fact)
+    return out
+
+
+def _candidate_episodes(store, user_id: str, limit: int) -> list[dict]:
+    ensure_distilled_column(store._conn)
+    with store._lock:
+        rows = store._conn.execute(
+            """
+            SELECT id, timestamp, date, trace, salience_score, recall_count
+            FROM emc_storage
+            WHERE user_id = ?
+              AND (superseded_by IS NULL)
+              AND (distilled_at IS NULL)
+              AND length(trace) >= ?
+            ORDER BY
+              COALESCE(salience_score, 0) DESC,
+              COALESCE(recall_count, 0) DESC,
+              timestamp DESC
+            LIMIT ?
+            """,
+            (user_id, EMC_DREAM_MIN_CHARS, limit),
+        ).fetchall()
+    return [
+        {
+            "id": int(r[0]),
+            "timestamp": r[1],
+            "date": r[2],
+            "trace": r[3],
+            "salience_score": r[4],
+            "recall_count": int(r[5] or 0),
+        }
+        for r in rows
+    ]
+
+
+def _mark_distilled(store, ids: list[int], *, distilled_into: list[str] | None = None) -> None:
+    if not ids:
+        return
+    now = _utc_now_iso()
+    into_json = json.dumps(list(distilled_into or []), ensure_ascii=False)
+    with store._lock:
+        for eid in ids:
+            store._conn.execute(
+                "UPDATE emc_storage SET distilled_at = ?, distilled_into = ? WHERE id = ?",
+                (now, into_json, eid),
+            )
+        store._conn.commit()
+
+
+def _llm_distill(client, model: str, moments: list[str]) -> list[str]:
+    if not moments or client is None:
+        return []
+    block = "\n\n".join(f"[{i+1}]\n{m}" for i, m in enumerate(moments))
+    prompt = _DISTILL_PROMPT.format(moments=block[:6000])
+    try:
+        resp = client.chat.completions.create(
+            model=model,
+            messages=[{"role": "user", "content": prompt}],
+            stream=False,
+            max_tokens=EMC_DREAM_MAX_TOKENS,
+            temperature=0.0,
+            timeout=45.0,
+        )
+        raw = (resp.choices[0].message.content or "").strip()
+        return _parse_facts(raw)
+    except Exception as e:
+        log.debug("EMC-4 LLM distill failed: %s", e)
+        return []
+
+
+def distill_episodes(
+    memorize,
+    *,
+    user_id: str | None = None,
+    dry_run: bool = False,
+    limit: int | None = None,
+) -> dict[str, Any]:
+    """Distill undistrilled episodes into semantic facts via memorize.add_raw."""
+    result = {
+        "candidates": 0,
+        "distilled_episodes": 0,
+        "facts_written": 0,
+        "dry_run": dry_run,
+        "enabled": bool(EMC_DREAM_ENABLED and EMC_ENABLED),
+    }
+    if not EMC_ENABLED or not EMC_DREAM_ENABLED:
+        return result
+
+    top = EMC_DREAM_LIMIT if limit is None else max(0, int(limit))
+    if top <= 0:
+        return result
+
+    uid = user_id or memorize.get_user_id()
+    store = None
+    try:
+        store = memorize._get_episode_store(uid)
+    except Exception as e:
+        log.debug("EMC-4 no episode store: %s", e)
+        return result
+    if store is None:
+        return result
+
+    try:
+        store.flush_all()
+    except Exception as e:
+        log.debug("EMC-4 flush_all failed: %s", e)
+
+    candidates = _candidate_episodes(store, uid, top)
+    result["candidates"] = len(candidates)
+    if not candidates:
+        return result
+
+    backend = getattr(memorize, "_mem", None)
+    client = getattr(backend, "_client", None) if backend else None
+    model = getattr(backend, "_model", None) or "ministral"
+
+    facts_written = 0
+    distilled_ids: list[int] = []
+
+    for i in range(0, len(candidates), EMC_DREAM_BATCH):
+        batch = candidates[i : i + EMC_DREAM_BATCH]
+        moments = [c["trace"] for c in batch if (c.get("trace") or "").strip()]
+        facts = _llm_distill(client, model, moments)
+        if dry_run:
+            log.info(
+                "EMC-4 dry-run batch episodes=%d facts=%d sample=%r",
+                len(batch),
+                len(facts),
+                (facts[:2] if facts else []),
+            )
+            # dry-run: never mark; only count batches that would produce facts
+            if facts:
+                distilled_ids.extend(c["id"] for c in batch)
+            continue
+
+        # Only mark distilled when the LLM returned durable facts.
+        # Empty extract → leave distilled_at NULL so the episodes can retry next dream.
+        if not facts:
+            log.debug(
+                "EMC-4 empty extract; not marking episodes=%s",
+                [c["id"] for c in batch],
+            )
+            continue
+
+        batch_success = True
+        batch_mem_ids: list[str] = []
+        for fact in facts:
+            try:
+                mid = memorize.add_raw(fact, user_id=uid, pinned=False)
+                if mid:
+                    facts_written += 1
+                    batch_mem_ids.append(str(mid))
+            except Exception as e:
+                log.debug("EMC-4 add_raw failed: %s", e)
+                batch_success = False
+
+        # Only mark distilled if all facts were written successfully
+        if batch_success:
+            ids = [c["id"] for c in batch]
+            _mark_distilled(store, ids, distilled_into=batch_mem_ids)
+            distilled_ids.extend(ids)
+
+    result["distilled_episodes"] = len(distilled_ids)
+    result["facts_written"] = facts_written
+    log.info(
+        "EMC-4 distill candidates=%d episodes=%d facts=%d dry_run=%s",
+        result["candidates"],
+        result["distilled_episodes"],
+        facts_written,
+        dry_run,
+    )
+    return result
+
+
+def attach_dream_hook() -> None:
+    """Wrap AikoMemorize.dream to run EMC distill after SM consolidation."""
+    from cognition.memory.memorize import AikoMemorize
+
+    if getattr(AikoMemorize, "_emc4_dream_patched", False):
+        return
+
+    _orig = AikoMemorize.dream
+
+    def dream(self, user_id=None, dry_run=False, threshold=None, **kwargs):
+        if threshold is None:
+            threshold = DREAM_MERGE_THRESHOLD
+        result = _orig(self, user_id=user_id, dry_run=dry_run, threshold=threshold, **kwargs)
+        try:
+            emc = distill_episodes(self, user_id=user_id, dry_run=dry_run)
+            if isinstance(result, dict):
+                result["emc_distill"] = emc
+        except Exception as e:
+            log.warning("EMC-4 distill after dream failed: %s", e)
+            if isinstance(result, dict):
+                result["emc_distill_error"] = str(e)
+        return result
+
+    AikoMemorize.dream = dream  # type: ignore[method-assign]
+    AikoMemorize._emc4_dream_patched = True  # type: ignore[attr-defined]
+    log.debug("EMC-4 dream hook attached")

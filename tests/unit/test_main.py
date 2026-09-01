@@ -28,6 +28,7 @@ class TestParseArgs:
         assert ns.text is False
         assert ns.no_asr is False
         assert ns.debug is False
+        assert ns.trace is False
         assert ns.cli is False
         assert ns.clear_mem is False
         assert ns.logout is False
@@ -44,6 +45,19 @@ class TestParseArgs:
         ns = parse_args()
         assert ns.cli is True
         assert ns.debug is True
+        assert ns.trace is False
+
+    def test_trace_alone(self, monkeypatch):
+        monkeypatch.setattr(sys, "argv", _argv("--trace"))
+        ns = parse_args()
+        assert ns.trace is True
+        assert ns.debug is False
+
+    def test_debug_and_trace_independent(self, monkeypatch):
+        monkeypatch.setattr(sys, "argv", _argv("--debug", "--trace"))
+        ns = parse_args()
+        assert ns.debug is True
+        assert ns.trace is True
 
     def test_name_requires_cli(self, monkeypatch):
         monkeypatch.setattr(sys, "argv", _argv("--name", "Bob"))

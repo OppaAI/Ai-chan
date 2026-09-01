@@ -25,9 +25,8 @@ def apply_emc2_hooks() -> None:
     if _WIRED:
         return
     try:
-        from cognition.memory.episode_recall import attach_recall_to_store
+        from cognition.memory.episode import attach_recall_to_store, attach_dream_hook
         attach_recall_to_store()
-        from cognition.memory.episode_dream import attach_dream_hook
         attach_dream_hook()
         _patch_memorize()
         _WIRED = True
@@ -146,7 +145,7 @@ def _patch_memorize() -> None:
                 return em_block
 
             try:
-                from cognition.memory.episode_recall import EMC_JOINT_BUDGET
+                from cognition.memory.episode import EMC_JOINT_BUDGET
                 from cognition.memory.schema import MEMORY_CONTEXT_TOTAL_CHARS
             except Exception:
                 return f"{sm_block}\n\n{em_block}"
@@ -156,7 +155,7 @@ def _patch_memorize() -> None:
 
             shared = int(MEMORY_CONTEXT_TOTAL_CHARS)
             if len(em_block) > shared:
-                from cognition.memory.episode_recall import EMC_RECALL_LIMIT
+                from cognition.memory.episode import EMC_RECALL_LIMIT
                 store = self._get_episode_store()
                 if store is not None:
                     hits = store.search(query or "", limit=EMC_RECALL_LIMIT, user_id=self.get_user_id(), query_vector=query_vector)
@@ -173,8 +172,8 @@ def _patch_memorize() -> None:
             return f"{sm_block}\n\n{em_block}"
 
         def _format_episodes_for_context(self, query: str, query_vector=None) -> str | None:
-            from cognition.memory.episode import EMC_ENABLED
-            from cognition.memory.episode_recall import (
+            from cognition.memory.episode import (
+                EMC_ENABLED,
                 EMC_RECALL_ENABLED,
                 EMC_RECALL_LIMIT,
             )
