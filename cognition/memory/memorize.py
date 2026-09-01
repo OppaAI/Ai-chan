@@ -1368,7 +1368,7 @@ class _MemoryBackend:
         _session_mean = None
         _session_vecs: dict = {}
         try:
-            from cognition.memory.session_anchor import (
+            from cognition.memory.entity import (
                 MEMORY_SESSION_ANCHOR_ENABLED,
                 MEMORY_SESSION_ANCHOR_WEIGHT,
                 load_memory_vectors,
@@ -1571,7 +1571,7 @@ class _MemoryBackend:
             return self._search_inner(query, user_id, limit, vector, include_history, ctx)
         # Phase 17: record query embedding for session dynamic anchor
         try:
-            from cognition.memory.session_anchor import push_query_vector
+            from cognition.memory.entity import push_query_vector
             push_query_vector(user_id, vector)
         except Exception:
             pass
@@ -1750,7 +1750,7 @@ class _MemoryBackend:
             ctx.add_extra(vector_embedded_here=False, dims=len(vector))
         # Phase 17: record query embedding for session dynamic anchor
         try:
-            from cognition.memory.session_anchor import push_query_vector
+            from cognition.memory.entity import push_query_vector
             push_query_vector(user_id, vector)
         except Exception:
             pass

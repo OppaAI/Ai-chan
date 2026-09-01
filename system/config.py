@@ -63,7 +63,7 @@ except ImportError:  # pragma: no cover - optional dependency fallback
 _LOADED = False
 _load_lock = threading.Lock()
 
-__all__ = ["load_config", "load_yaml"]        # external API — internal defs keep leading _
+__all__ = ["load_config", "load_yaml", "env_flag", "env_bool", "env_int", "env_float", "env_str"]
 
 # Timeout for the `age` decrypt subprocess. If the binary hangs (bad
 # identity file, unexpected passphrase prompt, etc.) this turns a silent
@@ -293,3 +293,43 @@ def load_config(*, override: bool = False) -> None:
                         os.environ[key] = value
 
         _LOADED = True
+
+
+# ── env-var parsing helpers ──────────────────────────────────────────────────
+# Lightweight, dependency-free typed accessors for tunables defined in
+# config/*.yaml. Two flavors of bool parsing are kept because the codebase
+# historically disagreed and refactoring every callsite's semantics would be
+# a behavior change:
+#   * env_flag  — off only when 0/false/no/off/empty (the "grasp" convention)
+#   * env_bool  — on only for 1/true/yes/on (the "schema" / strict convention)
+
+
+def env_flag(name: str, default: str = "1") -> bool:
+    """Conservative flag: off only when the var is 0/false/no/off/empty."""
+    return str(os.getenv(name, default)).strip().lower() not in (
+        "0", "false", "no", "off", "",
+    )
+
+
+def env_bool(name: str, default: str = "1") -> bool:
+    """Whitelist flag: True only for 1/true/yes/on."""
+    return os.getenv(name, default).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def env_int(name: str, default: int) -> int:
+    try:
+        return int(os.getenv(name, str(default)))
+    except (TypeError, ValueError):
+        return default
+
+
+def env_float(name: str, default: float) -> float:
+    try:
+        return float(os.getenv(name, str(default)))
+    except (TypeError, ValueError):
+        return default
+
+
+def env_str(name: str, default: str) -> str:
+    v = os.getenv(name)
+    return default if v is None or str(v).strip() == "" else str(v).strip()
