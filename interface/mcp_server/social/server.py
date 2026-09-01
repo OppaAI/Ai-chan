@@ -17,14 +17,14 @@ from system.config import load_config
 load_config()
 
 from system.log import get_logger
-from mcp.server.fastmcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 
 log = get_logger(__name__)
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 # Initialize MCP server for stdio transport (no HTTP binding)
-mcp = FastMCP("Aiko Social MCP Server")
+mcp = MCPServer("Aiko Social MCP Server")
 
 
 # ── Apply middleware (rate limiting, audit logging) ────────────────────────

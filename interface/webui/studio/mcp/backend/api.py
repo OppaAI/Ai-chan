@@ -63,8 +63,8 @@ def _get_mcp_servers() -> list[dict]:
                     )
                     if port_match:
                         server_info["port"] = int(port_match.group(1))
-                    # FastMCP("Aiko Social MCP Server", ...)
-                    title_match = re.search(r'FastMCP\s*\(\s*["\']([^"\']+)["\']', content)
+                    # MCPServer("Aiko Social MCP Server", ...)
+                    title_match = re.search(r'MCPServer\s*\(\s*["\']([^"\']+)["\']', content)
                     if title_match:
                         server_info["description"] = title_match.group(1)
                 except Exception:
