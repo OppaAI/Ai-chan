@@ -2318,10 +2318,13 @@ class AikoMemorize:
             # the *new* user's connection mid-write). Bail out rather than risk
             # cross-user data corruption; the caller can retry the switch once
             # the write actually finishes.
-            if not self.wait_for_writes(timeout=5.0):
+            # Use MEMORY_WRITE_MAX_WAIT + buffer since the write worker may wait
+            # for an idle window up to that long before processing queued writes.
+            switch_timeout = MEMORY_WRITE_MAX_WAIT + 10.0
+            if not self.wait_for_writes(timeout=switch_timeout):
                 log.error(
                     f"switch_user({user_id!r}): pending write(s) did not finish "
-                    "within 5s — aborting user switch to avoid writing to the "
+                    f"within {switch_timeout:.0f}s — aborting user switch to avoid writing to the "
                     "wrong connection. Try again shortly."
                 )
                 return
@@ -2588,7 +2591,7 @@ class AikoMemorize:
                                inputs={"query": query, "limit": limit,
                                        "user_id": user_id,
                                        "vector_supplied": query_vector is not None}) as ctx:
-            return self._search_top(query, user_id, limit, query_vector, include_history, ctx)
+            return self._mem._search_top(query, user_id, limit, query_vector, include_history, ctx)
 
     # ── L2 scene expansion ─────────────────────────────────────────────────────
     # After RRF returns a set, re-link episode structure so yes the scene row
