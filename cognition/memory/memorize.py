@@ -2232,6 +2232,15 @@ class AikoMemorize:
         self._persona_lock = threading.RLock()
         self._persona_cache_at: float = 0.0
         self._persona_cached: str | None = None
+        # Episodic-memory (EMC) facade. Owns the per-user EpisodicStore cache
+        # and exposes queue_episode / episodic-recall helpers as proper methods
+        # on this class (previously monkey-patched on at boot).
+        try:
+            from cognition.memory.episode import EpisodicMemory
+            self.episodic: EpisodicMemory | None = EpisodicMemory(self)
+        except Exception as e:
+            log.debug("EpisodicMemory init failed: %s", e)
+            self.episodic = None
         if not silent:
             log.info("Ready.")
 
@@ -2329,6 +2338,12 @@ class AikoMemorize:
                 )
                 return
 
+            # Flush + close any per-user episode stores so no in-flight
+            # episode DB write bleeds into the new user's connection. The
+            # facade is the single owner of that store cache now.
+            if self.episodic is not None:
+                self.episodic.close_all()
+
             self._user_id_override = user_id
             self._display_name = None
             if self._mem_backend is not None:
@@ -2365,6 +2380,33 @@ class AikoMemorize:
     def get_display_name(self) -> str:
         """Return the display name for this user, or fall back to user_id."""
         return self._display_name or self.get_user_id()
+
+    # ── episodic memory (EMC) integration ─────────────────────────────────────
+    # Episodic ingest and recall used to be monkey-patched onto AikoMemorize
+    # at boot from a separate wire-up module. With the EpisodicMemory facade
+    # they are proper methods: queue_episode is called from
+    # AikoThink._store_async and _format_episodes_for_context is called from
+    # format_for_context below.
+
+    def queue_episode(
+        self,
+        user_input: str,
+        response_text: str,
+        cognitive_state: dict | None = None,
+        user_id: str | None = None,
+    ) -> None:
+        """Stage one conversation turn into the episodic buffer (EMC-2)."""
+        if self.episodic is not None:
+            self.episodic.queue_episode(
+                user_input, response_text,
+                cognitive_state=cognitive_state, user_id=user_id,
+            )
+
+    def _format_episodes_for_context(self, query: str, query_vector=None) -> str | None:
+        """Render the <episodic_context> block, or None if disabled / no hits."""
+        if self.episodic is None:
+            return None
+        return self.episodic.format_for_context(query, query_vector)
 
     def _resolve_user_id(self, user_id: str | None = None) -> str:
         """Resolve the effective user_id for this call.
@@ -3074,7 +3116,53 @@ class AikoMemorize:
                 f"supersession_narrative cap={MEMORY_SUPERSESSION_NARRATIVE_MAX}",
             ],
         )
-        return block
+
+        # Append the episodic-memory block (EMC-3) if available. Joint
+        # budget: when EMC_JOINT_BUDGET is on, both blocks share the SM
+        # total-char budget and the SM block is trimmed to make room.
+        try:
+            from cognition.memory.episode import EMC_JOINT_BUDGET
+        except Exception:
+            EMC_JOINT_BUDGET = False
+        try:
+            em_block = self._format_episodes_for_context(query or "", query_vector)
+        except Exception as e:
+            log.debug("EMC format_episodes skipped: %s", e)
+            em_block = None
+        if not em_block:
+            return block
+        if not block:
+            return em_block
+        if not EMC_JOINT_BUDGET:
+            return f"{block}\n\n{em_block}"
+
+        shared = int(MEMORY_CONTEXT_TOTAL_CHARS)
+        # If episodic block alone exceeds the shared budget, re-render
+        # with a tighter cap so the SM block still has room.
+        if len(em_block) > shared:
+            try:
+                from cognition.memory.episode import EMC_RECALL_LIMIT
+                store = self.episodic.get_store() if self.episodic is not None else None
+                if store is not None:
+                    hits = store.search(
+                        query or "",
+                        limit=EMC_RECALL_LIMIT,
+                        user_id=self.get_user_id(),
+                        query_vector=query_vector,
+                    )
+                    em_block = store.format_for_context(hits, max_chars=shared) or em_block
+            except Exception as exc:
+                log.debug("EMC joint-budget trim failed: %s", exc)
+        em_len = len(em_block)
+        sm_budget = shared - em_len - 2
+        if len(block) > sm_budget:
+            sm_closing = "\n</memory_context>"
+            cut = sm_budget - len(sm_closing) if "</memory_context>" in block else sm_budget
+            sm_trim = block[:cut]
+            if "</memory_context>" in block and "</memory_context>" not in sm_trim:
+                sm_trim = sm_trim.rstrip() + sm_closing
+            block = sm_trim
+        return f"{block}\n\n{em_block}"
 
     # ── dream pass ────────────────────────────────────────────────────────────
 

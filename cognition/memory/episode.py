@@ -176,13 +176,6 @@ def ensure_episode_schema(conn: sqlite3.Connection) -> list[str]:
         ensure_vec0_cosine_metric(conn)
     except Exception as e:
         log.debug("emc_vec metric migration: %s", e)
-    # EMC-2: install turn-ingest hooks (idempotent, best-effort)
-    try:
-        from cognition.memory.emc2_wire import apply_emc2_hooks
-        apply_emc2_hooks()
-        actions.append("emc2_hooks")
-    except Exception as e:
-        log.debug("emc2 hooks: %s", e)
     return actions
 
 
@@ -1037,6 +1030,135 @@ class EpisodicStore:
                 pass
 
 
+# ── EpisodicMemory: per-AikoMemorize integration facade ──────────────────────
+# Owns the per-user EpisodicStore cache and exposes the methods AikoMemorize
+# needs: queue_episode, _format_episodes_for_context, and lifecycle hooks
+# for switch_user. Previously these were monkey-patched onto AikoMemorize at
+# boot from a separate emc2_wire module — moving them onto a real class
+# makes the relationship explicit, removes the runtime patch dance, and
+# makes the integration testable in isolation.
+
+
+class EpisodicMemory:
+    """
+    Per-AikoMemorize facade for the EMC episodic store.
+
+    AikoMemorize holds one of these and delegates episodic ingest + recall
+    to it. The facade owns the per-user store cache (lazy, one per user_id)
+    so a single AikoMemorize process can serve multiple users in sequence
+    without leaking connections across switches.
+    """
+
+    def __init__(self, memorize) -> None:
+        # memorize is an AikoMemorize; we keep a back-ref so we can reach
+        # its embedder, user_id resolver, and shared contextvar defaults
+        # without copying them.
+        self._memorize = memorize
+        self._stores: dict[str, EpisodicStore] = {}
+        self._lock = threading.RLock()
+
+    def get_store(self, user_id: str | None = None) -> EpisodicStore | None:
+        """Return (lazily creating) the EpisodicStore for a user. None if EMC is off."""
+        if not EMC_ENABLED:
+            return None
+        uid = user_id or self._memorize.get_user_id()
+        with self._lock:
+            store = self._stores.get(uid)
+            if store is not None:
+                return store
+            try:
+                from cognition.memory.schema import _memory_db_path_for_user
+                store = EpisodicStore(
+                    _memory_db_path_for_user(uid),
+                    user_id=uid,
+                    embedder=self._memorize._mem._embedder,
+                )
+            except Exception as e:
+                log.debug("episode store init failed: %s", e)
+                return None
+            self._stores[uid] = store
+            return store
+
+    def queue_episode(
+        self,
+        user_input: str,
+        response_text: str,
+        cognitive_state: dict | None = None,
+        user_id: str | None = None,
+    ) -> None:
+        """EMC-2: accept one conversation turn pair into the episodic buffer.
+
+        Used by AikoThink._store_async; safe to call before any user is
+        bound (no-op when EMC is disabled or the store can't be opened).
+        """
+        try:
+            uid = self._memorize._resolve_user_id(user_id)
+            store = self.get_store(user_id=uid)
+            if store is None:
+                return
+            store.ingest_turn(
+                user_input, response_text,
+                user_id=uid, cognitive_state=cognitive_state,
+            )
+        except Exception as e:
+            log.debug("queue_episode skipped: %s", e)
+
+    def format_for_context(self, query: str, query_vector=None) -> str | None:
+        """Render the <episodic_context> block for the current query, or None.
+
+        Returns None when EMC is disabled, recall is disabled, the query is
+        empty, the store can't be opened, or there are no hits. The caller
+        (AikoMemorize.format_for_context) decides how to budget this block
+        against the SM block.
+        """
+        if not EMC_ENABLED or not EMC_RECALL_ENABLED or EMC_RECALL_LIMIT <= 0:
+            return None
+        if not (query or "").strip():
+            return None
+        store = self.get_store()
+        if store is None:
+            return None
+        try:
+            hits = store.search(
+                query,
+                limit=EMC_RECALL_LIMIT,
+                user_id=self._memorize.get_user_id(),
+                query_vector=query_vector,
+            )
+        except Exception as e:
+            log.debug("EMC format_for_context search failed: %s", e)
+            return None
+        if not hits:
+            return None
+        return store.format_for_context(hits)
+
+    def close_all(self) -> None:
+        """Flush + close every cached store. Called from AikoMemorize.switch_user."""
+        with self._lock:
+            for store in list(self._stores.values()):
+                try:
+                    store.flush_all()
+                except Exception:
+                    log.debug("episode store flush on switch_user failed")
+                try:
+                    store.close()
+                except Exception:
+                    log.debug("episode store close on switch_user failed")
+            self._stores.clear()
+
+    def close_one(self) -> None:
+        """Close the singleton _episode_store (legacy single-store path)."""
+        legacy = getattr(self._memorize, "_episode_store", None)
+        if legacy is None:
+            return
+        try:
+            legacy.flush_all()
+            legacy.close()
+        except Exception:
+            log.debug("legacy episode store flush/close failed")
+        self._memorize._episode_store = None
+
+
 # ── EMC-3: backward-compat attach (idempotent) ───────────────────────────────
 # Previously episode_recall.py monkey-patched search/format_for_context onto
 # EpisodicStore at boot. With the merge they're already methods, but callers
@@ -1204,7 +1326,12 @@ def distill_episodes(
     uid = user_id or memorize.get_user_id()
     store = None
     try:
-        store = memorize._get_episode_store(uid)
+        if hasattr(memorize, "episodic") and memorize.episodic is not None:
+            store = memorize.episodic.get_store(uid)
+        else:
+            # Fallback for callers that don't yet have the EpisodicMemory
+            # facade (e.g. legacy tests using a stripped-down AikoMemorize).
+            store = memorize._get_episode_store(uid)
     except Exception as e:
         log.debug("EMC-4 no episode store: %s", e)
         return result
