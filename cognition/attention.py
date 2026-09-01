@@ -23,7 +23,7 @@ import time
 from collections import OrderedDict, deque
 from dataclasses import dataclass
 
-from cognition.memory.env import env_bool, env_flag, env_int
+from system.config import env_bool, env_flag, env_int
 try:
     _brain_trace = importlib.import_module("system.brain_trace")
 except Exception:

@@ -22,7 +22,7 @@ from typing import Any, Deque, Iterable
 from collections import defaultdict, deque
 
 from .schema import KIND_FACT, _WS_RE, ensure_phase_a_schema, existing_columns
-from .env import env_flag, env_float, env_int
+from system.config import env_flag, env_float, env_int
 
 
 from system.log import get_logger

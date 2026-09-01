@@ -15,8 +15,8 @@ from __future__ import annotations
 import html
 from typing import Any
 
+from system.config import env_bool, env_int
 from system.log import get_logger
-from .env import env_bool, env_int
 
 log = get_logger(__name__)
 

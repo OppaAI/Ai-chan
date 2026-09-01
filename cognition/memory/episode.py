@@ -43,6 +43,7 @@ from typing import Any
 
 import sqlite_vec
 
+from system.config import env_bool, env_float, env_int
 from system.log import get_logger
 from system.userspace import current_user_id
 try:
@@ -50,7 +51,6 @@ try:
 except Exception:
     _brain_trace = None
 from cognition.memory.vecstore import HarrierEmbedder, initialize_store_db
-from cognition.memory.env import env_bool, env_int, env_float
 from cognition.memory.vecstore import KNN_MATCH_K_MIN, KNN_MATCH_OVERSCAN
 from cognition.memory.search import _sanitize_fts_query
 from cognition.memory.lifecycle import DREAM_MERGE_THRESHOLD
