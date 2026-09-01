@@ -52,13 +52,23 @@ GRAPH_AGENT_PLAYBOOK: "agentic/playbook.json"  # Per-user JSON file for practice
 GRAPH_MAX_WORKERS: "4"  # Max parallel tool nodes for graph execution.
 AGENT_INCLUDE_EXPERIENCE_CONTEXT: "0"  # Experience is now used for offline playbook promotion, not prompt context, by default.
 
-# -- Optional Needle 2 multi-worker ReAct backend --
-# Set AGENT_REACT_BACKEND=needle_multi and configure one isolated Needle
-# endpoint per worker. Each worker must have a least-privilege allowed_tools
-# list; calls are still validated and executed by Aiko's normal ReAct policy.
+# -- Optional Needle 2 ReAct backend --
+# openai = main chat LLM picks tools (default).
+# needle = one local Needle 2 server proposes tools for novel ReAct turns.
+# needle_multi = fan-out to isolated Needle workers in NEEDLE_WORKERS.
+# Graph/playbook workflows stay deterministic. Low-confidence or unavailable
+# Needle responses fall back to the configured main LLM. Needle never executes
+# tools; Aiko still validates, approves, and runs every call.
+# Export the catalogue with: uv run python scripts/export_needle_tools.py needle-tools.json
+# Then start Needle: needle --tools needle-tools.json --serve
+AGENT_REACT_BACKEND: "openai"  # openai | needle | needle_multi. Flip to needle after the local Needle server is up.
+NEEDLE_BASE_URL: "http://127.0.0.1:8082"  # Single-worker Needle 2 POST /complete server.
+NEEDLE_CONFIDENCE_THRESHOLD: "0.85"  # Below this, escalate the ReAct turn to the main LLM. Range 0.0-1.0.
+NEEDLE_TIMEOUT: "15"  # Seconds before a Needle /complete request is treated as unavailable.
+NEEDLE_MAX_WORKERS: "4"  # Cap on NEEDLE_WORKERS length for needle_multi.
+# Each worker needs id, role, base_url, and a non-empty allowed_tools list.
 # Example: [{"id":"research","role":"researcher","base_url":"http://127.0.0.1:8082","allowed_tools":["adaptive_search","deep_read"]}]
-NEEDLE_WORKERS: ""
-NEEDLE_MAX_WORKERS: "4"
+NEEDLE_WORKERS: ""  # JSON array of NeedleWorkerSpec objects. Empty disables multi-worker.
 
 # -- Agent loop limits --
 MAX_AGENT_ITER: "6"  # Maximum tool/planning iterations per task; raise for complex tasks, lower for safety.
@@ -130,7 +140,7 @@ DEEP_RESEARCH_DECISION_MAX_TOKENS: "200"  # Token budget for the continue/refine
 DEEP_RESEARCH_SYNTHESIS_MAX_TOKENS: "1500"  # Token budget for the final synthesis call. Raised from 700 so the LLM can produce a real synthesized article rather than a dump of URL snippets.
 
 # -- in-memory evidence condensation (embedding-based relevance filtering) --
-CONDENSE_CHUNK_CHARS: "500"  # Chunk size (chars) fetched pages are split into before scoring. Shared by _deep_search_impl and deep_research.
+CONDENSE_CHUNK_CHARS: "500"  # Chunk size (chars) fetched pages are split into before relevance scoring. Shared by _deep_search_impl and deep_research.
 CONDENSE_TOP_K: "8"  # Max relevant chunks kept in _deep_search_impl's condensed bundle.
 CONDENSE_MIN_SCORE: "0.15"  # Minimum relevance score to keep a chunk in _deep_search_impl's condensed bundle. Below this, content is dropped, not truncated-and-kept.
 CONDENSE_MAX_CHUNKS_TO_SCORE: "30"  # Caps embedding latency for _deep_search_impl regardless of total fetched volume. Lower on Jetson if embedding calls stack up (~200ms each per your harrier embedder benchmarks — 30 chunks ≈ 6s worst case).
