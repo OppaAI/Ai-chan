@@ -2,7 +2,7 @@
 #
 # Non-secret runtime settings for social, messenger, and media adapters.
 # Secrets (tokens, keys, passwords) live in .env / .env.age.
-# Identity handles live in .env only (THREADS_USERNAME, BLUESKY_HANDLE).
+# Identity handles live in .env only (THREADS_USERNAME, BLUESKY_HANDLE, TWITTER_USERNAME).
 # AI name for "Hi {AI_NAME}" comes from config/system.yaml AI_NAME.
 # Owner display name is read from <USER_SPACE_ROOT>/<user_id>/profile/USER.md.
 
@@ -17,11 +17,22 @@ WEEKLY_SOCIAL_MAX_CHARS: "260"  # Max characters for weekly post content.
 SOCIAL_ROOT: ""  # Override path for social output directory. Defaults to <USER_SPACE_ROOT>/<user_id>/social/.
 WEEKLY_SOCIAL_IMAGE_URL: ""  # Optional image URL to attach to weekly posts.
 
-# -- X (Twitter) relay metadata --
-X_POLLING_ENABLED: "0"  # Enable automatic polling for mentions/replies (0=disabled, 1=enabled).
-X_POLLING_INTERVAL_SECONDS: "300"  # How often to poll for new mentions in seconds.
-X_POLL_BATCH_SIZE: "20"  # Number of mentions to fetch per poll.
-X_REPLY_LOG_DIR: "logs/x"  # Directory where X reply logs are stored (JSONL format).
+# -- X (Twitter) two-way reply monitor (twitterapi.io) --
+# Secrets in .env: TWITTERAPI_KEY, TWITTER_USERNAME, TWITTER_LOGIN_COOKIES, TWITTER_PROXY.
+# Reads: GET /twitter/user/mentions + last_tweets + tweet/replies (API key only).
+# Writes: POST /twitter/create_tweet_v2 (login_cookies + proxy required).
+# Trigger: Hi {AI_NAME} (system.yaml) or @{TWITTER_USERNAME}.
+X_POLLING_ENABLED: "0"  # Master enable for X reply polling (0 until credentials are set).
+X_POLLING_INTERVAL_SECONDS: "300"  # 5 minutes — higher than Threads to control twitterapi.io credits.
+X_POLL_BATCH_SIZE: "20"  # Mentions per poll page (API returns 20/page).
+X_OWN_POSTS_SCAN_LIMIT: "8"  # Max recent original tweets to scan for Hi {AI_NAME} replies.
+X_OWN_POST_REPLIES_ENABLED: "1"  # Also poll replies on own posts (not only global mentions).
+X_REPLY_LOG_DIR: "logs/x"  # JSONL reply archive directory.
+X_REPLY_BEEP_ENABLED: "1"  # Local beep once per cycle with a trigger match.
+X_RECALL_ENABLED: "1"  # Recall up to 3 memories into reply prompts (private).
+X_INTERACTION_MEMORY_ENABLED: "1"  # Memorize triggered exchanges from the owner account.
+# X_MONITOR_DAEMON_ENABLED: .env only (default "1"). Set "0" to stop X daemon even if polling is on.
+# X_REPLY_TRIGGER: optional .env override for the phrase (default Hi {AI_NAME}).
 
 # -- Threads metadata --
 THREADS_ACCESS_TOKEN_EXPIRES_AT: ""  # Expiration timestamp for Threads access token (auto-managed; manual override only).
