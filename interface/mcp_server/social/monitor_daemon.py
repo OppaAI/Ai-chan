@@ -1,7 +1,7 @@
 """
 interface/mcp_server/social/monitor_daemon.py
 
-Login-independent social reply monitor daemons (Threads + Bluesky).
+Login-independent social reply monitor daemons (Threads + Bluesky + Mastodon + X).
 
 Starts background daemon threads that poll monitor_*_replies() at a fixed
 interval, completely independent of the WebUI login gate.
@@ -28,6 +28,7 @@ from system.log import get_logger
 log = get_logger(__name__)
 
 _DEFAULT_INTERVAL = 180  # seconds — same default as scheduler job
+_DEFAULT_X_INTERVAL = 300  # 5 minutes — twitterapi.io credit cost control
 
 # ── unified poller ────────────────────────────────────────────────────────────
 # One background thread polls BOTH platforms sequentially, each on its own
@@ -231,6 +232,21 @@ def _poll_mastodon() -> None:
         log.warning("[mastodon_daemon] %d error(s): %s", len(errors), errors[:3])
 
 
+def _poll_x() -> None:
+    from interface.mcp_server.social.services.x import monitor_x_replies
+
+    result = monitor_x_replies(memorize=_bound_memorize())
+    if result.get("polling_disabled"):
+        return
+    answered = result.get("answered", 0)
+    matched = result.get("matched", 0)
+    errors = result.get("errors", [])
+    if answered:
+        log.info("[x_daemon] Answered %d / %d matched replies", answered, matched)
+    if errors:
+        log.warning("[x_daemon] %d error(s): %s", len(errors), errors[:3])
+
+
 def _social_loop() -> None:
     """Single-thread poller: each registered platform fires on its own due time.
 
@@ -292,15 +308,17 @@ def start_social_monitor_daemon(interval_seconds: int | None = None, only: str |
     live thread instead of skipping. Env enable-checks and credential gates
     behave exactly like the old separate daemons.
     """
-    def _interval(env_key: str, label: str) -> int:
+    def _interval(env_key: str, label: str, default: int | None = None) -> int:
+        floor = 30 if label != "x" else 60
+        base = default if default is not None else _DEFAULT_INTERVAL
         try:
-            return max(30, int(os.getenv(env_key, str(_DEFAULT_INTERVAL))))
+            return max(floor, int(os.getenv(env_key, str(base))))
         except ValueError:
             log.warning(
                 "[%s_daemon] Invalid %s=%r, using default %ds",
-                label, env_key, os.getenv(env_key), _DEFAULT_INTERVAL,
+                label, env_key, os.getenv(env_key), base,
             )
-            return _DEFAULT_INTERVAL
+            return base
 
     # Explicit interval_seconds (legacy wrappers/tests) wins over env default.
     # Honored as-is (old daemons allowed sub-60s values); only the env-derived
@@ -341,6 +359,33 @@ def start_social_monitor_daemon(interval_seconds: int | None = None, only: str |
             )
         else:
             candidates.append(("mastodon", explicit or _interval("MASTODON_REPLY_MONITOR_INTERVAL_SECONDS", "mastodon"), _poll_mastodon))
+
+    if only in (None, "x"):
+        # X defaults OFF until credentials + explicit enable (credit spend).
+        x_enabled = os.getenv("X_POLLING_ENABLED", "0").strip().lower() in {"1", "true", "yes", "on"}
+        daemon_off = os.getenv("X_MONITOR_DAEMON_ENABLED", "1").strip().lower() in {"0", "false", "no", "off"}
+        if daemon_off:
+            log.info("[x_daemon] Disabled via X_MONITOR_DAEMON_ENABLED=0, skipping")
+        elif not x_enabled:
+            log.info("[x_daemon] X_POLLING_ENABLED not set — X monitor daemon will not start")
+        elif not os.getenv("TWITTERAPI_KEY") or not os.getenv("TWITTER_USERNAME"):
+            log.info(
+                "[x_daemon] TWITTERAPI_KEY or TWITTER_USERNAME not set — "
+                "X monitor daemon will not start"
+            )
+        else:
+            candidates.append(
+                (
+                    "x",
+                    explicit
+                    or _interval(
+                        "X_POLLING_INTERVAL_SECONDS",
+                        "x",
+                        default=_DEFAULT_X_INTERVAL,
+                    ),
+                    _poll_x,
+                )
+            )
 
     if not candidates:
         return None
@@ -404,5 +449,15 @@ def start_mastodon_monitor_daemon(interval_seconds: int | None = None) -> thread
 
 
 def stop_mastodon_monitor_daemon() -> None:
+    """Deprecated: prefer stop_social_monitor_daemon()."""
+    stop_social_monitor_daemon()
+
+
+def start_x_monitor_daemon(interval_seconds: int | None = None) -> threading.Thread | None:
+    """Deprecated: prefer start_social_monitor_daemon()."""
+    return start_social_monitor_daemon(interval_seconds=interval_seconds, only="x")
+
+
+def stop_x_monitor_daemon() -> None:
     """Deprecated: prefer stop_social_monitor_daemon()."""
     stop_social_monitor_daemon()
