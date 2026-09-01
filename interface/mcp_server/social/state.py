@@ -162,6 +162,18 @@ class MCPDatabase:
                 worker_id TEXT
             );
 
+            CREATE TABLE IF NOT EXISTS x_processed_replies (
+                reply_id TEXT PRIMARY KEY,
+                post_id TEXT NOT NULL,
+                processed_at REAL NOT NULL,
+                response_id TEXT
+            );
+
+            CREATE TABLE IF NOT EXISTS x_logged_replies (
+                reply_id TEXT PRIMARY KEY,
+                logged_at REAL NOT NULL
+            );
+
             CREATE TABLE IF NOT EXISTS tool_log (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 tool TEXT NOT NULL,
@@ -466,6 +478,45 @@ class MCPDatabase:
         self._conn.execute(
             "DELETE FROM mastodon_reply_claims WHERE status = ? AND claimed_at < ?",
             ("in_progress", cutoff),
+        )
+        self._commit()
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # X/Twitter Methods
+    # ─────────────────────────────────────────────────────────────────────────
+
+    def has_processed_x_reply(self, reply_id: str) -> bool:
+        """Check if we've already replied to this X mention."""
+        row = self._conn.execute(
+            "SELECT 1 FROM x_processed_replies WHERE reply_id = ?",
+            (str(reply_id),),
+        ).fetchone()
+        return row is not None
+
+    def mark_processed_x_reply(
+        self, reply_id: str, post_id: str = "", response_id: str | None = None
+    ) -> None:
+        """Mark an X mention as replied to (prevent duplicate replies)."""
+        self._conn.execute(
+            "INSERT OR IGNORE INTO x_processed_replies "
+            "(reply_id, post_id, processed_at, response_id) VALUES (?, ?, ?, ?)",
+            (str(reply_id), str(post_id), time.time(), response_id),
+        )
+        self._commit()
+
+    def has_logged_x_reply(self, reply_id: str) -> bool:
+        """Check if we've logged this X mention already."""
+        row = self._conn.execute(
+            "SELECT 1 FROM x_logged_replies WHERE reply_id = ?",
+            (str(reply_id),),
+        ).fetchone()
+        return row is not None
+
+    def mark_logged_x_reply(self, reply_id: str) -> None:
+        """Mark an X mention as logged (prevents duplicate log entries)."""
+        self._conn.execute(
+            "INSERT OR IGNORE INTO x_logged_replies (reply_id, logged_at) VALUES (?, ?)",
+            (str(reply_id), time.time()),
         )
         self._commit()
 
