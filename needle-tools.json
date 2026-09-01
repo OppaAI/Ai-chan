@@ -1,0 +1,934 @@
+[
+  {
+    "name": "list_skillsets",
+    "description": "List Aiko's predefined local workflow skillsets.",
+    "parameters": {
+      "type": "object",
+      "properties": {}
+    }
+  },
+  {
+    "name": "search_skillsets",
+    "description": "Search Aiko's predefined workflow skillsets by task/query.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "query": {
+          "type": "string"
+        },
+        "limit": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "query"
+      ]
+    }
+  },
+  {
+    "name": "load_skillset",
+    "description": "Load the full markdown instructions for one predefined skillset by id.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "skill_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "skill_id"
+      ]
+    }
+  },
+  {
+    "name": "list_playbooks",
+    "description": "List graph/playbook workflows available to the model-free graph executor.",
+    "parameters": {
+      "type": "object",
+      "properties": {}
+    }
+  },
+  {
+    "name": "run_playbook",
+    "description": "Run a saved graph/playbook workflow by matching this task prompt. This uses deterministic graph execution, not an LLM planner; if no graph matches, continue with ReAct once and learn the sequence.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "task": {
+          "type": "string",
+          "description": "The task prompt to match against graph playbooks."
+        },
+        "cap_ids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Optional matched capability ids."
+        }
+      },
+      "required": [
+        "task"
+      ]
+    }
+  },
+  {
+    "name": "fetch_from_url",
+    "description": "Download and extract text from any URL. Handles HTML pages, PDFs, DOCX, PPTX, XLSX, EPUB, CSV, XML, ZIP, IPYNB, MSG. Lightweight alternative to deep_read — no JS rendering, no relevance filtering, no Crawl4AI escalation. Use when you have a known URL and want its plain text.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "url": {
+          "type": "string",
+          "description": "The exact URL to fetch and read."
+        },
+        "max_chars": {
+          "type": "integer",
+          "description": "Maximum characters to return (default FETCH_FROM_URL_MAX_CHARS)."
+        }
+      },
+      "required": [
+        "url"
+      ]
+    }
+  },
+  {
+    "name": "adaptive_search",
+    "description": "The default tool for any internet lookup. Adaptively searches, judges if snippets suffice, and only fetches full pages if needed.",
+    "parameters": {
+      "properties": {
+        "query": {
+          "minLength": 1,
+          "title": "Query",
+          "type": "string"
+        }
+      },
+      "required": [
+        "query"
+      ],
+      "title": "ResearchQueryArgs",
+      "type": "object"
+    }
+  },
+  {
+    "name": "deep_read",
+    "description": "Fetch and extract content from one EXACT known URL. Handles HTML pages (with JS-render escalation), PDFs, DOCX, PPTX, XLSX, EPUB, CSV, and more. Use when you already have the specific URL to read — not for discovery (use adaptive_search for that).",
+    "parameters": {
+      "properties": {
+        "url": {
+          "minLength": 1,
+          "title": "Url",
+          "type": "string"
+        },
+        "query": {
+          "default": "",
+          "title": "Query",
+          "type": "string"
+        }
+      },
+      "required": [
+        "url"
+      ],
+      "title": "DeepReadArgs",
+      "type": "object"
+    }
+  },
+  {
+    "name": "deep_research",
+    "description": "Research tool that fetches and synthesizes full source pages from discovered URLs. Use when the research itself is the deliverable or for deep/thorough self-learning.",
+    "parameters": {
+      "properties": {
+        "query": {
+          "minLength": 1,
+          "title": "Query",
+          "type": "string"
+        }
+      },
+      "required": [
+        "query"
+      ],
+      "title": "ResearchQueryArgs",
+      "type": "object"
+    }
+  },
+  {
+    "name": "make_plan",
+    "description": "Make plan.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "goal": {
+          "type": "string"
+        },
+        "constraints": {
+          "type": "string"
+        },
+        "max_steps": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "goal"
+      ]
+    }
+  },
+  {
+    "name": "create_checklist",
+    "description": "Make checklist.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "title": {
+          "type": "string"
+        },
+        "items": {
+          "type": "string",
+          "description": "Newline-separated checklist items."
+        }
+      },
+      "required": [
+        "title",
+        "items"
+      ]
+    }
+  },
+  {
+    "name": "save_note",
+    "description": "Save a note to a workspace file. content MUST be plain text only, under 400 characters. No markdown tables, no bullet lists, no backticks, no quotes. Write a brief plain-text summary only.",
+    "parameters": {
+      "properties": {
+        "title": {
+          "minLength": 1,
+          "title": "Title",
+          "type": "string"
+        },
+        "content": {
+          "minLength": 1,
+          "title": "Content",
+          "type": "string"
+        },
+        "folder": {
+          "default": "notes",
+          "title": "Folder",
+          "type": "string"
+        }
+      },
+      "required": [
+        "title",
+        "content"
+      ],
+      "title": "SaveNoteArgs",
+      "type": "object"
+    }
+  },
+  {
+    "name": "read_workspace_file",
+    "description": "Read workspace file.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "relative_path": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "relative_path"
+      ]
+    }
+  },
+  {
+    "name": "summarize_task_state",
+    "description": "Summarize task state.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "goal": {
+          "type": "string"
+        },
+        "done": {
+          "type": "string"
+        },
+        "next_action": {
+          "type": "string"
+        },
+        "risks": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "goal"
+      ]
+    }
+  },
+  {
+    "name": "schedule_job",
+    "description": "Schedule local job/alarm. HH:MM. Frequencies: once,hourly,daily,weekdays,weekly,biweekly,monthly,custom_weekdays. Supports relative_days for today/tomorrow/day-after-tomorrow offsets.",
+    "parameters": {
+      "properties": {
+        "title": {
+          "minLength": 1,
+          "title": "Title",
+          "type": "string"
+        },
+        "task": {
+          "minLength": 1,
+          "title": "Task",
+          "type": "string"
+        },
+        "time_of_day": {
+          "minLength": 1,
+          "title": "Time Of Day",
+          "type": "string"
+        },
+        "frequency": {
+          "default": "daily",
+          "enum": [
+            "once",
+            "hourly",
+            "daily",
+            "weekdays",
+            "weekly",
+            "biweekly",
+            "monthly",
+            "custom_weekdays"
+          ],
+          "title": "Frequency",
+          "type": "string"
+        },
+        "timezone": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Timezone"
+        },
+        "days_of_week": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Days Of Week"
+        },
+        "action": {
+          "default": "agentic",
+          "enum": [
+            "announce",
+            "agentic",
+            "tool"
+          ],
+          "title": "Action",
+          "type": "string"
+        },
+        "relative_days": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Relative Days"
+        },
+        "tool_call": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Tool Call"
+        },
+        "skill": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Skill"
+        },
+        "user_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "User Id"
+        }
+      },
+      "required": [
+        "title",
+        "task",
+        "time_of_day"
+      ],
+      "title": "ScheduleJobArgs",
+      "type": "object"
+    }
+  },
+  {
+    "name": "list_schedule",
+    "description": "List schedule.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "include_disabled": {
+          "type": "boolean"
+        }
+      }
+    }
+  },
+  {
+    "name": "cancel_schedule",
+    "description": "Cancel schedule item.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "job_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "job_id"
+      ]
+    }
+  },
+  {
+    "name": "schedule_reminder",
+    "description": "Simple once/daily reminder.",
+    "parameters": {
+      "properties": {
+        "title": {
+          "minLength": 1,
+          "title": "Title",
+          "type": "string"
+        },
+        "message": {
+          "minLength": 1,
+          "title": "Message",
+          "type": "string"
+        },
+        "time_of_day": {
+          "minLength": 1,
+          "title": "Time Of Day",
+          "type": "string"
+        },
+        "repeat": {
+          "default": "daily",
+          "enum": [
+            "once",
+            "daily"
+          ],
+          "title": "Repeat",
+          "type": "string"
+        },
+        "timezone": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Timezone"
+        },
+        "user_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "User Id"
+        }
+      },
+      "required": [
+        "title",
+        "message",
+        "time_of_day"
+      ],
+      "title": "ScheduleReminderArgs",
+      "type": "object"
+    }
+  },
+  {
+    "name": "list_reminders",
+    "description": "List reminders.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "include_disabled": {
+          "type": "boolean"
+        }
+      }
+    }
+  },
+  {
+    "name": "cancel_reminder",
+    "description": "Cancel reminder by id.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "reminder_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "reminder_id"
+      ]
+    }
+  },
+  {
+    "name": "scan_photo_workspace",
+    "description": "Scan a workspace photo inbox for wildlife/nature/astro image files.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "inbox": {
+          "type": "string",
+          "description": "Workspace-relative inbox path, default photos/inbox."
+        },
+        "limit": {
+          "type": "integer"
+        }
+      }
+    }
+  },
+  {
+    "name": "repo_file_tree",
+    "description": "List repository text files for Aiko architecture/code navigation.",
+    "parameters": {
+      "properties": {
+        "prefix": {
+          "default": "",
+          "title": "Prefix",
+          "type": "string"
+        },
+        "limit": {
+          "default": 200,
+          "maximum": 2000,
+          "minimum": 1,
+          "title": "Limit",
+          "type": "integer"
+        }
+      },
+      "title": "RepoFileTreeArgs",
+      "type": "object"
+    }
+  },
+  {
+    "name": "repo_read_file",
+    "description": "Read one repository text file for architecture/code work.",
+    "parameters": {
+      "properties": {
+        "relative_path": {
+          "minLength": 1,
+          "title": "Relative Path",
+          "type": "string"
+        },
+        "max_chars": {
+          "default": 20000,
+          "maximum": 200000,
+          "minimum": 1,
+          "title": "Max Chars",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "relative_path"
+      ],
+      "title": "RepoReadFileArgs",
+      "type": "object"
+    }
+  },
+  {
+    "name": "repo_search_text",
+    "description": "Search repository text files with simple substring matching.",
+    "parameters": {
+      "properties": {
+        "query": {
+          "minLength": 1,
+          "title": "Query",
+          "type": "string"
+        },
+        "prefix": {
+          "default": "",
+          "title": "Prefix",
+          "type": "string"
+        },
+        "limit": {
+          "default": 50,
+          "maximum": 500,
+          "minimum": 1,
+          "title": "Limit",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "query"
+      ],
+      "title": "RepoSearchTextArgs",
+      "type": "object"
+    }
+  },
+  {
+    "name": "write_report",
+    "description": "Write (or append a section to) one polished long-form markdown report under the workspace reports folder. Use for a single coherent deliverable — architecture review, paper comparison, improvement proposal — not short scratch notes (save_note) or retrievable knowledge (learn_knowledge). For arxiv_style, call once per section across multiple turns with append=true, using the same title each time.",
+    "parameters": {
+      "properties": {
+        "title": {
+          "minLength": 1,
+          "title": "Title",
+          "type": "string"
+        },
+        "content": {
+          "default": "",
+          "title": "Content",
+          "type": "string"
+        },
+        "report_dir": {
+          "default": "reports",
+          "title": "Report Dir",
+          "type": "string"
+        },
+        "arxiv_style": {
+          "default": false,
+          "title": "Arxiv Style",
+          "type": "boolean"
+        },
+        "section": {
+          "default": "",
+          "title": "Section",
+          "type": "string"
+        },
+        "append": {
+          "default": false,
+          "title": "Append",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "title"
+      ],
+      "title": "WriteReportArgs",
+      "type": "object"
+    }
+  },
+  {
+    "name": "run_job_post_playbook",
+    "description": "Legacy schedule tool name → Spec gen_job_post graph.",
+    "parameters": {
+      "type": "object",
+      "properties": {}
+    }
+  },
+  {
+    "name": "draft_job_post_social",
+    "description": "Create a Vancouver-area daily job-post draft for Meta Threads review. Does NOT post anything.",
+    "parameters": {
+      "properties": {
+        "force": {
+          "default": false,
+          "title": "Force",
+          "type": "boolean"
+        }
+      },
+      "title": "DraftJobPostSocialArgs",
+      "type": "object"
+    }
+  },
+  {
+    "name": "post_job_post_social",
+    "description": "Post an ALREADY HUMAN-APPROVED daily job-post draft to Meta Threads only. Will refuse unless a person has approved this exact draft outside this conversation. When the user asks to post the daily job post without giving a path, call this with NO draft_dir — it posts the most recently approved job-post draft automatically. Do NOT re-draft when an approved draft already exists.",
+    "parameters": {
+      "properties": {
+        "draft_dir": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Optional. Path to a specific approved draft dir. Omit to post the most recently approved job-post draft.",
+          "title": "Draft Dir"
+        }
+      },
+      "title": "PostJobPostSocialArgs",
+      "type": "object"
+    }
+  },
+  {
+    "name": "post_to_social",
+    "description": "Post text and optional image to one or more social platforms. services is a comma-separated list e.g. 'bluesky,mastodon'. Supported platforms: x, threads, bluesky, mastodon, discord. Does NOT require human approval.",
+    "parameters": {
+      "properties": {
+        "text": {
+          "minLength": 1,
+          "title": "Text",
+          "type": "string"
+        },
+        "services": {
+          "minLength": 1,
+          "title": "Services",
+          "type": "string"
+        },
+        "image_path": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Image Path"
+        }
+      },
+      "required": [
+        "text",
+        "services"
+      ],
+      "title": "DirectSocialPostArgs",
+      "type": "object"
+    }
+  },
+  {
+    "name": "draft_photo_social",
+    "description": "Scan the photo inbox, caption and curate candidates, and create a Pixelfed photo draft bundle for human review. Does NOT post anything.",
+    "parameters": {
+      "properties": {
+        "inbox": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Inbox"
+        },
+        "force": {
+          "default": false,
+          "title": "Force",
+          "type": "boolean"
+        }
+      },
+      "title": "DraftPhotoSocialArgs",
+      "type": "object"
+    }
+  },
+  {
+    "name": "post_photo_social",
+    "description": "Post an ALREADY HUMAN-APPROVED photo draft to Pixelfed. Will refuse (ok=false) unless a person has approved this exact draft outside this conversation, and refuses to post the same draft twice. Only call when the user explicitly asks to publish/post the draft now. If draft_dir is omitted, posts the most recently approved photo draft.",
+    "parameters": {
+      "properties": {
+        "draft_dir": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Optional. Path to a specific approved draft dir. Omit to post the most recently approved draft.",
+          "title": "Draft Dir"
+        },
+        "providers": {
+          "anyOf": [
+            {
+              "items": {
+                "const": "pixelfed",
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Providers"
+        }
+      },
+      "title": "PostPhotoSocialArgs",
+      "type": "object"
+    }
+  },
+  {
+    "name": "draft_video_social",
+    "description": "Queue the oldest not-yet-drafted video in the video inbox that already has a matching .txt description file (same stem, case-insensitive), polishing it into a YouTube title/description for human review. Does NOT post, and does NOT choose which video — dropping the file with its description IS the selection.",
+    "parameters": {
+      "properties": {
+        "inbox": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Inbox"
+        }
+      },
+      "title": "DraftVideoSocialArgs",
+      "type": "object"
+    }
+  },
+  {
+    "name": "post_video_social",
+    "description": "Post an ALREADY HUMAN-APPROVED video draft to YouTube. Will refuse (ok=false) unless a person has approved this exact draft outside this conversation, and refuses to post the same draft twice. Only call when the user explicitly asks to publish/post the draft now. If draft_dir is omitted, posts the most recently approved video draft.",
+    "parameters": {
+      "properties": {
+        "draft_dir": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Optional. Path to a specific approved draft dir. Omit to post the most recently approved draft.",
+          "title": "Draft Dir"
+        },
+        "providers": {
+          "anyOf": [
+            {
+              "items": {
+                "const": "youtube",
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Providers"
+        }
+      },
+      "title": "PostVideoSocialArgs",
+      "type": "object"
+    }
+  },
+  {
+    "name": "final_answer",
+    "description": "Final answer.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "answer": {
+          "type": "string",
+          "description": "The final answer text."
+        }
+      },
+      "required": [
+        "answer"
+      ]
+    }
+  },
+  {
+    "name": "learn_knowledge",
+    "description": "Store durable learned knowledge in Aiko's vector RAG store (encrypted when SQLite encryption is enabled). Use only when the user asks Aiko to remember/add/store knowledge, ingest pasted document text, or after explicit self-learning/research should be retained. Do not use for private personal preferences; those belong in memory. Do not use for merely saving a human-readable note; use save_note for that.",
+    "parameters": {
+      "properties": {
+        "title": {
+          "minLength": 1,
+          "title": "Title",
+          "type": "string"
+        },
+        "text": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Text"
+        },
+        "relative_path": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Relative Path"
+        },
+        "source": {
+          "default": "",
+          "title": "Source",
+          "type": "string"
+        },
+        "kind": {
+          "default": "ingested",
+          "enum": [
+            "ingested",
+            "self_learned",
+            "study_note"
+          ],
+          "title": "Kind",
+          "type": "string"
+        }
+      },
+      "required": [
+        "title"
+      ],
+      "title": "LearnKnowledgeArgs",
+      "type": "object"
+    }
+  }
+]
