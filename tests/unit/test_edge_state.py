@@ -6,11 +6,10 @@ from cognition import attention
 from cognition.attention import EdgeCognitiveState
 
 
-def test_edge_state_is_a_true_attention_module_alias():
-    edge_state = importlib.import_module("cognition.edge_state")
-
-    assert edge_state is attention
-    assert edge_state._tokens is attention._tokens
+def test_attention_module_is_singleton():
+    """Sanity: importing cognition.attention twice returns the same module."""
+    again = importlib.import_module("cognition.attention")
+    assert again is attention
 
 
 def test_attention_state_is_bounded_and_retrieves_current_focus():

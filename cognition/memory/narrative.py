@@ -8,8 +8,6 @@ produce secondary context blocks for the prompt:
   3. Cross-store related-context linking (Phase 13a, moved from
      cross_store.py) — finds related knowledge + experience entries by
      shared entity overlap with the personal memory hits.
-
-Stable import path: ``cognition.memory.format`` (re-exports below).
 """
 
 from __future__ import annotations
