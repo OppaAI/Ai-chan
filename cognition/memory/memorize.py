@@ -3132,7 +3132,7 @@ class AikoMemorize:
         # Phase 13a: secondary related knowledge / experience
         if MEMORY_CROSS_STORE_ENABLED and MEMORY_CROSS_STORE_CONTEXT_CHARS > 0:
             try:
-                from cognition.memory.cross_store import fetch_related_for_memories, format_related_blocks
+                from cognition.memory.narrative import fetch_related_for_memories, format_related_blocks
 
                 rel = related
                 if rel is None:
