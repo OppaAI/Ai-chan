@@ -46,6 +46,7 @@ dependencies = [
     "mcp>=1.29.0",
     "fastmcp>=3.4.6",
     "atproto>=0.0.71",
+    "cactus-needle>=2.0.11",
 ]
 
 [project.optional-dependencies]
