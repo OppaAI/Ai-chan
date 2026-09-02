@@ -101,6 +101,13 @@ try:
 except ImportError as e:
     log.warning(f"Could not mount Log studio: {e}")
 
+# Codebase Figure Studio (sharp silhouette — brain/eyes/ears/mouth/legs)
+try:
+    from interface.webui.studio.codebase.backend.api import app as codebase_studio_app
+    app.mount("/studio/codebase", codebase_studio_app)
+except ImportError as e:
+    log.warning(f"Could not mount Codebase studio: {e}")
+
 # ── cookie signing ────────────────────────────────────────────────────────────
 # SECRET_KEY signs the session cookie so it can't be forged or edited client-side.
 # Generate one with: python -c "import secrets; print(secrets.token_hex(32))"

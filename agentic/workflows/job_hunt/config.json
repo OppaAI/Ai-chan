@@ -140,27 +140,51 @@
   "social": [],
   "greenhouse_source": {
     "enabled": true,
-    "api_url": "https://www.greenhouse.com/api",
-    "base_url": "https://boards-api.greenhouse.io/v1/boards",
     "board_tokens": [
-      "greenhouse"
+      "openai",
+      "anthropic",
+      "databricks",
+      "snowflake",
+      "shopify",
+      "hootsuite",
+      "clio",
+      "visier",
+      "trulioo",
+      "amazon",
+      "microsoft",
+      "salesforce",
+      "coinbase",
+      "stripe",
+      "figma",
+      "notion",
+      "asana",
+      "mongodb",
+      "datadog"
     ],
-    "note": "Uses the public Greenhouse Job Board API. Override board_tokens with GREENHOUSE_BOARD_TOKENS for additional companies."
+    "max_posts": 10
   },
   "max_greenhouse_posts": 10,
   "lever_source": {
     "enabled": true,
-    "api_url": "https://github.com/lever/postings-api",
-    "base_url": "https://api.lever.co/v0/postings",
-    "company_tokens": [],
-    "note": "Uses the public Lever postings API. Set company_tokens or LEVER_COMPANY_TOKENS to enable specific companies."
+    "company_tokens": [
+      "https://jobs.lever.co/shopify",
+      "https://jobs.lever.co/hootsuite",
+      "https://jobs.lever.co/clio",
+      "https://jobs.lever.co/visier",
+      "https://jobs.lever.co/amazon",
+      "https://jobs.lever.co/datadog"
+    ],
+    "max_posts": 10
   },
   "ashby_source": {
     "enabled": true,
-    "api_url": "https://developers.ashbyhq.com/docs/posting-api",
-    "base_url": "https://api.ashbyhq.com/posting-api/job-board",
-    "company_tokens": [],
-    "note": "Uses the public Ashby job-board posting API. Set company_tokens or ASHBY_ORG_TOKENS to enable specific orgs."
+    "company_tokens": [
+      "https://jobs.ashbyhq.com/openai",
+      "https://jobs.ashbyhq.com/anthropic",
+      "https://jobs.ashbyhq.com/notion",
+      "https://jobs.ashbyhq.com/figma"
+    ],
+    "max_posts": 10
   },
   "max_lever_posts": 10,
   "max_ashby_posts": 10

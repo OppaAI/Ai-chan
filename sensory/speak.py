@@ -562,18 +562,43 @@ class AikoSpeak:
                 time.sleep(0.05)
             return
 
-        import scipy.io.wavfile as wav_io
+        # Prefer soundfile (present on Jetson) — scipy is broken on aarch64
+        # (missing _ccallback_c). Fall back to scipy only if soundfile unavailable.
+        def _read_wav_sf(b: bytes):
+            try:
+                import soundfile as sf
+                data, rate = sf.read(io.BytesIO(b), always_2d=False)
+                return rate, data
+            except Exception:
+                import scipy.io.wavfile as wav_io  # last resort; may be broken on Jetson
+                return wav_io.read(io.BytesIO(b))
+
+        def _resample_fallback(data, orig_rate: int, target: int = 48000):
+            if orig_rate == target:
+                return data, target
+            try:
+                from scipy.signal import resample
+                num_samples = int(len(data) * target / orig_rate)
+                return resample(data, num_samples).astype(data.dtype), target
+            except Exception:
+                # linear interpolation fallback — no scipy needed
+                import numpy as np
+                xp = np.linspace(0, 1, len(data))
+                x_new = np.linspace(0, 1, int(len(data) * target / orig_rate))
+                if data.ndim == 1:
+                    return np.interp(x_new, xp, data).astype(data.dtype), target
+                # stereo: interpolate per channel
+                out = np.stack([np.interp(x_new, xp, data[:, c]) for c in range(data.shape[1])], axis=1)
+                return out.astype(data.dtype), target
+
         try:
             sd = self._load_sd()
-            rate, data = wav_io.read(io.BytesIO(wav_bytes))
+            rate, data = _read_wav_sf(wav_bytes)
             device = MIOTTS_DEVICE if MIOTTS_DEVICE >= 0 else None
 
             # Always resample to 48000 Hz (device requirement)
             if rate != 48000:
-                from scipy.signal import resample
-                num_samples = int(len(data) * 48000 / rate)
-                data = resample(data, num_samples).astype(data.dtype)
-                rate = 48000
+                data, rate = _resample_fallback(data, rate, 48000)
 
             sd.play(data, rate, device=device)
             sd.wait()  # Wait until playback finishes
