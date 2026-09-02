@@ -340,6 +340,10 @@ class IntentConfidenceClassifier:
         self._load_model()
 
     def _load_model(self) -> None:
+        import os as _os
+        if not _os.path.isfile(self.model_path):
+            self.available = False
+            return
         try:
             lgb = importlib.import_module("lightgbm")
             booster = lgb.Booster(model_file=self.model_path)
@@ -540,6 +544,12 @@ class EdgeCognitiveState:
             elif _DONE_RE.search(assistant) and not _OUTCOME_FAIL_RE.search(assistant):
                 self._close_matching_goal(assistant)
                 self._close_matching_loop(assistant)
+            # Broadcast VRM expression from subliminal affect (throttled 1.5 s)
+            try:
+                if self._subliminal is not None:
+                    self._subliminal.broadcast_vrm()
+            except Exception:
+                pass
 
     def clear(self) -> None:
         """Wipe all dormant state. Engram erasure (rare; identity reset only)."""

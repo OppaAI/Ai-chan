@@ -677,9 +677,9 @@ def _build_external_embed(text: str):
                 from html import unescape
                 return unescape(m.group(1)).strip()
             return ""
-        title = _og("og:title") or _og("twitter:title") or url
-        description = _og("og:description") or _og("twitter:description") or ""
-        image_url = _og("og:image") or _og("twitter:image") or ""
+        title = _og("og:title") or url
+        description = _og("og:description") or ""
+        image_url = _og("og:image") or ""
         if image_url and not image_url.startswith("http"):
             parsed = urlparse(url)
             image_url = f"{parsed.scheme}://{parsed.netloc}{image_url}"

@@ -1107,7 +1107,7 @@ def _is_post_existing_content(prompt: str) -> bool:
 
 
 _EMAIL_ACTION_TERMS = ("send", "email", "mail", "inbox", "reply to", "draft an email")
-_EMAIL_SIGNAL_TERMS = ("email", "mail", "protonmail", "inbox", "@gmail.com", "@protonmail", "subject", "attachment")
+_EMAIL_SIGNAL_TERMS = ("email", "mail", "protonmail", "inbox", "@protonmail", "@proton.me", "subject", "attachment")
 
 
 def _is_email_request(prompt: str) -> bool:

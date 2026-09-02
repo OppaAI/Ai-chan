@@ -128,7 +128,6 @@ Aiko-chan is built in phases. Each phase is a self-contained capability layer th
 
 | Platform | Roadmap stance | Reason |
 |---|---|---|
-| X | ❌ Removed | Dropped — twitterapi.io write path needs residential proxy + credits; free/no-check replies get buried |
 | Threads | ✅ Active | Live; weekly Patreon dev-post teaser fanout, image posting via imgbb |
 | Pixelfed | ✅ Active | Lane B curated photo showcase via MCP |
 | YouTube | ✅ Active | Live; video lane, description-grounded — you choose the video, Aiko only polishes the write-up |

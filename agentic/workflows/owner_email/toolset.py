@@ -37,7 +37,12 @@ _MARKER = "— Aiko via owner-email bridge"
 
 
 def _owner_email() -> str:
-    return (os.getenv("AIKO_EMAIL") or "").strip().lower()
+    # Priority: explicit owner var → AIKO_EMAIL → proton username (all lower-cased)
+    for k in ("AIKO_OWNER_EMAIL", "AIKO_EMAIL", "PROTONMAIL_USERNAME", "AIKO_PROTONMAIL_ADDRESS"):
+        v = (os.getenv(k) or "").strip().lower()
+        if v:
+            return v
+    return ""
 
 
 def _load_processed() -> set[str]:

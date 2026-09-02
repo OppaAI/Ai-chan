@@ -148,6 +148,10 @@ class AikoWeb:
         self._user_space_ready: set[str] = set()   # users whose deferred user-space seeding has run
 
         self._input_q: queue.Queue[tuple[str, str, str]] = queue.Queue()
+        try:
+            _register_webui(self)
+        except Exception:
+            pass
 
         # 4096 frames × 512 samples ≈ 8MB ceiling ≈ 13s of 16kHz mono f32 —
         # ample headroom for VAD-gated speech bursts; raw-mic mode drops
@@ -889,6 +893,17 @@ class AikoWeb:
         self._push_vitals()
 
 
+# ── Bridge singleton for subliminal → VRM expression ───────────────────────
+_active_webui: "AikoWeb | None" = None
+
+def _register_webui(instance: "AikoWeb") -> None:
+    global _active_webui
+    _active_webui = instance
+
+def webui_bridge() -> "AikoWeb | None":
+    return _active_webui
+
+
 def run_webui(args) -> None:
     """Launch Aiko with the browser WebUI.
 
@@ -903,6 +918,7 @@ def run_webui(args) -> None:
 
     # Construct AikoWeb with servers deferred — no socket until boot finishes.
     ui = AikoWeb(no_voice=args.text, debug=args.debug, defer_servers=True)
+    _register_webui(ui)
 
     host_ip = socket.gethostbyname(socket.gethostname())
     scheme = "https" if WEBUI_HTTPS else "http"

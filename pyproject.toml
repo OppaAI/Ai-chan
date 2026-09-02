@@ -53,7 +53,6 @@ dependencies = [
 [project.optional-dependencies]
 discord = ["discord-py>=2.4.0"]
 telegram = ["python-telegram-bot>=21.0"]
-twitter = ["tweepy>=4.14.0"]
 slack = ["slack-sdk>=3.27.0"]
 matrix = ["matrix-nio>=0.25.0"]
 bluesky = ["atproto>=0.0.34"]
