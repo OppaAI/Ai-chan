@@ -1,7 +1,7 @@
 """
 interface/mcp_server/social/monitor_daemon.py
 
-Login-independent social reply monitor daemons (Threads + Bluesky + Mastodon + X).
+Login-independent social reply monitor daemons (Threads + Bluesky + Mastodon).
 
 Starts background daemon threads that poll monitor_*_replies() at a fixed
 interval, completely independent of the WebUI login gate.
@@ -28,30 +28,12 @@ from system.log import get_logger
 log = get_logger(__name__)
 
 _DEFAULT_INTERVAL = 180  # seconds — same default as scheduler job
-_DEFAULT_X_INTERVAL = 300  # 5 minutes — twitterapi.io credit cost control
 
-# ── unified poller ────────────────────────────────────────────────────────────
-# One background thread polls BOTH platforms sequentially, each on its own
-# interval. Sequential matters: a reply turn drives LLM inference (+TTS sink),
-# and two platforms answering simultaneously would contend for those. RAM cost
-# of the second thread was never the issue — the concurrent heavy work was.
 _SOCIAL_THREAD: threading.Thread | None = None
 _SOCIAL_STOP_EVENT = threading.Event()
 _DESIRED: dict[str, dict] = {}   # label -> {"interval": s, "fn": callable}
 
-# Late-bound memory handle. Daemons start before wakeup boots the memory
-# subsystem (and before anyone logs in), so they can't receive AikoMemorize
-# at construction time. run_session() injects it post-boot via
-# set_shared_memorize(); each poll cycle reads whatever is current, so
-# replies gain long-term recall + memory saving without a restart.
 _SHARED_MEMORIZE: dict = {"ref": None}
-
-# Dedicated fallback handle for headless periods: while nobody has logged
-# into the WebUI since boot, the shared instance is still a lazy guest with
-# no store open, and passing it (or None) made every Threads/Bluesky reply
-# run without recall and without interaction-memory saving — even though the
-# owner's memory.db sits right there on disk. The fallback binds its own
-# AikoMemorize to that store once, then both daemons reuse it.
 _FALLBACK_MEMORIZE: dict = {"ref": None}
 _FALLBACK_LOCK = threading.Lock()
 
@@ -62,13 +44,6 @@ def set_shared_memorize(memorize) -> None:
 
 
 def _owner_user_id() -> str | None:
-    """Resolve the owner's user_id without requiring a browser login.
-
-    Order: explicit AIKO_USER_ID env override, else the unique non-guest
-    user directory under USER_SPACE_ROOT that has both a memory store and a
-    profile. Ambiguous multi-user layouts return None (recall stays off
-    rather than guessing and reading/writing the wrong person's memories).
-    """
     override = os.getenv("AIKO_USER_ID", "").strip()
     if override:
         return override
@@ -90,12 +65,6 @@ def _owner_user_id() -> str | None:
 
 
 def _resolve_owner_display_name(uid: str) -> str | None:
-    """Prefer GitHub login from auth_token.json, then profile/USER.md, else uid.
-
-    Ensures memories for github_205369547 / oppa.ai.bot are attributed to
-    OppaAI rather than the raw provider id.
-    """
-    # 1) auth_token.json (OAuth login = OppaAI)
     try:
         import json as _json
 
@@ -103,7 +72,6 @@ def _resolve_owner_display_name(uid: str) -> str | None:
         if token_path.is_file():
             data = _json.loads(token_path.read_text(encoding="utf-8"))
             user = data.get("user") or {}
-            # match id or fallback to single-owner token
             try:
                 from system.userspace import normalize_user_id
 
@@ -112,7 +80,6 @@ def _resolve_owner_display_name(uid: str) -> str | None:
                     login = (user.get("login") or "").strip()
                     if login:
                         return login
-                # single-owner box: trust token login regardless of uid mismatch
                 login = (user.get("login") or "").strip()
                 if login and uid == _owner_user_id():
                     return login
@@ -122,7 +89,6 @@ def _resolve_owner_display_name(uid: str) -> str | None:
                     return login
     except Exception:
         pass
-    # 2) profile/USER.md via owner_display_name()
     try:
         from interface.mcp_server.social.services.identity import owner_display_name
 
@@ -131,23 +97,15 @@ def _resolve_owner_display_name(uid: str) -> str | None:
             return name
     except Exception:
         pass
-    # 3) hardcoded owner for this box
     if uid in {"github_205369547", "OppaAI"}:
         return "OppaAI"
     return None
 
 
 def _fallback_owner_memorize():
-    """Return a monitor-owned AikoMemorize bound to the owner's store.
-
-    Built lazily on first headless poll and cached; returns None when no
-    unambiguous owner identity can be resolved on disk.
-    """
     with _FALLBACK_LOCK:
         mem = _FALLBACK_MEMORIZE["ref"]
         if mem is not None:
-            # Ensure cached instance has correct display_name (migration from
-            # pre-alias code where it was github_205369547)
             try:
                 if mem.get_display_name() in {"github_205369547", "oppa.ai.bot", "oppa.ai"}:
                     disp = _resolve_owner_display_name(mem.get_user_id())
@@ -164,8 +122,6 @@ def _fallback_owner_memorize():
 
             mem = AikoMemorize(silent=True)
             mem.switch_user(uid)
-            # Bind display_name so future _save_interaction_memory / extraction
-            # emit "OppaAI ..." not "github_205369547 ..." / "oppa.ai.bot ..."
             disp = _resolve_owner_display_name(uid)
             if disp:
                 try:
@@ -181,13 +137,6 @@ def _fallback_owner_memorize():
 
 
 def _bound_memorize():
-    """Return the best available AikoMemorize for social reply monitors.
-
-    Preference order: the shared live instance once wakeup boot + login have
-    bound a REAL per-user store (is_open()), else the dedicated owner-store
-    fallback for headless operation. Before either exists, monitors run
-    recall-free like before.
-    """
     mem = _SHARED_MEMORIZE["ref"]
     if mem is not None and mem.is_open():
         return mem
@@ -232,29 +181,7 @@ def _poll_mastodon() -> None:
         log.warning("[mastodon_daemon] %d error(s): %s", len(errors), errors[:3])
 
 
-def _poll_x() -> None:
-    from interface.mcp_server.social.services.x import monitor_x_replies
-
-    result = monitor_x_replies(memorize=_bound_memorize())
-    if result.get("polling_disabled"):
-        return
-    answered = result.get("answered", 0)
-    matched = result.get("matched", 0)
-    errors = result.get("errors", [])
-    if answered:
-        log.info("[x_daemon] Answered %d / %d matched replies", answered, matched)
-    if errors:
-        log.warning("[x_daemon] %d error(s): %s", len(errors), errors[:3])
-
-
 def _social_loop() -> None:
-    """Single-thread poller: each registered platform fires on its own due time.
-
-    Platforms can be added while running (legacy start_* wrappers merge into
-    the live thread via _DESIRED). A slow poll (e.g. Threads
-    Graph API with a 120s timeout) delays the other platform's next cycle
-    rather than overlapping heavy reply work — deliberate trade-off.
-    """
     def _labels():
         return "/".join(_DESIRED.keys()) or "<none>"
 
@@ -264,7 +191,6 @@ def _social_loop() -> None:
         now = time.monotonic()
         for label, cfg in list(_DESIRED.items()):
             if label not in next_due:
-                # Stagger new entrants 5s apart so platforms never first-fire together.
                 next_due[label] = now + 5.0 * len(next_due)
                 log.info("[%s_daemon] Monitor started (first poll in %.0fs)", label, max(0.0, next_due[label] - now))
             if now < next_due[label]:
@@ -276,8 +202,6 @@ def _social_loop() -> None:
             next_due[label] = time.monotonic() + cfg["interval"]
         pause = max(0.5, min(next_due.values()) - time.monotonic()) if next_due else 1.0
 
-        # Chunked sleep: re-check _DESIRED at most 1s after a new platform
-        # registers, without needing a separate wake-event mechanism.
         deadline = time.monotonic() + pause
         while not _SOCIAL_STOP_EVENT.is_set():
             remaining = deadline - time.monotonic()
@@ -287,11 +211,6 @@ def _social_loop() -> None:
 
 
 def _register_platform(label: str, interval_seconds: int | None, fn) -> bool:
-    """Add a platform to the desired set; True when it was newly added.
-
-    Explicit interval_seconds is honored as-is (old daemons allowed sub-60s
-    values); only the env-derived default carries the 60s floor.
-    """
     iv = int(interval_seconds) if interval_seconds else _DEFAULT_INTERVAL
     job = {"interval": iv, "fn": fn}
     if label in _DESIRED:
@@ -301,15 +220,8 @@ def _register_platform(label: str, interval_seconds: int | None, fn) -> bool:
 
 
 def start_social_monitor_daemon(interval_seconds: int | None = None, only: str | None = None) -> threading.Thread | None:
-    """Start (or merge into) the unified social reply poller.
-
-    Safe to call repeatedly and per-platform: legacy start_threads/_bluesky
-    wrappers both land here; a second call registers its platform into the
-    live thread instead of skipping. Env enable-checks and credential gates
-    behave exactly like the old separate daemons.
-    """
     def _interval(env_key: str, label: str, default: int | None = None) -> int:
-        floor = 30 if label != "x" else 60
+        floor = 30
         base = default if default is not None else _DEFAULT_INTERVAL
         try:
             return max(floor, int(os.getenv(env_key, str(base))))
@@ -320,12 +232,9 @@ def start_social_monitor_daemon(interval_seconds: int | None = None, only: str |
             )
             return base
 
-    # Explicit interval_seconds (legacy wrappers/tests) wins over env default.
-    # Honored as-is (old daemons allowed sub-60s values); only the env-derived
-    # default carries the 60s floor.
     explicit = int(interval_seconds) if interval_seconds else None
 
-    candidates: list[tuple[str, int, object]] = []  # (label, interval, poll_fn)
+    candidates: list[tuple[str, int, object]] = []
 
     if only in (None, "threads"):
         if os.getenv("THREADS_MONITOR_DAEMON_ENABLED", "1").strip().lower() in {"0", "false", "no", "off"}:
@@ -360,33 +269,6 @@ def start_social_monitor_daemon(interval_seconds: int | None = None, only: str |
         else:
             candidates.append(("mastodon", explicit or _interval("MASTODON_REPLY_MONITOR_INTERVAL_SECONDS", "mastodon"), _poll_mastodon))
 
-    if only in (None, "x"):
-        # X defaults OFF until credentials + explicit enable (credit spend).
-        x_enabled = os.getenv("X_POLLING_ENABLED", "0").strip().lower() in {"1", "true", "yes", "on"}
-        daemon_off = os.getenv("X_MONITOR_DAEMON_ENABLED", "1").strip().lower() in {"0", "false", "no", "off"}
-        if daemon_off:
-            log.info("[x_daemon] Disabled via X_MONITOR_DAEMON_ENABLED=0, skipping")
-        elif not x_enabled:
-            log.info("[x_daemon] X_POLLING_ENABLED not set — X monitor daemon will not start")
-        elif not os.getenv("TWITTERAPI_KEY") or not os.getenv("TWITTER_USERNAME"):
-            log.info(
-                "[x_daemon] TWITTERAPI_KEY or TWITTER_USERNAME not set — "
-                "X monitor daemon will not start"
-            )
-        else:
-            candidates.append(
-                (
-                    "x",
-                    explicit
-                    or _interval(
-                        "X_POLLING_INTERVAL_SECONDS",
-                        "x",
-                        default=_DEFAULT_X_INTERVAL,
-                    ),
-                    _poll_x,
-                )
-            )
-
     if not candidates:
         return None
 
@@ -397,8 +279,6 @@ def start_social_monitor_daemon(interval_seconds: int | None = None, only: str |
 
     global _SOCIAL_THREAD
     if _SOCIAL_THREAD is not None and _SOCIAL_THREAD.is_alive():
-        # newly-registered platform is picked up within ≤1s by the chunked
-        # sleep in _social_loop — nothing to signal.
         return _SOCIAL_THREAD
 
     _SOCIAL_STOP_EVENT.clear()
@@ -413,51 +293,32 @@ def start_social_monitor_daemon(interval_seconds: int | None = None, only: str |
 
 
 def stop_social_monitor_daemon() -> None:
-    """Signal the unified poller to stop and forget registered platforms."""
     _DESIRED.clear()
     stop_event_was_set = _SOCIAL_STOP_EVENT.is_set()
     _SOCIAL_STOP_EVENT.set()
     if not stop_event_was_set:
-        pass  # loop exits on next wake
+        pass
 
-
-# ── legacy single-platform wrappers (kept so existing callers/tests keep working) ──
 
 def start_threads_monitor_daemon(interval_seconds: int | None = None) -> threading.Thread | None:
-    """Deprecated: prefer start_social_monitor_daemon()."""
     return start_social_monitor_daemon(interval_seconds=interval_seconds, only="threads")
 
 
 def stop_threads_monitor_daemon() -> None:
-    """Deprecated: prefer stop_social_monitor_daemon()."""
     stop_social_monitor_daemon()
 
 
 def start_bluesky_monitor_daemon(interval_seconds: int | None = None) -> threading.Thread | None:
-    """Deprecated: prefer start_social_monitor_daemon()."""
     return start_social_monitor_daemon(interval_seconds=interval_seconds, only="bluesky")
 
 
 def stop_bluesky_monitor_daemon() -> None:
-    """Deprecated: prefer stop_social_monitor_daemon()."""
     stop_social_monitor_daemon()
 
 
 def start_mastodon_monitor_daemon(interval_seconds: int | None = None) -> threading.Thread | None:
-    """Deprecated: prefer start_social_monitor_daemon()."""
     return start_social_monitor_daemon(interval_seconds=interval_seconds, only="mastodon")
 
 
 def stop_mastodon_monitor_daemon() -> None:
-    """Deprecated: prefer stop_social_monitor_daemon()."""
-    stop_social_monitor_daemon()
-
-
-def start_x_monitor_daemon(interval_seconds: int | None = None) -> threading.Thread | None:
-    """Deprecated: prefer start_social_monitor_daemon()."""
-    return start_social_monitor_daemon(interval_seconds=interval_seconds, only="x")
-
-
-def stop_x_monitor_daemon() -> None:
-    """Deprecated: prefer stop_social_monitor_daemon()."""
     stop_social_monitor_daemon()
