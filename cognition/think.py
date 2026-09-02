@@ -1545,6 +1545,17 @@ class AikoThink:
                     volatile_system += "\n\n<memory_context>\nNo relevant memories found.\n</memory_context>"
                 if knowledge_block:
                     volatile_system = f"{volatile_system}\n\n{knowledge_block}"
+                # Codebase RAG — when user explicitly asks from your codebase/code
+                if not skip_memory and any(k in (user_input or "").lower() for k in ("codebase", "from your code", "from your codebase", "attention gate", "how does your code", "where is", "repo", "source file")):
+                    try:
+                        from cognition.knowledge.codebase import codebase_context_for
+                        memorize = self._get_memorize()
+                        embedder = memorize.embedder() if memorize is not None else None
+                        cb_block = codebase_context_for(user_input, limit=4, max_chars=3500, embedder=embedder)
+                        if cb_block and "No matching codebase" not in cb_block:
+                            volatile_system = f"{volatile_system}\n\n{cb_block}"
+                    except Exception as e:
+                        log.debug("codebase_context inject failed: %s", e)
 
             if not skip_memory and _should_use_local_knowledge(user_input):
                 try:

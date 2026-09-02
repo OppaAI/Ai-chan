@@ -315,10 +315,18 @@ def _reflection_post_exists(date: datetime) -> bool:
         return False
     slug = date.strftime("%Y-%m-%d") + "-day-reflection"
     url  = f"https://api.github.com/repos/{repo}/contents/{hugo_path}/{slug}.md"
-    resp = requests.get(url, headers={
-        "Authorization": f"Bearer {token}",
-        "Accept": "application/vnd.github+json",
-    }, params={"ref": branch}, timeout=10)
+    try:
+        resp = requests.get(url, headers={
+            "Authorization": f"Bearer {token}",
+            "Accept": "application/vnd.github+json",
+        }, params={"ref": branch}, timeout=10)
+    except Exception:
+        return False
+    if resp.status_code == 401:
+        # Bad credentials — don't treat as missing, or every restart backfills 7 days and blocks chat
+        from system.log import get_logger
+        get_logger(__name__).warning("GitHub 401 for reflection check — treating %s as exists to avoid catch-up loop (rotate GITHUB_TOKEN)", date.strftime("%Y-%m-%d"))
+        return True
     return resp.status_code == 200
 
 

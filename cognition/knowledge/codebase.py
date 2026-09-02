@@ -66,6 +66,7 @@ _EXCLUDE_DIRS = {
     ".git", ".venv", "__pycache__", ".mypy_cache", ".pytest_cache",
     ".ruff_cache", ".benchmarks", "node_modules", ".aiko",
     "models", "checkpoints", "outputs", "logs", "data", "datasets",
+    "archive", "papers", "assets",
 }
 _EXCLUDE_SUFFIXES = {".pyc", ".pyo", ".so", ".o", ".a", ".onnx", ".bin", ".pt", ".pth", ".gguf", ".npz", ".db", ".sqlite", ".pickle", ".pkl"}
 _TEXT_EXTS = {
