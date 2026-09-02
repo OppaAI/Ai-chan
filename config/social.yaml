@@ -2,63 +2,40 @@
 #
 # Non-secret runtime settings for social, messenger, and media adapters.
 # Secrets (tokens, keys, passwords) live in .env / .env.age.
-# Identity handles live in .env only (THREADS_USERNAME, BLUESKY_HANDLE, TWITTER_USERNAME).
+# Identity handles live in .env only (THREADS_USERNAME, BLUESKY_HANDLE).
 # AI name for "Hi {AI_NAME}" comes from config/system.yaml AI_NAME.
 # Owner display name is read from <USER_SPACE_ROOT>/<user_id>/profile/USER.md.
 
 # -- Weekly workflow (Lane A) --
-WEEKLY_SOCIAL_ENABLED: "1"  # Enable/disable weekly social posting.
-WEEKLY_SOCIAL_AUTODRAFT: "1"  # Auto-generate draft content from agentic output.
-WEEKLY_SOCIAL_AUTOPOST: "0"  # Auto-post draft to providers (requires approval in production).
-WEEKLY_SOCIAL_WEEKDAY: "sunday"  # Day of week for weekly posts.
-WEEKLY_SOCIAL_TIME: "18:00"  # Time of day for posting (HH:MM format).
-WEEKLY_SOCIAL_PROVIDERS: "x, threads"  # Comma-separated list of providers to post to.
-WEEKLY_SOCIAL_MAX_CHARS: "260"  # Max characters for weekly post content.
-SOCIAL_ROOT: ""  # Override path for social output directory. Defaults to <USER_SPACE_ROOT>/<user_id>/social/.
-WEEKLY_SOCIAL_IMAGE_URL: ""  # Optional image URL to attach to weekly posts.
-
-# -- X (Twitter) two-way reply monitor (twitterapi.io) --
-# Secrets in .env: TWITTERAPI_KEY, TWITTER_USERNAME, TWITTER_LOGIN_COOKIES, TWITTER_PROXY.
-# Reads: GET /twitter/user/mentions + last_tweets + tweet/replies (API key only).
-# Writes: POST /twitter/create_tweet_v2 (login_cookies + proxy required).
-# Trigger: Hi {AI_NAME} (system.yaml) or @{TWITTER_USERNAME}.
-X_POLLING_ENABLED: "0"  # Master enable for X reply polling (0 until credentials are set).
-X_POLLING_INTERVAL_SECONDS: "300"  # 5 minutes — higher than Threads to control twitterapi.io credits.
-X_POLL_BATCH_SIZE: "20"  # Mentions per poll page (API returns 20/page).
-X_OWN_POSTS_SCAN_LIMIT: "8"  # Max recent original tweets to scan for Hi {AI_NAME} replies.
-X_OWN_POST_REPLIES_ENABLED: "1"  # Also poll replies on own posts (not only global mentions).
-X_REPLY_LOG_DIR: "logs/x"  # JSONL reply archive directory.
-X_REPLY_BEEP_ENABLED: "1"  # Local beep once per cycle with a trigger match.
-X_RECALL_ENABLED: "1"  # Recall up to 3 memories into reply prompts (private).
-X_INTERACTION_MEMORY_ENABLED: "1"  # Memorize triggered exchanges from the owner account.
-# X_MONITOR_DAEMON_ENABLED: .env only (default "1"). Set "0" to stop X daemon even if polling is on.
-# X_REPLY_TRIGGER: optional .env override for the phrase (default Hi {AI_NAME}).
+WEEKLY_SOCIAL_ENABLED: "1"
+WEEKLY_SOCIAL_AUTODRAFT: "1"
+WEEKLY_SOCIAL_AUTOPOST: "0"
+WEEKLY_SOCIAL_WEEKDAY: "sunday"
+WEEKLY_SOCIAL_TIME: "18:00"
+WEEKLY_SOCIAL_PROVIDERS: "threads"
+WEEKLY_SOCIAL_MAX_CHARS: "260"
+SOCIAL_ROOT: ""
+WEEKLY_SOCIAL_IMAGE_URL: ""
 
 # -- Threads metadata --
-THREADS_ACCESS_TOKEN_EXPIRES_AT: ""  # Expiration timestamp for Threads access token (auto-managed; manual override only).
-THREADS_REFRESH_BEFORE_EXPIRY_DAYS: "6"  # Days before token expiration to trigger refresh.
-THREADS_API_BASE: "https://graph.threads.net/v1.0"  # Base URL for Threads Graph API.
-THREADS_TOPIC_TAG: "AI Threads"  # Default topic tag for Threads posts.
-THREADS_PUBLISH_DELAY_SECONDS: "5"  # Delay between publish requests to avoid rate limits.
-THREADS_REPLY_MONITOR_INTERVAL_SECONDS: "30"  # Poll interval for replies (trigger: Hi {AI_NAME} or @{THREADS_USERNAME}).
-THREADS_REPLY_MONITOR_POST_IDS: ""  # Optional comma-separated post IDs; blank discovers own posts.
-THREADS_REPLY_BEEP_ENABLED: "1"  # Play one local notification beep per polling cycle with a trigger.
-# THREADS_USERNAME / mention / owner name: .env only (THREADS_USERNAME); mention = @ + username; owner from profile/USER.md
-THREADS_GLOBAL_MENTIONS_ENABLED: "1"  # Poll /me/mentions for mentions on other users posts.
-THREADS_MEMORY_ENABLED: "1"  # Allow only explicit remember this / learn this requests from Threads.
-THREADS_INTERACTION_MEMORY_ENABLED: "1"  # Auto-memorize every triggered exchange from the owner account.
-THREADS_RECALL_ENABLED: "1"  # Recall up to 3 relevant memories into reply prompts. Private hints only — never surfaced openly.
-THREADS_REPLY_LOG_DIR: "logs/threads"  # One redacted JSONL archive per calendar day.
-THREADS_IMAGEGEN_ENABLED: "1"  # Let Aiko generate and attach an image when a reply explicitly asks her to draw/gen one.
-THREADS_IMAGEGEN_TIMEOUT: "300"  # Seconds before the IMAGEGEN_URL generation call times out (Modal cold starts are slow).
-IMGBB_UPLOAD_TIMEOUT: "30"  # Seconds before ImgBB image upload calls time out.
-# THREADS_MONITOR_DAEMON_ENABLED: .env only (default "1"). The reply daemon started by
-# run_session() is the SINGLE Threads poller; the legacy scheduler monitor job is retired
-# on every social bootstrap. Set "0" to stop Threads reply polling entirely.
+THREADS_ACCESS_TOKEN_EXPIRES_AT: ""
+THREADS_REFRESH_BEFORE_EXPIRY_DAYS: "6"
+THREADS_API_BASE: "https://graph.threads.net/v1.0"
+THREADS_TOPIC_TAG: "AI Threads"
+THREADS_PUBLISH_DELAY_SECONDS: "5"
+THREADS_REPLY_MONITOR_INTERVAL_SECONDS: "30"
+THREADS_REPLY_MONITOR_POST_IDS: ""
+THREADS_REPLY_BEEP_ENABLED: "1"
+THREADS_GLOBAL_MENTIONS_ENABLED: "1"
+THREADS_MEMORY_ENABLED: "1"
+THREADS_INTERACTION_MEMORY_ENABLED: "1"
+THREADS_RECALL_ENABLED: "1"
+THREADS_REPLY_LOG_DIR: "logs/threads"
+THREADS_IMAGEGEN_ENABLED: "1"
+THREADS_IMAGEGEN_TIMEOUT: "300"
+IMGBB_UPLOAD_TIMEOUT: "30"
 
 # -- Bluesky two-way reply monitor --
-# Handle / app password: BLUESKY_HANDLE + BLUESKY_APP_PASS in .env only.
-# Trigger defaults to Hi {AI_NAME}; mention is @ + BLUESKY_HANDLE.
 BLUESKY_REPLY_MONITOR_INTERVAL_SECONDS: "30"
 BLUESKY_REPLY_BEEP_ENABLED: "1"
 BLUESKY_MEMORY_ENABLED: "1"
@@ -67,45 +44,45 @@ BLUESKY_RECALL_ENABLED: "1"
 BLUESKY_IMAGEGEN_ENABLED: "1"
 BLUESKY_IMAGEGEN_TIMEOUT: "300"
 BLUESKY_REPLY_LOG_DIR: "logs/bluesky"
-BLUESKY_MONITOR_DAEMON_ENABLED: "1"  # Single Bluesky reply poller, started by run_session(); "0" stops polling.
+BLUESKY_MONITOR_DAEMON_ENABLED: "1"
 
 # -- Photo social (Lane B — Pixelfed) --
-PHOTO_SOCIAL_AUTODRAFT: "0"  # Auto-generate draft photo captions.
-PHOTO_SOCIAL_AUTOPOST: "0"  # Auto-post photos to providers.
-PHOTO_SOCIAL_PROVIDERS: "pixelfed"  # Photo social provider(s) to post to.
-PHOTO_SOCIAL_INBOX: "photos/inbox"  # Directory to scan for new photos.
-PHOTO_SOCIAL_MAX_ITEMS: "3"  # Max items to process per scan.
-PHOTO_SOCIAL_MAX_CHARS: "260"  # Max characters for photo captions.
-PHOTO_SOCIAL_ROOT: ""  # Override path for photo social output. Defaults to <USER_SPACE_ROOT>/<user_id>/social/photos/.
-PHOTO_SOCIAL_SCAN_INTERVAL_SECONDS: "21600"  # Scan interval (6 hours).
-PIXELFED_MEDIA_ROOTS: ""  # Comma-separated approved image roots for post_pixelfed; empty uses the photo social root.
+PHOTO_SOCIAL_AUTODRAFT: "0"
+PHOTO_SOCIAL_AUTOPOST: "0"
+PHOTO_SOCIAL_PROVIDERS: "pixelfed"
+PHOTO_SOCIAL_INBOX: "photos/inbox"
+PHOTO_SOCIAL_MAX_ITEMS: "3"
+PHOTO_SOCIAL_MAX_CHARS: "260"
+PHOTO_SOCIAL_ROOT: ""
+PHOTO_SOCIAL_SCAN_INTERVAL_SECONDS: "21600"
+PIXELFED_MEDIA_ROOTS: ""
 
 # -- Video social (Lane C — YouTube) --
-VIDEO_SOCIAL_AUTODRAFT: "0"  # Auto-generate draft video descriptions.
-VIDEO_SOCIAL_AUTOPOST: "0"  # Auto-post videos to providers.
-VIDEO_SOCIAL_PROVIDERS: "youtube"  # Video social provider(s) to post to.
-VIDEO_SOCIAL_INBOX: "videos"  # Directory to scan for new videos.
-VIDEO_SOCIAL_ROOT: ""  # Override path for video social output. Defaults to <USER_SPACE_ROOT>/<user_id>/social/videos/.
-VIDEO_SOCIAL_SCAN_INTERVAL_SECONDS: "21600"  # Scan interval (6 hours).
+VIDEO_SOCIAL_AUTODRAFT: "0"
+VIDEO_SOCIAL_AUTOPOST: "0"
+VIDEO_SOCIAL_PROVIDERS: "youtube"
+VIDEO_SOCIAL_INBOX: "videos"
+VIDEO_SOCIAL_ROOT: ""
+VIDEO_SOCIAL_SCAN_INTERVAL_SECONDS: "21600"
 
 # -- Social scheduling metadata --
-WEEKLY_SOCIAL_TIME_OF_DAY: "18:00"  # Time of day for scheduled posts.
-WEEKLY_SOCIAL_RETRY_INTERVAL_SECONDS: "1800"  # Retry interval for failed posts (30 minutes).
+WEEKLY_SOCIAL_TIME_OF_DAY: "18:00"
+WEEKLY_SOCIAL_RETRY_INTERVAL_SECONDS: "1800"
 
 # -- Lane A1 Patreon dev-post syndication --
-PATREON_LATEST_POST_URL: ""  # URL to fetch latest Patreon post for syndication.
-AIKO_DEV_GITHUB_REPO: "OppaAI/aiko-dev"  # GitHub repository for aiko-dev content.
-AIKO_DEV_GITHUB_BRANCH: "main"  # GitHub branch for aiko-dev content.
-AIKO_DEV_HUGO_CONTENT_PATH: "content/posts"  # Hugo content directory path in aiko-dev repo.
-A1_FULL_PROVIDERS: ""  # Providers that get the full dev post content.
-A1_TEASER_PROVIDERS: "x,bluesky,mastodon,discord,threads"  # Providers that get teaser links only.
+PATREON_LATEST_POST_URL: ""
+AIKO_DEV_GITHUB_REPO: "OppaAI/aiko-dev"
+AIKO_DEV_GITHUB_BRANCH: "main"
+AIKO_DEV_HUGO_CONTENT_PATH: "content/posts"
+A1_FULL_PROVIDERS: ""
+A1_TEASER_PROVIDERS: "bluesky,mastodon,discord,threads"
 
 # -- Social MCP Server --
-SOCIAL_MCP_DB_PATH: ""  # Database path for Social MCP Server state.
+SOCIAL_MCP_DB_PATH: ""
 
 # -- Messenger adapters --
-AIKO_MESSENGER_ADAPTERS: "discord,telegram"  # Comma-separated list of messenger adapters to enable.
+AIKO_MESSENGER_ADAPTERS: "discord,telegram"
 
 # -- Vision model (photo captioning) --
-VISION_MODEL: "minicpm-v"  # Vision model for photo captioning.
-VISION_BASE_URL: ""  # Base URL for vision model API; empty uses local/default.
+VISION_MODEL: "minicpm-v"
+VISION_BASE_URL: ""

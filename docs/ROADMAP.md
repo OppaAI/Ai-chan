@@ -112,7 +112,7 @@ Aiko-chan is built in phases. Each phase is a self-contained capability layer th
 
 | Feature | Status |
 |---|---|
-| Social account connectors — X, Threads, Pixelfed, YouTube, Bluesky, Mastodon | ✅ Done |
+| Social account connectors — Threads, Pixelfed, YouTube, Bluesky, Mastodon | ✅ Done |
 | Draft-first posting workflow — Aiko prepares posts, owner approves before publish | ✅ Done |
 | Platform-specific safety rules baked into drafting prompts (no private details, no engagement bait, per-platform length limits) | ✅ Done |
 | Workspace photo picker for Pixelfed (vision-captioned, LLM-selected, public-safe filter, MCP posted) | ✅ Done |
@@ -128,7 +128,7 @@ Aiko-chan is built in phases. Each phase is a self-contained capability layer th
 
 | Platform | Roadmap stance | Reason |
 |---|---|---|
-| X | ✅ Active | Live via AIsa relay; weekly Patreon dev-post teaser fanout |
+| X | ❌ Removed | Dropped — twitterapi.io write path needs residential proxy + credits; free/no-check replies get buried |
 | Threads | ✅ Active | Live; weekly Patreon dev-post teaser fanout, image posting via imgbb |
 | Pixelfed | ✅ Active | Lane B curated photo showcase via MCP |
 | YouTube | ✅ Active | Live; video lane, description-grounded — you choose the video, Aiko only polishes the write-up |
@@ -317,7 +317,7 @@ The `dream()` consolidation system runs across all phases and improves continuou
 ## Aiko social lanes (updated)
 
 - Two-way messenger adapters are native background services for WebUI/CLI sessions via `AIKO_MESSENGER_ADAPTERS`; only Telegram, Discord, Matrix, and Slack are supported for conversational ingress/egress.
-- Lane A1 syndicates the weekly Patreon Aiko development post on Saturdays at 18:00: full reposts go to the Hugo-backed GitHub Pages dev blog; short teasers go to X, Bluesky, Mastodon, Discord `#aiko_dev`, and Threads when image hosting is available. YouTube remains video-upload only, not YouTube Community teaser posting. Lane A2 manual posting remains out of Aiko.
+- Lane A1 syndicates the weekly Patreon Aiko development post on Saturdays at 18:00: full reposts go to the Hugo-backed GitHub Pages dev blog; short teasers go to Bluesky, Mastodon, Discord `#aiko_dev`, and Threads when image hosting is available. YouTube remains video-upload only, not YouTube Community teaser posting. Lane A2 manual posting remains out of Aiko. X is not a target.
 - Lane B is the curated photo pipeline for Pixelfed posting through the social MCP server.
 - Lane C YouTube video posting continues to use the existing MCP posting pipeline.
 - Lane D creates one Threads teaser-list draft per night at 23:00 for tech jobs available today, using only the configured CivicJobs.ca Lower Mainland RSS and Job Bank Canada filtered RSS feeds, filtered by TECH_JOB_KEYWORDS.

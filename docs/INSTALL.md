@@ -290,7 +290,7 @@ NEEDLE_TIMEOUT=15
 Export Aiko's startup catalogue, then start Needle with it:
 
 ```bash
-uv run python scripts/export_needle_tools.py needle-tools.json
+uv run python util/export_needle_tools.py needle-tools.json
 needle --tools needle-tools.json --serve
 ```
 
