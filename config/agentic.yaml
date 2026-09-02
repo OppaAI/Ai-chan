@@ -59,8 +59,6 @@ AGENT_INCLUDE_EXPERIENCE_CONTEXT: "0"  # Experience is now used for offline play
 # Graph/playbook workflows stay deterministic. Low-confidence or unavailable
 # Needle responses fall back to the configured main LLM. Needle never executes
 # tools; Aiko still validates, approves, and runs every call.
-# Export the catalogue with: uv run python scripts/export_needle_tools.py needle-tools.json
-# Then start Needle: needle --tools needle-tools.json --serve
 AGENT_REACT_BACKEND: "openai"  # openai | needle | needle_multi. Flip to needle after the local Needle server is up.
 NEEDLE_BASE_URL: "http://127.0.0.1:8082"  # Single-worker Needle 2 POST /complete server.
 NEEDLE_CONFIDENCE_THRESHOLD: "0.85"  # Below this, escalate the ReAct turn to the main LLM. Range 0.0-1.0.
