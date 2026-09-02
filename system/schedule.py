@@ -556,6 +556,14 @@ def _default_schedule_graphs(user_id: str | None = None) -> list[dict]:
             "next_due": "",
             "last_ran_at": None,
         },
+        {
+            "id": "owner_email_poll",
+            "trigger": {"frequency": "interval", "interval_seconds": 600},
+            "graph_id": "owner_email",
+            "enabled": True,
+            "next_due": "",
+            "last_ran_at": None,
+        },
     ]
 
 
@@ -579,6 +587,19 @@ def ensure_schedule_graphs(user_id: str | None = None) -> None:
                 "enabled": True,
                 "next_due": _schedule_graph_next_due(
                     {"trigger": {"time": "00:05", "frequency": "hourly"}}, after=now
+                ).isoformat(),
+                "last_ran_at": None,
+            })
+            changed = True
+        # Seed owner email poll if missing (existing installs)
+        if not any(g.get("id") == "owner_email_poll" or g.get("graph_id") == "owner_email" for g in graphs):
+            graphs.append({
+                "id": "owner_email_poll",
+                "trigger": {"frequency": "interval", "interval_seconds": 600},
+                "graph_id": "owner_email",
+                "enabled": True,
+                "next_due": _schedule_graph_next_due(
+                    {"trigger": {"frequency": "interval", "interval_seconds": 600}}, after=now
                 ).isoformat(),
                 "last_ran_at": None,
             })

@@ -1,0 +1,13 @@
+{
+  "workflow_id": "owner_email",
+  "poll_interval_minutes": 10,
+  "max_results": 5,
+  "folder": "inbox",
+  "owner_filter": "AIKO_EMAIL",
+  "reply_enabled": true,
+  "mark_processed": true,
+  "email": {
+    "enabled": true,
+    "when": "on_owner_message"
+  }
+}

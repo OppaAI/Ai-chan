@@ -22,8 +22,13 @@ import threading
 import time
 from collections import OrderedDict, deque
 from dataclasses import dataclass
+from typing import Any
 
 from system.config import env_bool, env_flag, env_int
+try:
+    from cognition.subliminal import SubliminalLayer
+except Exception:
+    SubliminalLayer = None  # type: ignore
 try:
     _brain_trace = importlib.import_module("system.brain_trace")
 except Exception:
@@ -137,13 +142,13 @@ def _gate_tokens(text: str) -> set[str]:
 
 
 def is_critical_task(user_input: str) -> bool:
-    """Return whether user input names an urgent or safety-critical request."""
-    return bool(_CRITICAL_TASK_RE.search(user_input or ""))
+    """Return whether user input names an urgent or safety-critical request. LightGBM-gated, regex fallback."""
+    return _gated_match("critical", user_input or "", _CRITICAL_TASK_RE)
 
 
 def is_time_sensitive(user_input: str) -> bool:
-    """Return whether user input requires current or date-sensitive handling."""
-    return bool(_TIME_SENSITIVE_RE.search(user_input or ""))
+    """Return whether user input requires current or date-sensitive handling. LightGBM-gated, regex fallback."""
+    return _gated_match("time_sensitive", user_input or "", _TIME_SENSITIVE_RE)
 
 
 def capability_from_outcomes(outcomes: list[dict], domain: str = "") -> dict:
@@ -286,76 +291,169 @@ def _affect(text: str) -> float:
 
 
 class IntentConfidenceClassifier:
-    """Lightweight XGBoost classifier for success prediction on edge.
-    
+    """Lightweight LightGBM classifier for success prediction on Jetson.
+
     Trains on bounded feature set: no embeddings, no external calls.
     Used to augment gate decisions. Gracefully unavailable until trained.
-    
-    dormant architecture: intent features encode input shape, semantics,
-    context alignment, and state readiness. Active cognition scores
-    likelihood of user request succeeding.
+
+    Replaces the former XGBoost booster: LightGBM is lighter on ARM/Jetson
+    (~20 MB vs ~40 MB), faster inference, same tabular feature story.
+    Falls back to regex heuristics when no model file is present.
     """
-    
-    def __init__(self, model_path: str = "models/intent_classifier.xgb"):
-        """Load XGBoost model if available. Activation contingent on file presence."""
+
+    # Canonical feature order — must match training script.
+    _FEATURE_ORDER = [
+        "input_length",
+        "token_count",
+        "is_question",
+        "has_action_verb",
+        "has_negation",
+        "has_uncertainty",
+        "has_time_ref",
+        "overlap_with_active_goal",
+        "overlap_with_open_loop",
+        "current_energy",
+        "current_uncertainty",
+        "is_running_hot",
+        # gated regex detectors (added for LightGBM multi-task, fallback to regex)
+        "is_critical",
+        "is_time_sensitive",
+        "has_question",
+        "has_commitment",
+        "has_task",
+        "is_identity_query",
+        "has_goal_phrase",
+        "is_done",
+        "has_energy_low",
+        "has_energy_high",
+        "outcome_fail",
+        "outcome_ok",
+        "has_self_refuse",
+        "has_self_bargain",
+    ]
+
+    def __init__(self, model_path: str = "models/intent_classifier.lgb"):
+        """Load LightGBM model if available. Gracefully inactive when absent."""
         self.model = None
         self.available = False
         self.model_path = model_path
+        # also probe legacy xgb path for migration period
+        self._legacy_path = "models/intent_classifier.xgb"
         self._load_model()
-    
+
     def _load_model(self) -> None:
-        """Try to load trained XGBoost model. Graceful fallback if absent."""
+        # Try LightGBM first
+        for path in (self.model_path, self._legacy_path):
+            try:
+                lgb = importlib.import_module("lightgbm")
+                booster = lgb.Booster(model_file=path)
+                self.model = booster
+                self.model_path = path
+                self.available = True
+                return
+            except Exception:
+                continue
+        # Fallback: try xgboost shim for already-trained legacy file
         try:
             xgb = importlib.import_module("xgboost")
-            self.model = xgb.Booster()
-            self.model.load_model(self.model_path)
+            self.model = xgb.Booster()  # type: ignore[attr-defined]
+            self.model.load_model(self._legacy_path)
             self.available = True
+            return
         except Exception:
-            # Model not yet trained or file missing; classifier inactive.
-            self.available = False
-    
+            pass
+        self.available = False
+
     def predict(self, features: dict) -> tuple[float, float]:
-        """Estimate (confidence, success_probability).
-        
-        confidence ∈ [0, 1]: model certainty.
-        success_probability ∈ [0, 1]: predicted likelihood of task success.
-        
-        Returns (0.0, 0.5) if model unavailable.
-        """
-        if not self.available or not features:
-            # No trained model; neutral default (no opinion).
+        """Estimate (confidence, success_probability). Returns (0.0, 0.5) if unavailable."""
+        if not self.available or not features or self.model is None:
             return 0.0, 0.5
-        
         try:
-            xgb = importlib.import_module("xgboost")
-            # Feature order must match training pipeline.
-            feature_list = [
-                features.get("input_length", 0),
-                features.get("token_count", 0),
-                features.get("is_question", 0),
-                features.get("has_action_verb", 0),
-                features.get("has_negation", 0),
-                features.get("has_uncertainty", 0),
-                features.get("has_time_ref", 0),
-                features.get("overlap_with_active_goal", 0),
-                features.get("overlap_with_open_loop", 0),
-                features.get("current_energy", 0.5),
-                features.get("current_uncertainty", 0.0),
-                features.get("is_running_hot", 0),
-            ]
-            dmatrix = xgb.DMatrix([feature_list])
-            pred = self.model.predict(dmatrix)[0]
-            # Predict returns probability of class 1 (success).
-            # Confidence: how far from 0.5 (neutral)?
+            feature_list = [float(features.get(k, 0)) for k in self._FEATURE_ORDER]
+            # LightGBM Booster.predict expects 2-D array
+            pred = float(self.model.predict([feature_list])[0])  # type: ignore
+            # clamp to [0,1] (regression or binary)
+            pred = max(0.0, min(1.0, pred))
             confidence = max(abs(pred - 0.5) * 2, 0.4)
             return confidence, pred
         except Exception:
-            # Model load failed or prediction error; stay neutral.
             return 0.0, 0.5
 
 
 # Singleton classifier instance. Loads on module init; reuses same model.
 _intent_classifier = IntentConfidenceClassifier()
+
+# ── Gated regex → LightGBM detectors (train-and-keep-regex-as-fallback) ──
+# Each detector optionally loads a per-task LightGBM model from
+# models/detectors/<name>.lgb. When absent, the compiled regex is used.
+_DETECTOR_MODELS: dict[str, Any] = {}
+_DETECTOR_REGEX: dict[str, re.Pattern] = {}
+
+
+def _load_detector_models() -> None:
+    import os as _os
+    root = _os.path.join(_os.path.dirname(_os.path.dirname(__file__)), "models", "detectors")
+    if not _os.path.isdir(root):
+        return
+    try:
+        lgb = importlib.import_module("lightgbm")
+    except Exception:
+        return
+    for name, pat in list(_DETECTOR_REGEX.items()):
+        path = _os.path.join(root, f"{name}.lgb")
+        if not _os.path.isfile(path):
+            continue
+        try:
+            _DETECTOR_MODELS[name] = lgb.Booster(model_file=path)
+        except Exception:
+            pass
+
+
+def _gated_match(name: str, text: str, fallback_re: re.Pattern) -> bool:
+    """Try LightGBM detector for *name*; fallback to regex."""
+    mdl = _DETECTOR_MODELS.get(name)
+    if mdl is not None:
+        try:
+            # minimal token-bag features for gate detectors
+            toks = _tokens(text)
+            feats = [
+                float(len(text or "")),
+                float(len(toks)),
+                float("?" in (text or "")),
+                float(bool(fallback_re.search(text or ""))),
+            ]
+            pred = float(mdl.predict([feats])[0])  # type: ignore
+            return pred >= 0.5
+        except Exception:
+            pass
+    return bool(fallback_re.search(text or ""))
+
+
+# Register regexes for gated loading
+_DETECTOR_REGEX.update({
+    "critical": _CRITICAL_TASK_RE,
+    "time_sensitive": _TIME_SENSITIVE_RE,
+    "question": _QUESTION_RE,
+    "commitment": _COMMITMENT_RE,
+    "task": _TASK_RE,
+    "identity_query": _IDENTITY_QUERY_RE,
+    "done": _DONE_RE,
+    "uncertain": _UNCERTAIN_RE,
+    "energy_low": _ENERGY_LOW_RE,
+    "energy_high": _ENERGY_HIGH_RE,
+    "outcome_fail": _OUTCOME_FAIL_RE,
+    "outcome_ok": _OUTCOME_OK_RE,
+    "negation": _NEGATION_RE,
+    "goal": _GOAL_RE,
+    "self_refuse": _SELF_REFUSE_RE,
+    "self_bargain": _SELF_BARGAIN_RE,
+    "self_initiate": _SELF_INITIATE_RE,
+    "self_stance": _SELF_STANCE_RE,
+})
+try:
+    _load_detector_models()
+except Exception:
+    pass
 
 
 class EdgeCognitiveState:
@@ -388,7 +486,6 @@ class EdgeCognitiveState:
         self._pending_memory_conflicts: deque[dict] = deque(maxlen=3)
         self._preferences: dict[str, str] = {}
         self._identity_questions: deque[str] = deque(maxlen=3)
-        self._intuitions: deque[str] = deque(maxlen=4)
         self._preference_counts: dict[str, int] = {}
         # Self-regarding state (about Aiko, not the user). Evidence-gated:
         # raw decisions are recorded every time; durable self-preferences
@@ -400,6 +497,10 @@ class EdgeCognitiveState:
         # Recent turn wall-clock seconds (bounded) for coarse "running hot".
         self._turn_latencies: deque[float] = deque(maxlen=5)
         self._lock = threading.RLock()
+        # Subliminal layer owns intuitions / pre-attentive scan (Jetson-clean split).
+        # Created after _lock so it can share the same RLock.
+        self._subliminal = SubliminalLayer(lock=self._lock) if SubliminalLayer is not None else None
+        self._intuitions: deque[str] = self._subliminal._intuitions if self._subliminal is not None else deque(maxlen=4)  # alias for compat
         self._last_tick = time.monotonic()
 
     def record(self, user: str, assistant: str) -> None:
@@ -433,6 +534,20 @@ class EdgeCognitiveState:
                     self._open_loops.appendleft(loop)
             self._capture_goal(user)
             self._refresh_subconscious(user)
+            # Continuous training hook — log gated features for LightGBM while talking
+            try:
+                feats = self._feature_vector_for_intent(user)
+                # weak label from immediate outcome signals (refined on next turn via outcome rewrites)
+                if self._tool_outcomes:
+                    last = self._tool_outcomes[-1] if self._tool_outcomes else {}
+                    ok = last.get("ok", None) if isinstance(last, dict) else None
+                    label = 1.0 if ok is True else 0.0 if ok is False else 0.5
+                else:
+                    label = 0.5
+                from cognition.attention_train import log_example
+                log_example(feats, label)
+            except Exception:
+                pass
             if _DONE_RE.search(user):
                 self._close_matching_goal(user)
                 self._close_matching_loop(user)
@@ -788,36 +903,54 @@ class EdgeCognitiveState:
         return "stable"
 
     def _feature_vector_for_intent(self, user_input: str) -> dict:
-        """Extract 12 lightweight features for intent confidence scoring.
-        
-        No embeddings; uses only regex, string stats, and current state.
-        Option 2: XGBoost Intent Classifier — feature engineering.
+        """Extract gated features for LightGBM intent confidence scoring.
+
+        Keeps the original 12 lightweight features and appends the 14
+        regex-detector binaries so a single LightGBM model can learn
+        their combinations. All detectors use gated LightGBM-or-regex
+        helpers when per-detector models are present.
         """
         text = (user_input or "").strip()
         tokens = _tokens(text)
-        
+
         features = {
             # Input shape
             "input_length": len(text),
             "token_count": len(tokens),
             "is_question": 1.0 if "?" in text else 0.0,
-            
-            # Semantics (lightweight regex-based)
+
+            # Semantics (lightweight, gated)
             "has_action_verb": 1.0 if any(v in text.lower() for v in ("can you", "could you", "do", "make", "write")) else 0.0,
-            "has_negation": 1.0 if _NEGATION_RE.search(text) else 0.0,
-            "has_uncertainty": 1.0 if _UNCERTAIN_RE.search(text) else 0.0,
+            "has_negation": 1.0 if _gated_match("negation", text, _NEGATION_RE) else 0.0,
+            "has_uncertainty": 1.0 if _gated_match("uncertain", text, _UNCERTAIN_RE) else 0.0,
             "has_time_ref": 1.0 if is_time_sensitive(text) else 0.0,
-            
+
             # Context alignment
             "overlap_with_active_goal": len(tokens & _tokens(" ".join(
                 [g.text for g in self._goals if g.progress == "active"]
             ))),
             "overlap_with_open_loop": len(tokens & _tokens(" ".join(list(self._open_loops)))),
-            
+
             # State readiness
             "current_energy": self._energy,
             "current_uncertainty": self._uncertainty,
             "is_running_hot": 1.0 if self.load_signal() >= 0.75 else 0.0,
+
+            # Gated detector binaries (regex fallback, LightGBM when trained)
+            "is_critical": 1.0 if is_critical_task(text) else 0.0,
+            "is_time_sensitive": 1.0 if is_time_sensitive(text) else 0.0,
+            "has_question": 1.0 if _gated_match("question", text, _QUESTION_RE) else 0.0,
+            "has_commitment": 1.0 if _gated_match("commitment", text, _COMMITMENT_RE) else 0.0,
+            "has_task": 1.0 if _gated_match("task", text, _TASK_RE) else 0.0,
+            "is_identity_query": 1.0 if _gated_match("identity_query", text, _IDENTITY_QUERY_RE) else 0.0,
+            "has_goal_phrase": 1.0 if _gated_match("goal", text, _GOAL_RE) else 0.0,
+            "is_done": 1.0 if _gated_match("done", text, _DONE_RE) else 0.0,
+            "has_energy_low": 1.0 if _gated_match("energy_low", text, _ENERGY_LOW_RE) else 0.0,
+            "has_energy_high": 1.0 if _gated_match("energy_high", text, _ENERGY_HIGH_RE) else 0.0,
+            "outcome_fail": 1.0 if _gated_match("outcome_fail", text, _OUTCOME_FAIL_RE) else 0.0,
+            "outcome_ok": 1.0 if _gated_match("outcome_ok", text, _OUTCOME_OK_RE) else 0.0,
+            "has_self_refuse": 1.0 if _gated_match("self_refuse", text, _SELF_REFUSE_RE) else 0.0,
+            "has_self_bargain": 1.0 if _gated_match("self_bargain", text, _SELF_BARGAIN_RE) else 0.0,
         }
         return features
 
@@ -869,7 +1002,15 @@ class EdgeCognitiveState:
             return {"status": status, "population": population, "components": components, "attention_valid": attention_words >= 2 or not self._events}
 
     def _refresh_subconscious(self, user: str) -> None:
-        """Derive tentative, non-authoritative intuitions from bounded state. Intuition engram."""
+        """Delegate to SubliminalLayer (L3). Keeps hot path <0.2 ms."""
+        if self._subliminal is not None:
+            snap = self.snapshot()
+            scan = self._subliminal.scan(user, snap, self._events)
+            self._subliminal.refresh_intuitions(snap, scan)
+            # keep alias in sync
+            self._intuitions = self._subliminal._intuitions
+            return
+        # Fallback when subliminal not loaded
         candidates = []
         snap = self.snapshot()
         if snap.get("contradictions"):
@@ -1007,7 +1148,9 @@ class EdgeCognitiveState:
         )
 
     def priming_context(self, query: str = "") -> str:
-        """Inject only subconscious signals related to the current query. Context priming."""
+        """Inject only subconscious signals related to the current query. Delegates to SubliminalLayer."""
+        if self._subliminal is not None:
+            return self._subliminal.priming_context(query, self.snapshot(), self._identity_questions)
         query_words = _tokens(query)
         snap = self.snapshot()
         related_goals = [item for item in snap.get("goals", []) if not query_words or _tokens(item) & query_words]
@@ -1029,7 +1172,9 @@ class EdgeCognitiveState:
         return "<subconscious_priming>\n" + "\n".join("- " + line for line in lines) + "\n</subconscious_priming>"
 
     def subconscious_guidance(self) -> str:
-        """Expose subconscious signals as hypotheses for conscious review. Intuition guidance."""
+        """Expose subconscious signals as hypotheses for conscious review. Delegates to SubliminalLayer."""
+        if self._subliminal is not None:
+            return self._subliminal.guidance()
         with self._lock:
             intuitions = list(self._intuitions)
         if not intuitions:
@@ -1121,6 +1266,8 @@ class EdgeCognitiveState:
                 self._preferences = {str(k): str(v) for k, v in (data.get("preferences") or {}).items()}
                 self._identity_questions = deque(data.get("identity_questions", [])[:3], maxlen=3)
                 self._intuitions = deque(data.get("intuitions", [])[:4], maxlen=4)
+                if self._subliminal is not None:
+                    self._subliminal._intuitions = self._intuitions
                 self._self_preferences = {str(k): str(v) for k, v in (data.get("self_preferences") or {}).items()}
                 self._self_preference_counts = {str(k): min(3, int(v)) for k, v in (data.get("self_preference_evidence") or {}).items() if str(k) and str(v).isdigit()}
                 self._self_notes = deque([str(n) for n in (data.get("self_notes") or []) if n][:5], maxlen=5)

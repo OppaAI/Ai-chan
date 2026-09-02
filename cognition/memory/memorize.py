@@ -150,24 +150,21 @@ from .imprint import (
     _valence_from_llm,
 )
 
-from .search import (
+from .episode import (
     _BROAD_RECALL_RE,
     _is_trivial_input,
     _normalize_memory_text,
     _sanitize_fts_query,
-)
-
-from .lifecycle import (
     DREAM_BOOST_AMOUNT,
     DREAM_MERGE_THRESHOLD,
     DREAM_SCHEMA_ENABLED,
     DREAM_SCHEMA_MAX_CLUSTERS,
     DREAM_SCHEMA_MIN_MEMBERS,
     DREAM_SCHEMA_VALENCE_MAJORITY,
-    MEMORY_WM_CAPACITY,
     WRITE_DEDUP_THRESHOLD,
     _SALIENCE_RE,
 )
+from .episode import MEMORY_WM_CAPACITY  # re-exported from episode for compat
 
 
 class _MemoryBackend:
@@ -473,7 +470,7 @@ class _MemoryBackend:
             clean_pairs.append((fact, sc))
               
         # Repair common user/assistant subject swaps (Oppa vs Aiko).
-        from cognition.memory.fact_identity import sanitize_fact_score_pairs
+        from cognition.memory.entity import sanitize_fact_score_pairs
         return sanitize_fact_score_pairs(
             clean_pairs,
             user_name=user_name,
@@ -4093,6 +4090,13 @@ class AikoMemorize:
 
 format_for_context = AikoMemorize.format_for_context
 
+# Back-compat aliases — tests import public names but engine uses underscore variants
+MemoryBackend = _MemoryBackend  # type: ignore
+is_trivial_input = _is_trivial_input  # type: ignore
+sanitize_fts_query = _sanitize_fts_query  # type: ignore
+memory_normalize_text = _normalize_memory_text  # type: ignore
+first_json_array = _first_json_array  # type: ignore
+
 __all__ = [
     "AikoMemorize",
     "BOOT_LABELS",
@@ -4106,6 +4110,11 @@ __all__ = [
     "PERSONA_CACHE_TTL",
     "WRITE_DEDUP_THRESHOLD",
     "_MemoryBackend",
+    "MemoryBackend",
+    "is_trivial_input",
+    "sanitize_fts_query",
+    "memory_normalize_text",
+    "first_json_array",
     "_PHASE_A_COLUMNS",
     "_first_json_array",
     "_is_trivial_input",

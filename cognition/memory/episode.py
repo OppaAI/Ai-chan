@@ -52,8 +52,69 @@ except Exception:
     _brain_trace = None
 from cognition.memory.vecstore import HarrierEmbedder, initialize_store_db
 from cognition.memory.vecstore import KNN_MATCH_K_MIN, KNN_MATCH_OVERSCAN
-from cognition.memory.search import _sanitize_fts_query
-from cognition.memory.lifecycle import DREAM_MERGE_THRESHOLD
+
+# ── inlined from lifecycle.py (dream-pass tunables, previously separate) ───
+DREAM_MERGE_THRESHOLD = float(os.getenv("DREAM_MERGE_THRESHOLD", 0.88))
+WRITE_DEDUP_THRESHOLD = float(os.getenv("WRITE_DEDUP_THRESHOLD", 0.95))
+DREAM_BOOST_AMOUNT = int(os.getenv("DREAM_BOOST_AMOUNT", 2))
+DREAM_SCHEMA_ENABLED = os.getenv("DREAM_SCHEMA_ENABLED", "1").lower() in {"1", "true", "yes", "on"}
+DREAM_SCHEMA_MIN_MEMBERS = int(os.getenv("DREAM_SCHEMA_MIN_MEMBERS", "3"))
+DREAM_SCHEMA_MAX_CLUSTERS = int(os.getenv("DREAM_SCHEMA_MAX_CLUSTERS", "12"))
+DREAM_SCHEMA_VALENCE_MAJORITY = float(os.getenv("DREAM_SCHEMA_VALENCE_MAJORITY", "0.6"))
+_SALIENCE_KEYWORDS = frozenset([
+    "name", "called", "likes", "loves", "hates", "dislikes", "always", "never",
+    "important", "remember", "favourite", "favorite", "birthday", "works",
+    "lives", "studying", "job", "afraid", "dream", "goal",
+    "deadline", "due", "appointment", "event", "hackathon", "wallet",
+    "lost", "passport", "license", "meeting", "interview", "project",
+])
+_SALIENCE_RE = re.compile(
+    r'\b(?:' + '|'.join(re.escape(k) for k in _SALIENCE_KEYWORDS) + r')\b',
+    re.IGNORECASE,
+)
+
+# ── inlined from search.py (recall helpers, previously separate) ──────────
+AI_NAME = os.getenv("AI_NAME", "Aiko").strip().lower()
+_FILLER_WORDS = (
+    "hi", "hey", "hello", "ok", "okay", "thanks", "thank you",
+    "yes", "no", "yeah", "nah", "lol", "sure", "bye",
+)
+_GREETING_PHRASES = (
+    "how are you", "how are you doing", "hows it going", "how's it going",
+    "how are things", "how you doing", "whats up", "what's up",
+)
+_name_alt = re.escape(AI_NAME) if AI_NAME else ""
+_TRIVIAL_PHRASES = sorted(_FILLER_WORDS + _GREETING_PHRASES, key=len, reverse=True)
+_trivial_alt = "|".join(re.escape(p) for p in _TRIVIAL_PHRASES)
+_CLAUSE_SPLIT_RE = re.compile(r"[,.!?]+")
+
+def _is_trivial_input(text: str) -> bool:
+    clauses = [c.strip().lower() for c in _CLAUSE_SPLIT_RE.split(text or "") if c.strip()]
+    if not clauses:
+        return True
+    for clause in clauses:
+        if _name_alt and re.fullmatch(_name_alt, clause, re.IGNORECASE):
+            continue
+        if re.fullmatch(_trivial_alt, clause, re.IGNORECASE):
+            continue
+        if len(clause.split()) == 1 and len(clause) <= 2:
+            continue
+        return False
+    return True
+
+_BROAD_RECALL_RE = re.compile(
+    r"\b(what|anything|things|facts|memories?|remember|recall)\b.*\b(about me|about oppa|you remember|past|before)\b"
+    r"|\b(remember|recall)\b.*\b(me|oppa)\b",
+    re.IGNORECASE,
+)
+
+def _sanitize_fts_query(query: str) -> str | None:
+    cleaned = re.sub(r'[^\w\s]', ' ', query or "")
+    cleaned = ' '.join(cleaned.split())
+    return cleaned or None
+
+def _normalize_memory_text(text: str) -> str:
+    return " ".join((text or "").split()).lower()
 
 log = get_logger(__name__)
 
@@ -226,12 +287,8 @@ def _is_trivial_turn(user_text: str, assistant_text: str) -> bool:
     combined = f"{(user_text or '').strip()} {(assistant_text or '').strip()}".strip()
     if len(combined) < EMC_EVICT_MIN_CHARS:
         return True
-    try:
-        from cognition.memory.search import _is_trivial_input
-        if _is_trivial_input(user_text or "") and len((assistant_text or "").strip()) < 80:
-            return True
-    except Exception:
-        pass
+    if _is_trivial_input(user_text or "") and len((assistant_text or "").strip()) < 80:
+        return True
     return False
 
 

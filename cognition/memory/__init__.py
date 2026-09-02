@@ -15,7 +15,6 @@ Module layout (backend split):
   entity      — entity extraction/classification, valence/arousal/salience,
                 entity relations, importance (I_e)
   imprint     — write-path extraction/persistence helpers
-  search      — recall-time pure helpers (trivial skip, FTS/normalize)
-  lifecycle   — dream-pass tunables
+  episode     — EMC episodic store + inlined search/lifecycle helpers (trivial skip, FTS/normalize, dream tunables)
   vecstore    — shared SQLite/sqlite-vec access + HarrierEmbedder
 """
