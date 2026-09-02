@@ -4,10 +4,10 @@
 # Tune local OpenAI-compatible model endpoint, token budgets, and sampling behavior here.
 
 # -- Model endpoint --
-LLM_BASE_URL: "http://localhost:8080/v1"  # OpenAI-compatible chat endpoint, usually llama.cpp /v1 URL.
-LLM_MODEL: "ministral"  # Main chat model id/alias; must match the server model name.
-REFLECT_MODEL: "ministral"  # Model used for reflection/consolidation; often same as LLM_MODEL.
-LLM_TIMEOUT: "120"  # Seconds before chat/reflection LLM HTTP calls time out.
+LLM_BASE_URL: "http://AIVA:11434/v1"  # OpenAI-compatible chat endpoint, usually llama.cpp /v1 URL.
+LLM_MODEL: "hf.co/unsloth/Ministral-3-14B-Instruct-2512-GGUF:UD-Q4_K_XL"  # Main chat model id/alias; must match the server model name.
+REFLECT_MODEL: "hf.co/unsloth/Ministral-3-14B-Instruct-2512-GGUF:UD-Q4_K_XL"  # Model used for reflection/consolidation; often same as LLM_MODEL.
+LLM_TIMEOUT: "512"  # Seconds before chat/reflection LLM HTTP calls time out.
 
 # -- Token budgets --
 LLM_MAX_TOKENS: "280"  # Base max tokens for normal chat replies.

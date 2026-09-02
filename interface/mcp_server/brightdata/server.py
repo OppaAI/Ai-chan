@@ -16,7 +16,7 @@ import json
 import os
 from typing import Any
 
-from mcp.server.fastmcp import FastMCP
+from fastmcp import FastMCP
 
 from interface.mcp_server.brightdata import api_client as bd
 

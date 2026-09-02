@@ -130,10 +130,20 @@ class MCPClient:
             result = await session.list_tools()
             tools = []
             for t in result.tools:
+                # mcp 2.x renamed inputSchema -> input_schema (snake_case). Keep
+                # backward compat via getattr so both SDK versions work without
+                # deprecation warnings when fastmcp shim is not loaded.
+                schema = getattr(t, "input_schema", None)
+                if schema is None:
+                    schema = getattr(t, "inputSchema", None)
+                if schema is None:
+                    schema = getattr(t, "parameters", None)
+                if schema is None:
+                    schema = {}
                 entry = {
                     "name": t.name,
                     "description": t.description,
-                    "inputSchema": t.inputSchema if hasattr(t, "inputSchema") else t.parameters if hasattr(t, "parameters") else {},
+                    "inputSchema": schema,
                 }
                 tools.append(entry)
             self._tools = {t["name"]: t for t in tools}
