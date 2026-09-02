@@ -279,7 +279,7 @@ _LLM_CLIENT = OpenAI(base_url=LLM_BASE_URL, api_key="not-needed")
 
 # Lane A1 — Patreon dev-post syndication
 A1_FULL_PROVIDERS = tuple(p.strip().lower() for p in os.getenv("A1_FULL_PROVIDERS", "").split(",") if p.strip())
-A1_TEASER_PROVIDERS = tuple(p.strip().lower() for p in os.getenv("A1_TEASER_PROVIDERS", "x,bluesky,mastodon,discord,threads").split(",") if p.strip())
+A1_TEASER_PROVIDERS = tuple(p.strip().lower() for p in os.getenv("A1_TEASER_PROVIDERS", "bluesky,mastodon,discord,threads").split(",") if p.strip())
 A1_TEASER_MAX_CHARS = _int_env("A1_TEASER_MAX_CHARS", 280)
 # Threads topic tag for the teaser fanout. "AI Threads" is the default
 # (it surfaces the post under Threads' AI topic); users can override with
@@ -1600,7 +1600,7 @@ def post_to_social(text: str, services: str, image_path: str | None = None) -> d
     """Post text and optional image to one or more social platforms.
     
     services is a comma-separated list of platform names, e.g. 'bluesky,mastodon'.
-    Supported: x, threads, bluesky, mastodon, discord.
+    Supported: threads, bluesky, mastodon, discord.
     Does NOT require human approval — use for direct posting requests.
     """
     return _call_social_mcp("post_social", services=services, text=text, image_path=image_path)
