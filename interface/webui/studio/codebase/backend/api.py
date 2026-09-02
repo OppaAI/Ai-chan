@@ -16,9 +16,12 @@ app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, 
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 FRONTEND_DIR = BASE_DIR / "frontend"
-SHARED_DIR = Path(__file__).resolve().parents[3] / "shared"
-app.mount("/static", StaticFiles(directory=str(FRONTEND_DIR), html=True), name="codebase-frontend")
-app.mount("/shared", StaticFiles(directory=str(SHARED_DIR), html=True), name="studio-shared")
+# studio/shared is at interface/webui/studio/shared — for codebase backend depth is parents[2], for ltm depth is parents[3]
+SHARED_DIR = Path(__file__).resolve().parents[2] / "shared"
+if FRONTEND_DIR.is_dir():
+    app.mount("/static", StaticFiles(directory=str(FRONTEND_DIR), html=True), name="codebase-frontend")
+if SHARED_DIR.is_dir():
+    app.mount("/shared", StaticFiles(directory=str(SHARED_DIR), html=True), name="studio-shared")
 
 @app.get("/api/graph")
 def get_graph(limit: int = Query(400, ge=1, le=2000)):

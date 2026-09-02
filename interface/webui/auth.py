@@ -105,7 +105,7 @@ except ImportError as e:
 try:
     from interface.webui.studio.codebase.backend.api import app as codebase_studio_app
     app.mount("/studio/codebase", codebase_studio_app)
-except ImportError as e:
+except Exception as e:
     log.warning(f"Could not mount Codebase studio: {e}")
 
 # ── cookie signing ────────────────────────────────────────────────────────────
