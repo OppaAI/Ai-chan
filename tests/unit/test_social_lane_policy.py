@@ -1,3 +1,4 @@
+import asyncio
 import importlib
 from types import SimpleNamespace
 
@@ -48,7 +49,9 @@ def test_post_social_routes_known_services_only():
 
     mcp = FakeMCP()
     multipost.load_tools(mcp)
-    result = mcp.post_social(services="threads,bluesky,pixelfed", text="hello", image_path="img.png")
+    result = asyncio.run(
+        mcp.post_social(services="threads,bluesky,pixelfed", text="hello", image_path="img.png")
+    )
     assert result["ok"] is True
     assert [name for name, _ in calls] == ["threads", "bluesky", "pixelfed"]
     pixelfed_kwargs = dict(calls)["pixelfed"]
