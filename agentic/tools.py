@@ -30,6 +30,7 @@ from agentic.toolkit import photography  # noqa: F401
 from agentic.toolkit import self_improve  # noqa: F401
 from agentic.toolkit import reports  # noqa: F401
 from agentic.toolkit import research  # noqa: F401
+from agentic.toolkit import codebase  # noqa: F401  # codebase RAG (Jetson-optimized, separate DB)
 from agentic.toolkit import tool_result_cache  # noqa: F401
 from agentic.toolkit import tool_result_cache_tools  # noqa: F401  # registers cache_* graph tools
 from agentic.workflows.job_hunt import toolset  # noqa: F401

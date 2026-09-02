@@ -296,9 +296,9 @@ class IntentConfidenceClassifier:
     Trains on bounded feature set: no embeddings, no external calls.
     Used to augment gate decisions. Gracefully unavailable until trained.
 
-    Replaces the former XGBoost booster: LightGBM is lighter on ARM/Jetson
-    (~20 MB vs ~40 MB), faster inference, same tabular feature story.
-    Falls back to regex heuristics when no model file is present.
+    Uses LightGBM (lighter on ARM/Jetson ~20 MB vs XGBoost ~40 MB),
+    faster inference, same tabular feature story. Falls back to regex
+    heuristics when no model file is present.
     """
 
     # Canonical feature order — must match training script.
@@ -337,27 +337,13 @@ class IntentConfidenceClassifier:
         self.model = None
         self.available = False
         self.model_path = model_path
-        # also probe legacy xgb path for migration period
-        self._legacy_path = "models/intent_classifier.xgb"
         self._load_model()
 
     def _load_model(self) -> None:
-        # Try LightGBM first
-        for path in (self.model_path, self._legacy_path):
-            try:
-                lgb = importlib.import_module("lightgbm")
-                booster = lgb.Booster(model_file=path)
-                self.model = booster
-                self.model_path = path
-                self.available = True
-                return
-            except Exception:
-                continue
-        # Fallback: try xgboost shim for already-trained legacy file
         try:
-            xgb = importlib.import_module("xgboost")
-            self.model = xgb.Booster()  # type: ignore[attr-defined]
-            self.model.load_model(self._legacy_path)
+            lgb = importlib.import_module("lightgbm")
+            booster = lgb.Booster(model_file=self.model_path)
+            self.model = booster
             self.available = True
             return
         except Exception:
@@ -1112,7 +1098,7 @@ class EdgeCognitiveState:
         Returns (ok, reason, action): proceed | degrade_chat | defer | clarify.
         Critical tasks always proceed. Toggle with EDGE_ATTEMPT_GATE.
         
-        Integrates Option 1 (trend analysis) and Option 2 (XGBoost intent).
+        Integrates Option 1 (trend analysis) and Option 2 (LightGBM intent).
         Option 2 activates only when model is trained and available.
         """
         if not EDGE_COGNITION_ENABLED:
