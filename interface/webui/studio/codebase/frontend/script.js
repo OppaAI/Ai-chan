@@ -1,6 +1,7 @@
 const svg = d3.select("#canvas");
 const W = 560, H = 720;
 let nodes = [], edges = [];
+let graphRequestGeneration = 0;
 let scene;
 let activeSystems = new Set();
 let selectedId = null;
@@ -224,6 +225,7 @@ function drawEdges() {
     // Base edge
     edgeGroup.append("line")
       .attr("class", "edge")
+      .datum(l)
       .attr("data-source", l.source)
       .attr("data-target", l.target)
       .attr("x1", s.x).attr("y1", s.y)
@@ -236,6 +238,7 @@ function drawEdges() {
     // Animated spark traveling along edge
     const spark = edgeGroup.append("line")
       .attr("class", "edge-spark")
+      .datum(l)
       .attr("x1", s.x).attr("y1", s.y)
       .attr("x2", t.x).attr("y2", t.y)
       .attr("stroke", color)
@@ -387,15 +390,30 @@ function updateVisibility() {
 }
 
 // ── Search ──
-function doSearch() {
+async function doSearch() {
   const q = searchInput.value.trim().toLowerCase();
   if (!q) { searchHits.innerHTML = ""; searchStats.textContent = "Enter a question to search."; return; }
-  const hits = nodes.filter(n => n.name.toLowerCase().includes(q) || n.desc.toLowerCase().includes(q) || n.id.toLowerCase().includes(q) || n.files.some(f => f.toLowerCase().includes(q)));
+  let hits = [];
+  try {
+    const response = await fetch(`/api/search?q=${encodeURIComponent(q)}&limit=8`);
+    if (!response.ok) throw new Error(`Search failed (${response.status})`);
+    const payload = await response.json();
+    hits = (payload.hits || []).map(hit => ({
+      id: hit.path,
+      name: hit.path,
+      system: hit.path.startsWith("cognition/") ? "brain" : "core",
+      desc: hit.text || "Indexed source excerpt",
+      files: [hit.path],
+    }));
+  } catch (_error) {
+    // Keep the atlas usable before the index has been created.
+    hits = nodes.filter(n => n.name.toLowerCase().includes(q) || n.desc.toLowerCase().includes(q) || n.id.toLowerCase().includes(q) || n.files.some(f => f.toLowerCase().includes(q)));
+  }
   searchStats.textContent = `${hits.length} hit${hits.length !== 1 ? "s" : ""}`;
   searchHits.innerHTML = hits.map(h => `<div class="search-hit" data-id="${esc(h.id)}"><strong style="color:${SYSTEMS[h.system].color}">${esc(h.name)}</strong><span> · ${esc(h.desc.slice(0, 70))}…</span></div>`).join("");
   searchHits.querySelectorAll(".search-hit").forEach(el => {
     el.addEventListener("click", () => {
-      const node = nodes.find(n => n.id === el.dataset.id);
+      const node = nodes.find(n => n.id === el.dataset.id || n.files.includes(el.dataset.id));
       if (node) {
         selectNode(node);
         const scale = 1.8;
@@ -435,8 +453,18 @@ document.getElementById("print-atlas").onclick = () => window.print();
 
 // Events
 document.getElementById("export-md").onclick = exportMarkdown;
-document.getElementById("refresh").onclick = () => { setStatus("Refreshed"); init(); };
-document.getElementById("ingest").onclick = () => { setStatus("Re-indexing…"); setTimeout(() => setStatus("Indexed 24 modules"), 1200); };
+document.getElementById("refresh").onclick = () => init();
+document.getElementById("ingest").onclick = async () => {
+  setStatus("Re-indexing…");
+  try {
+    const response = await fetch("/api/ingest?force=true");
+    if (!response.ok) throw new Error(`Indexing failed (${response.status})`);
+    await response.json();
+    await init();
+  } catch (_error) {
+    setStatus("Indexing unavailable");
+  }
+};
 searchBtn.onclick = doSearch;
 searchInput.addEventListener("keydown", e => { if (e.key === "Enter") doSearch(); });
 showLabels.addEventListener("change", () => {
@@ -447,16 +475,56 @@ limitInput.addEventListener("change", init);
 svg.on("click", (e) => { if (e.target.tagName === "svg") clearSelection(); });
 
 // ── Init ──
-function init() {
+function systemForBodyPart(bodyPart) {
+  if (bodyPart === "brain") return "brain";
+  if (["senses", "voice"].includes(bodyPart)) return "senses";
+  if (bodyPart === "tools") return "tools";
+  return "core";
+}
+
+function graphNodeToDisplay(node) {
+  const system = systemForBodyPart(node.body_part);
+  const moduleName = node.module || node.path || node.id;
+  return {
+    id: node.id,
+    module: moduleName,
+    name: moduleName.split("/").pop(),
+    system,
+    x: Math.round(node.x * W),
+    y: Math.round(node.y * H),
+    r: Math.max(9, Math.min(16, 8 + Math.log2((node.file_count || 1) + 1) * 3)),
+    desc: `${node.title || "Indexed module"} · ${node.loc || 0} lines · ${node.function_count || 0} functions`,
+    files: [moduleName],
+  };
+}
+
+async function init() {
+  const requestGeneration = ++graphRequestGeneration;
   svg.selectAll("*").remove();
   drawFigure();
 
   const limit = parseInt(limitInput.value) || 400;
-  nodes = MODULES.slice(0, limit);
-  edges = LINKS.map(l => ({ source: l.s, target: l.t })).filter(l =>
-    nodes.some(n => n.id === l.source) && nodes.some(n => n.id === l.target)
-  );
+  try {
+    const response = await fetch(`/api/graph?limit=${encodeURIComponent(limit)}`);
+    if (requestGeneration !== graphRequestGeneration) return;
+    if (!response.ok) throw new Error(`Graph failed (${response.status})`);
+    const graph = await response.json();
+    if (requestGeneration !== graphRequestGeneration) return;
+    if (!graph.meta?.exists || !graph.nodes?.length) throw new Error("No codebase index");
+    nodes = graph.nodes.map(graphNodeToDisplay);
+    const ids = new Set(nodes.map(node => node.id));
+    edges = (graph.edges || []).filter(edge => ids.has(edge.source) && ids.has(edge.target));
+    setStatus(`Atlas ready · ${nodes.length} indexed modules`);
+  } catch (_error) {
+    if (requestGeneration !== graphRequestGeneration) return;
+    nodes = MODULES.slice(0, limit);
+    edges = LINKS.map(l => ({ source: l.s, target: l.t })).filter(l =>
+      nodes.some(n => n.id === l.source) && nodes.some(n => n.id === l.target)
+    );
+    setStatus("Demo atlas · index unavailable");
+  }
 
+  if (requestGeneration !== graphRequestGeneration) return;
   drawEdges();
   drawNodes();
   buildFilters();
@@ -465,4 +533,3 @@ function init() {
 }
 
 init();
-setStatus("Neural atlas active");
