@@ -21,7 +21,8 @@ _BODY_MAP = [
     (r"^sensory/(listen|audio)|^sensory/speak.*listen|sherpa", "head_ears", "senses", "#e8c84a"),
     (r"^sensory/speak|^interface/adapter|^agentic/toolkit/social", "head_mouth", "voice", "#e88c6a"),
     (r"^system/(userspace|config|secure|bioclock|log)|^main\.py", "chest", "core", "#a888e8"),
-    (r"^agentic/(toolkit|workflows|graph_engine|registry)", "arms", "tools", "#7298e8"),
+    (r"^agentic/workflows|^agentic/graph_engine", "chest", "core", "#51bfa5"),
+    (r"^agentic/toolkit|^agentic/registry", "arms", "tools", "#7298e8"),
     (r"^system/(orchestrate|schedule|wakeup|prepare|turngate)", "legs", "mobility", "#51bfa5"),
     (r"^agentic/mcp|^interface/mcp|^backend", "spine", "spine", "#8c7ab8"),
     (r".*", "tail", "support", "#887b9a"),
@@ -195,9 +196,9 @@ def export_codebase_graph(user_id: str | None = None, limit: int = 400) -> dict:
             body_counts[label] += 1
             index = len(groups[anchor])
             groups[anchor].append(module)
-            # A deterministic fan makes dense regions readable while staying on the figure.
-            angle = (index * 2.399963229728653) - 1.57
-            radius = 0.025 + min(index, 10) * 0.011
+            # Wider fan spacing so nodes don't crowd (cuter, high-tech robot layout).
+            angle = (index * 3.5) - 2.2
+            radius = 0.035 + min(index, 10) * 0.018
             ax, ay = _BODY_ANCHORS[anchor]
             if anchor == "arms":
                 # Alternate tool modules between left and right arm callouts.
