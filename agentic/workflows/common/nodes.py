@@ -150,11 +150,23 @@ def _expand_job_hunt_sources(sources_json: str, state=None) -> tuple[str, list[d
             want_email = False
 
         postings: list[dict[str, Any]] = []
-        if want_rss:
-            postings.extend(jh.fetch_today_jobs_from_rss(config=config) or [])
-        if want_email:
-            email_posts, _ = jh.fetch_today_jobs_from_email(config=config)
-            postings.extend(email_posts or [])
+        if want_job_adapter:
+            # Single call dispatches to all configured sources (RSS + Greenhouse +
+            # Lever + Ashby + email) per job_hunt config enablement. Postings
+            # land on state.data["job_all_postings"]; we read them back here.
+            plan = {"max_results": int(config.get("max_results") or 30)}
+            try:
+                jh.fetch_rss_and_email_into_state(json.dumps(plan), state=state)
+            except Exception as exc:
+                if state is not None and hasattr(state, "data") and isinstance(state.data, dict):
+                    state.data["job_ingest_error"] = str(exc)[:300]
+            postings = list((state.data.get("job_all_postings") if state is not None and hasattr(state, "data") else []) or [])
+        else:
+            if want_rss:
+                postings.extend(jh.fetch_today_jobs_from_rss(config=config) or [])
+            if want_email:
+                email_posts, _ = jh.fetch_today_jobs_from_email(config=config)
+                postings.extend(email_posts or [])
 
         max_results = int(config.get("max_results") or 30)
         postings = postings[:max_results]
