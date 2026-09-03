@@ -15,16 +15,16 @@ from system.userspace import current_user_id, user_state_path
 
 
 _BODY_MAP = [
-    (r"^cognition/(memory|knowledge|subliminal|attention|think|reason|consolidate)", "head", "brain", "#35e7f2"),
-    (r"^cognition/", "head", "brain", "#6cecf2"),
-    (r"^sensory/(vision|video)|^interface/webui|^training/persona", "head_eyes", "eyes", "#62f5e7"),
-    (r"^sensory/(listen|audio)|^sensory/speak.*listen|sherpa", "head_ears", "ears", "#d5f57a"),
-    (r"^sensory/speak|^interface/adapter|^agentic/toolkit/social", "head_mouth", "voice", "#74d7ff"),
-    (r"^system/(userspace|config|secure|bioclock|log)|^main\.py", "chest", "core", "#9cb7ff"),
-    (r"^agentic/(toolkit|workflows|graph_engine|registry)", "arms", "tools", "#7ed8ff"),
-    (r"^system/(orchestrate|schedule|wakeup|prepare|turngate)", "legs", "mobility", "#54e4bd"),
-    (r"^agentic/mcp|^interface/mcp|^backend", "spine", "spine", "#70a9d4"),
-    (r".*", "tail", "support", "#8ba4b0"),
+    (r"^cognition/(memory|knowledge|subliminal|attention|think|reason|consolidate)", "head", "brain", "#c651a8"),
+    (r"^cognition/", "head", "brain", "#d8bcff"),
+    (r"^sensory/(vision|video)|^interface/webui|^training/persona", "head_eyes", "senses", "#51d4c8"),
+    (r"^sensory/(listen|audio)|^sensory/speak.*listen|sherpa", "head_ears", "senses", "#e8c84a"),
+    (r"^sensory/speak|^interface/adapter|^agentic/toolkit/social", "head_mouth", "voice", "#e88c6a"),
+    (r"^system/(userspace|config|secure|bioclock|log)|^main\.py", "chest", "core", "#a888e8"),
+    (r"^agentic/(toolkit|workflows|graph_engine|registry)", "arms", "tools", "#7298e8"),
+    (r"^system/(orchestrate|schedule|wakeup|prepare|turngate)", "legs", "mobility", "#51bfa5"),
+    (r"^agentic/mcp|^interface/mcp|^backend", "spine", "spine", "#8c7ab8"),
+    (r".*", "tail", "support", "#887b9a"),
 ]
 
 _BODY_ANCHORS = {
@@ -138,7 +138,7 @@ def _body_for_path(path: str) -> tuple[str, str, str]:
     for pattern, anchor, label, color in _BODY_MAP:
         if re.search(pattern, path):
             return anchor, label, color
-    return "tail", "support", "#8ba4b0"
+    return "tail", "support", "#887b9a"
 
 
 def _module_for_path(path: str) -> str:
@@ -199,6 +199,12 @@ def export_codebase_graph(user_id: str | None = None, limit: int = 400) -> dict:
             angle = (index * 2.399963229728653) - 1.57
             radius = 0.025 + min(index, 10) * 0.011
             ax, ay = _BODY_ANCHORS[anchor]
+            if anchor == "arms":
+                # Alternate tool modules between left and right arm callouts.
+                ax, ay, radius = (.27 if index % 2 == 0 else .73), .42 + (index // 2) * .035, .025
+            elif anchor == "legs":
+                # Scheduling/orchestration modules read naturally as a pair of legs.
+                ax, ay, radius = (.42 if index % 2 == 0 else .58), .74 + (index // 2) * .035, .02
             metrics = _module_metrics(module_paths[module])
             changed = sum(change_counts.get(path, 0) for path in module_paths[module])
             test_files = [path for path in module_paths[module] if "/test" in path or path.startswith("tests/")]

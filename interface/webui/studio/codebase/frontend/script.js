@@ -2,6 +2,7 @@ const svg = d3.select("#canvas");
 const W = 560, H = 720;
 let nodes = [], edges = [];
 let activeSystems = new Set();
+let selectedId = null;
 const statusEl = document.getElementById("status");
 const statsEl = document.getElementById("stats");
 const detailsEl = document.getElementById("details");
@@ -11,17 +12,29 @@ function esc(text) { const node = document.createElement("span"); node.textConte
 
 function drawFigure() {
   const defs = svg.append("defs");
-  defs.append("filter").attr("id", "glow").append("feGaussianBlur").attr("stdDeviation", 2).attr("result", "blur");
+  const bodyGradient = defs.append("linearGradient").attr("id", "body-gradient").attr("x1", "0%").attr("x2", "100%");
+  bodyGradient.append("stop").attr("offset", "0%").attr("stop-color", "#2b1a37");
+  bodyGradient.append("stop").attr("offset", "52%").attr("stop-color", "#171124");
+  bodyGradient.append("stop").attr("offset", "100%").attr("stop-color", "#21192e");
+  const glow = defs.append("filter").attr("id", "glow");
+  glow.append("feGaussianBlur").attr("stdDeviation", 2.2).attr("result", "blur");
+  glow.append("feMerge").selectAll("feMergeNode").data(["blur", "SourceGraphic"]).enter().append("feMergeNode").attr("in", d => d);
   const g = svg.append("g").attr("id", "figure");
-  const stroke = { fill: "rgba(22,126,151,.08)", stroke: "#1cb7ca", "stroke-width": 1.35 };
-  // Technical mannequin outline; the interior is intentionally reserved for modules.
-  g.append("ellipse").attr("cx",280).attr("cy",94).attr("rx",68).attr("ry",77).attr("fill",stroke.fill).attr("stroke",stroke.stroke).attr("stroke-width",stroke["stroke-width"]);
-  g.append("path").attr("d","M212 89H348 M280 17V170 M218 53H342 M218 125H342 M258 170L252 190H308L302 170 M178 205L102 358L124 370L219 271 M382 205L458 358L436 370L341 271 M202 307L184 513L166 680H234L260 499 M358 307L376 513L394 680H326L300 499").attr("fill","none").attr("stroke","#1cb7ca").attr("stroke-width",1.35);
-  g.append("path").attr("d","M202 307Q280 345 358 307 M184 513H376 M166 680H234 M326 680H394 M196 250H364").attr("fill","none").attr("stroke","#155e76").attr("stroke-width",1);
-  [[251,80,23,14],[309,80,23,14]].forEach(([cx,cy,rx,ry]) => g.append("ellipse").attr("cx",cx).attr("cy",cy).attr("rx",rx).attr("ry",ry).attr("fill","rgba(53,231,242,.09)").attr("stroke","#35e7f2").attr("stroke-width",1));
-  g.append("path").attr("d","M267 120Q280 128 293 120 M280 170V503").attr("fill","none").attr("stroke","#35e7f2").attr("stroke-width",1).attr("stroke-dasharray","3 4").attr("opacity",.7);
-  [230,250,270,290,310,330].forEach(y => g.append("line").attr("x1",264).attr("x2",296).attr("y1",y).attr("y2",y).attr("stroke","#1a91a8").attr("stroke-width",1));
-  g.append("text").attr("x",280).attr("y",710).attr("text-anchor","middle").attr("fill","#3a8ba0").attr("font-size",8).attr("letter-spacing",3).text("CODEBASE BODY MAP");
+  const outline = { fill: "url(#body-gradient)", stroke: "#8a6ca9", "stroke-width": 1.3 };
+  // The left half is a soft anatomy silhouette; the right half is a panelled machine diagram.
+  g.append("path").attr("d", "M280 18C235 18 209 48 212 94c2 31 17 52 38 65l-2 25-42 18c-25 11-39 34-48 64l-43 126 31 12 46-107 17 28-24 170-22 176h69l30-159 18 159h69l-22-176-24-170 17-28 46 107 31-12-43-126c-9-30-23-53-48-64l-42-18-2-25c21-13 36-34 38-65 3-46-23-76-68-76Z").attr("fill", outline.fill).attr("stroke", outline.stroke).attr("stroke-width", outline["stroke-width"]);
+  g.append("path").attr("d", "M280 18V671 M212 94h136 M250 159h60 M206 202c18 17 44 25 74 25s56-8 74-25 M209 325c24 18 47 26 71 26s47-8 71-26 M230 495h100").attr("fill", "none").attr("stroke", "#5f497a").attr("stroke-width", 1);
+  // Face, lenses, and neck plating.
+  [[252,82,23,13],[308,82,23,13]].forEach(([cx,cy,rx,ry]) => g.append("ellipse").attr("cx",cx).attr("cy",cy).attr("rx",rx).attr("ry",ry).attr("fill","rgba(81,212,200,.08)").attr("stroke","#51d4c8").attr("stroke-width",1.2));
+  g.append("path").attr("d","M268 124Q280 132 292 124 M250 160h60l-5 25h-50Z").attr("fill","none").attr("stroke","#a888e8").attr("stroke-width",1.1);
+  // Transparent organ layer keeps the anatomy readable behind modules.
+  g.append("path").attr("d","M244 244c-18 12-17 48 6 59 13 7 23-2 30-14 7 12 17 21 30 14 23-11 24-47 6-59-14-9-27 1-36 13-9-12-22-22-36-13Z").attr("fill","rgba(198,81,168,.13)").attr("stroke","#c651a8").attr("stroke-width",1.1).attr("filter","url(#glow)");
+  g.append("path").attr("d","M264 337c-24 18-20 48-8 67l24 61 24-61c12-19 16-49-8-67Z").attr("fill","rgba(168,136,232,.1)").attr("stroke","#a888e8").attr("stroke-width",1);
+  // Mechanical right-side panels, conduits, and joints reference the supplied android cutaway without copying it.
+  g.append("path").attr("d","M280 31h42l14 28v66l-20 28h-36 M280 184h58l19 27-12 95-27 19h-38 M280 350h57l18 28-18 99-25 22h-32").attr("fill","none").attr("stroke","#d8bcff").attr("stroke-width",1.15);
+  [62,74,107,194,211,226,247,265,282,369,390,414,443].forEach((y, index) => g.append("line").attr("x1",290).attr("x2",index < 3 ? 325 : 339).attr("y1",y).attr("y2",y).attr("stroke",index % 2 ? "#51d4c8" : "#a888e8").attr("stroke-width",1));
+  [[338,240,13],[338,404,13],[408,338,12],[152,338,12],[218,514,10],[342,514,10]].forEach(([cx,cy,r]) => g.append("circle").attr("cx",cx).attr("cy",cy).attr("r",r).attr("fill","#171124").attr("stroke","#a888e8").attr("stroke-width",1));
+  g.append("text").attr("x",280).attr("y",708).attr("text-anchor","middle").attr("fill","#6e5a8d").attr("font-size",8).attr("letter-spacing",3).text("CODEBASE ANATOMY MAP");
 }
 
 drawFigure();
@@ -61,12 +74,23 @@ function render() {
   const visibleNodes = nodes.filter(node => activeSystems.has(node.body_part));
   const byId = new Map(visibleNodes.map(node => [node.id, node]));
   const edgeGroup = svg.append("g").attr("id","edges");
-  edges.forEach(edge => { const source=byId.get(edge.source), target=byId.get(edge.target); if (!source || !target) return; const dependency=edge.kind === "dependency"; edgeGroup.append("line").attr("x1",source.x*W).attr("y1",source.y*H).attr("x2",target.x*W).attr("y2",target.y*H).attr("stroke",dependency ? "#55e8f3" : "#238ba0").attr("stroke-width",dependency ? 1.2 : .7).attr("opacity",dependency ? .68 : .3); });
+  edges.forEach(edge => { const source=byId.get(edge.source), target=byId.get(edge.target); if (!source || !target) return; const dependency=edge.kind === "dependency"; edgeGroup.append("line").attr("class","edge").attr("data-source",edge.source).attr("data-target",edge.target).attr("x1",source.x*W).attr("y1",source.y*H).attr("x2",target.x*W).attr("y2",target.y*H).attr("stroke",dependency ? "#a888e8" : "#4a3a6a").attr("stroke-width",dependency ? 1.2 : .7).attr("opacity",dependency ? .62 : .3); });
   const group = svg.append("g").attr("id","nodes");
-  const selection = group.selectAll("g.node").data(visibleNodes).enter().append("g").attr("class","node").attr("transform", d => `translate(${d.x*W},${d.y*H})`).style("cursor","pointer").on("click", (event, d) => showModule(event, d));
-  selection.append("circle").attr("r",8).attr("fill",d=>d.color).attr("opacity",.12).attr("stroke",d => d.coverage === null ? "#456978" : d.coverage >= 80 ? "#63f5b0" : d.coverage >= 50 ? "#f5d76e" : "#ff7f82").attr("stroke-width",1.1);
-  selection.append("circle").attr("r",d => 3.2 + Math.min(2, d.dependency_count / 4)).attr("fill",d=>d.color).attr("stroke","#d9ffff").attr("stroke-width",d => d.change_count > 8 ? 1.4 : .7);
-  if (document.getElementById("show-labels").checked) selection.append("text").attr("x",7).attr("y",-5).attr("fill","#b9f4f8").attr("font-size",7.2).attr("letter-spacing",.4).text(d => d.module.split("/").slice(-1)[0].slice(0,22));
+  const selection = group.selectAll("g.node").data(visibleNodes).enter().append("g").attr("class","node").attr("data-id",d=>d.id).attr("transform", d => `translate(${d.x*W},${d.y*H})`).style("cursor","pointer").on("mouseenter", (_, d) => highlightRelations(d.id)).on("mouseleave", () => highlightRelations(selectedId)).on("click", (event, d) => { selectedId = d.id; highlightRelations(selectedId); showModule(event, d); });
+  selection.append("circle").attr("r",8).attr("fill",d=>d.color).attr("opacity",.12).attr("stroke",d => d.coverage === null ? "#4a3a6a" : d.coverage >= 80 ? "#51bfa5" : d.coverage >= 50 ? "#e8c84a" : "#e8516a").attr("stroke-width",1.1);
+  selection.append("circle").attr("r",d => 3.2 + Math.min(2, d.dependency_count / 4)).attr("fill",d=>d.color).attr("stroke","#d8bcff").attr("stroke-width",d => d.change_count > 8 ? 1.4 : .7);
+  if (document.getElementById("show-labels").checked) selection.append("text").attr("x",7).attr("y",-5).attr("fill","#d8bcff").attr("font-size",7.2).attr("letter-spacing",.4).text(d => d.module.split("/").slice(-1)[0].slice(0,22));
+}
+
+function highlightRelations(moduleId) {
+  const hasFocus = Boolean(moduleId);
+  svg.selectAll(".node").attr("opacity", d => !hasFocus || d.id === moduleId ? 1 : .25);
+  svg.selectAll(".edge").attr("opacity", function () {
+    if (!hasFocus) return d3.select(this).attr("stroke-width") === "1.2" ? .62 : .3;
+    return this.dataset.source === moduleId || this.dataset.target === moduleId ? 1 : .08;
+  }).attr("stroke-width", function () {
+    return hasFocus && (this.dataset.source === moduleId || this.dataset.target === moduleId) ? 2.4 : (d3.select(this).attr("stroke") === "#a888e8" ? 1.2 : .7);
+  });
 }
 
 async function showModule(event, node) {
