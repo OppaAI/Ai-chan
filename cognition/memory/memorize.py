@@ -281,6 +281,28 @@ class _MemoryBackend:
     def _connect(self) -> sqlite3.Connection:
         return initialize_store_db(self._db_path, _DDL, user_id=self._user_id, vector=True)
 
+    # ── shim for callers that hold an AikoMemorize vs _MemoryBackend interchangeably ──
+    def _resolve_user_id(self, user_id: str | None = None) -> str:
+        """Resolve user_id when this backend is addressed directly (e.g. from think/learn).
+
+        AikoMemorize owns the canonical logic; this shim keeps direct _MemoryBackend
+        callers from crashing with '_MemoryBackend has no attribute _resolve_user_id'.
+        """
+        if user_id:
+            return str(user_id)
+        return self._user_id or current_user_id()
+
+    def get_user_id(self) -> str:  # type: ignore[override]
+        return self._user_id or current_user_id()
+
+    def get_display_name(self) -> str:
+        # Backend has no display_name; callers should use AikoMemorize but shim avoids crash.
+        try:
+            from system.userspace import current_display_name
+            return current_display_name() or self._user_id or ""
+        except Exception:
+            return self._user_id or ""
+
     # ── embedding ─────────────────────────────────────────────────────────────
 
     def _embed(self, text: str, *, query: bool = False) -> list[float]:
@@ -2284,6 +2306,17 @@ class AikoMemorize:
         )
         if not self._silent:
             log.info("Memory store ready for %s.", uid)
+
+    @property
+    def _db_lock(self):  # type: ignore[override]
+        """Expose backend lock so 'AikoMemorize has no attribute _db_lock' never fires."""
+        if self._mem_backend is not None:
+            return self._mem_backend._db_lock
+        return threading.RLock()
+
+    def _search_top(self, *args, **kwargs):  # type: ignore[override]
+        """Proxy so direct AikoMemorize._search_top calls don't crash (owner is _MemoryBackend)."""
+        return self._mem._search_top(*args, **kwargs)
 
     @property
     def _conn(self) -> sqlite3.Connection:

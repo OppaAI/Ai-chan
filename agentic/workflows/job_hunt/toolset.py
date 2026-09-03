@@ -277,6 +277,73 @@ def _matches_job_keywords(text: str, keywords: list[str]) -> bool:
     return not keywords or any(_matches_job_keyword(text, keyword) for keyword in keywords)
 
 
+def _location_filter_config(config: dict[str, Any]) -> dict[str, Any]:
+    """Read the location_filter block; default off so behavior is unchanged when absent."""
+    cfg = config.get("location_filter") if isinstance(config.get("location_filter"), dict) else {}
+    return {
+        "enabled": bool(cfg.get("enabled", False)),
+        "include": [str(x).casefold().strip() for x in (cfg.get("include") or []) if str(x).strip()],
+        "remote_in_countries": [str(x).casefold().strip() for x in (cfg.get("remote_in_countries") or []) if str(x).strip()],
+        "remote_required": bool(cfg.get("remote_required", False)),
+    }
+
+
+def _posting_location_text(posting: dict[str, Any]) -> str:
+    """Concatenate the location-related fields of a posting into one searchable blob.
+
+    Covers Greenhouse (location.name), Lever (categories.location), Ashby
+    (location + address.postalAddress.addressCountry/Region/Locality), and the
+    email/RSS fallback (location).
+    """
+    parts: list[str] = []
+    loc = posting.get("location")
+    if isinstance(loc, dict):
+        parts.append(str(loc.get("name") or ""))
+    elif loc:
+        parts.append(str(loc))
+    addr = posting.get("address")
+    if isinstance(addr, dict):
+        pa = addr.get("postalAddress") if isinstance(addr.get("postalAddress"), dict) else {}
+        if pa:
+            for key in ("addressCountry", "addressRegion", "addressLocality"):
+                v = pa.get(key)
+                if v:
+                    parts.append(str(v))
+    cat = posting.get("categories")
+    if isinstance(cat, dict) and cat.get("location"):
+        parts.append(str(cat.get("location")))
+    if posting.get("is_remote") or posting.get("workplaceType") == "Remote":
+        parts.append("Remote")
+    return " ".join(p for p in parts if p)
+
+
+def _passes_location_filter(posting: dict[str, Any], lf: dict[str, Any]) -> bool:
+    """True if the posting's location matches the configured Vancouver/Canada filter.
+
+    Behavior:
+      - If filter is disabled, every posting passes.
+      - Otherwise the posting's concatenated location text must hit at least one
+        entry in `include` (Vancouver / Toronto / Canada-region names) OR be
+        remote in one of the `remote_in_countries` (default: Canada, US).
+      - US-remote is allowed so the user can still see big-tech postings that
+        don't pin a Canadian office.
+    """
+    if not lf or not lf.get("enabled"):
+        return True
+    text = _posting_location_text(posting).casefold()
+    if not text:
+        # No location data — be permissive only when remote_required is False.
+        return not lf.get("remote_required", False)
+    for needle in lf.get("include") or []:
+        if needle and needle in text:
+            return True
+    if "remote" in text or "anywhere" in text:
+        for country in lf.get("remote_in_countries") or []:
+            if country and (country in text or country in posting.get("_country_lc", "")):
+                return True
+    return False
+
+
 _NON_TECH_TITLE_RE = re.compile(
     r"\b(?:administrative|admin(?:istration)?|executive|office|legal)\s+assistant\b|"
     r"\b(?:receptionist|bookkeeper|cashier|barista|server|sales associate)\b",
@@ -946,14 +1013,16 @@ def fetch_today_jobs_from_greenhouse(
     source_cfg = config.get("greenhouse_source") if isinstance(config.get("greenhouse_source"), dict) else {}
     tokens = board_tokens if board_tokens is not None else _greenhouse_board_tokens(config)
     keywords = [kw.casefold() for kw in _cfg(config, "job_keywords", "JOB_KEYWORDS", [], "list")] if filter_keywords else []
+    loc_filter = _location_filter_config(config)
     today = local_now().date()
     max_days = _cfg(config, "date_range_days", "JOB_HUNT_DATE_RANGE_DAYS", 1, "int")
     base_url = str(source_cfg.get("base_url") or "https://boards-api.greenhouse.io/v1/boards").rstrip("/")
     kept: list[dict] = []
     seen_ids: set[str] = set()
+    dropped_location = 0
 
-    log.info("[job_hunt] fetch_today_jobs_from_greenhouse: boards=%d, keywords=%d, max_days=%d, filter_date=%s",
-             len(tokens), len(keywords), max_days, filter_date)
+    log.info("[job_hunt] fetch_today_jobs_from_greenhouse: boards=%d, keywords=%d, max_days=%d, filter_date=%s, location_filter=%s",
+             len(tokens), len(keywords), max_days, filter_date, loc_filter.get("enabled"))
 
     for token in tokens:
         url = f"{base_url}/{token}/jobs?content=true&pay_transparency=true"
@@ -986,7 +1055,7 @@ def fetch_today_jobs_from_greenhouse(
                 continue
             seen_ids.update({link_key, guid_key})
             location = job.get("location") if isinstance(job.get("location"), dict) else {}
-            kept.append({
+            posting = {
                 "title": title or "Untitled role",
                 "organization": str(job.get("company_name") or token).strip(),
                 "url": link,
@@ -1000,7 +1069,13 @@ def fetch_today_jobs_from_greenhouse(
                 "posted_date": posted.isoformat() if posted else "",
                 "source_feed": url,
                 "source": "greenhouse",
-            })
+            }
+            if not _passes_location_filter(posting, loc_filter):
+                dropped_location += 1
+                continue
+            kept.append(posting)
+    if dropped_location:
+        log.info("[job_hunt] fetch_today_jobs_from_greenhouse: location filter dropped %d postings", dropped_location)
     return kept
 
 
@@ -1114,10 +1189,12 @@ def fetch_today_jobs_from_ashby(
     source_cfg = config.get("ashby_source") if isinstance(config.get("ashby_source"), dict) else {}
     tokens = company_tokens if company_tokens is not None else _job_board_tokens(config, "ashby_source", ("ASHBY_ORG_TOKENS", "JOB_HUNT_ASHBY_ORG_TOKENS"))
     keywords = [kw.casefold() for kw in _cfg(config, "job_keywords", "JOB_KEYWORDS", [], "list")] if filter_keywords else []
+    loc_filter = _location_filter_config(config)
     today = local_now().date()
     max_days = _cfg(config, "date_range_days", "JOB_HUNT_DATE_RANGE_DAYS", 1, "int")
     base_url = str(source_cfg.get("base_url") or "https://api.ashbyhq.com/posting-api/job-board").rstrip("/")
     kept: list[dict] = []
+    dropped_location = 0
     for token in tokens:
         url = f"{base_url}/{token}?includeCompensation=true"
         try:
@@ -1139,12 +1216,21 @@ def fetch_today_jobs_from_ashby(
             if not _matches_job_keywords(f"{title} {summary}", keywords):
                 continue
             comp = job.get("compensation") if isinstance(job.get("compensation"), dict) else {}
-            kept.append({
+            posting = {
                 "title": title or "Untitled role", "organization": token, "url": str(job.get("jobUrl") or job.get("applyUrl") or "").strip(),
                 "guid": f"ashby:{token}:{job.get('id') or job.get('jobUrl')}", "summary": summary, "location": str(job.get("locationName") or "").strip(),
-                "employment_type": str(job.get("employmentType") or "").strip(), "salary": str(comp.get("compensationTierSummary") or comp.get("summary") or "").strip(),
+                "address": job.get("address") if isinstance(job.get("address"), dict) else {},
+                "employment_type": str(job.get("employmentType") or "").strip(),
+                "is_remote": bool(job.get("isRemote") or job.get("workplaceType") == "Remote"),
+                "salary": str(comp.get("compensationTierSummary") or comp.get("summary") or "").strip(),
                 "experience": "", "close_date": "", "posted_date": posted.isoformat() if posted else "", "source_feed": url, "source": "ashby",
-            })
+            }
+            if not _passes_location_filter(posting, loc_filter):
+                dropped_location += 1
+                continue
+            kept.append(posting)
+    if dropped_location:
+        log.info("[job_hunt] fetch_today_jobs_from_ashby: location filter dropped %d postings", dropped_location)
     return kept
 
 

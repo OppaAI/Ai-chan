@@ -1979,7 +1979,10 @@ class AikoThink:
                     for sentence in tts_sentence_buffer:
                         speak.feed_speech_stream(sentence)
         except Exception as e:
-            log.error(f"LLM stream failed: {e}")
+            if self._is_system_role_error(e):
+                log.warning(f"LLM stream system-role rejected (will retry without system): {e}")
+            else:
+                log.error(f"LLM stream failed: {e}")
             # Auto-retry without system role if template rejects it (ministral-type Jinja)
             if self._is_system_role_error(e):
                 try:

@@ -2218,7 +2218,7 @@ class ScheduleRunner:
                         max_visits=int(raw["max_visits"]) if raw.get("max_visits") else 0,
                     ))
             if not nodes:
-                log.warning("Playbook %r has no valid nodes — skipping", graph_id)
+                log.debug("Playbook %r has no valid nodes — skipping", graph_id)
                 return
             graph = PlanGraph(
                 id=graph_id,
