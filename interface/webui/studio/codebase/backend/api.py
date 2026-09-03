@@ -53,6 +53,7 @@ def search(q: str = Query(..., description="Search codebase"), limit: int = Quer
 @app.get("/api/module")
 def get_module(module: str = Query(..., min_length=1)):
     from interface.webui.studio.codebase.backend.graph_export import module_details
+    from system.userspace import current_user_id
     return module_details(module=module, user_id=current_user_id())
 
 @app.get("/api/export/markdown", response_class=PlainTextResponse)

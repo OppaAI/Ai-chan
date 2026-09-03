@@ -3,6 +3,7 @@ const W = 560, H = 720;
 let nodes = [], edges = [];
 let activeSystems = new Set();
 let selectedId = null;
+let moduleRequestController = null;
 const statusEl = document.getElementById("status");
 const statsEl = document.getElementById("stats");
 const detailsEl = document.getElementById("details");
@@ -94,10 +95,14 @@ function highlightRelations(moduleId) {
 }
 
 async function showModule(event, node) {
+  moduleRequestController?.abort();
+  const controller = new AbortController();
+  moduleRequestController = controller;
   svg.selectAll("g.node circle:last-child").attr("r",3.2); d3.select(event.currentTarget).select("circle:last-child").attr("r",5);
   detailsEl.innerHTML = `<p class="details-kicker">Reading module</p><h2>${esc(node.module)}</h2><p>Building a natural-language brief from the indexed source…</p>`;
   try {
-    const response = await fetch(`/studio/codebase/api/module?module=${encodeURIComponent(node.module)}`); const detail = await response.json();
+    const response = await fetch(`/studio/codebase/api/module?module=${encodeURIComponent(node.module)}`, { signal: controller.signal }); const detail = await response.json();
+    if (moduleRequestController !== controller) return;
     if (detail.error) throw new Error(detail.error);
     const functions = detail.functions.length ? `<ul>${detail.functions.map(name => `<li><code>${esc(name)}()</code></li>`).join("")}</ul>` : "<p>No callable symbols were extracted from the indexed excerpts.</p>";
     const files = detail.files.slice(0, 7).map(file => `<li><code>${esc(file)}</code></li>`).join("");
@@ -106,7 +111,10 @@ async function showModule(event, node) {
     const links = detail.source_links.slice(0, 7).map(link => `<li><code>${esc(link.path)}</code> ${link.github ? `<a class="source-link" href="${esc(link.github)}" target="_blank" rel="noopener">GitHub</a>` : ""} <a class="source-link" href="${esc(link.vscode)}">IDE</a></li>`).join("");
     const relationList = values => values.length ? `<ul>${values.map(value => `<li><code>${esc(value)}</code></li>`).join("")}</ul>` : "<p>None found in indexed imports.</p>";
     detailsEl.innerHTML = `<p class="details-kicker">${esc(detail.body_part)} system · ${detail.files.length} files</p><h2>${esc(detail.module)}</h2><p>${esc(detail.summary)}</p><div>${pills}</div>${detail.docstrings.length ? `<p class="details-kicker">Source intent</p><p>${esc(detail.docstrings.join(" · "))}</p>` : ""}<p class="details-kicker">Calls</p>${relationList(detail.dependencies)}<p class="details-kicker">Called by</p>${relationList(detail.dependents)}<p class="details-kicker">Functions and classes</p>${functions}<p class="details-kicker">Open source</p><ul>${links}</ul>${detail.excerpt ? `<p class="details-kicker">Indexed context</p><p>${esc(detail.excerpt)}…</p>` : ""}`;
-  } catch (error) { detailsEl.innerHTML = `<p class="details-kicker">Module briefing</p><h2>${esc(node.module)}</h2><p>${esc(error.message)}</p>`; }
+  } catch (error) {
+    if (moduleRequestController !== controller || error.name === "AbortError") return;
+    detailsEl.innerHTML = `<p class="details-kicker">Module briefing</p><h2>${esc(node.module)}</h2><p>${esc(error.message)}</p>`;
+  }
 }
 
 document.getElementById("refresh").onclick = loadGraph;
