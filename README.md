@@ -1,4 +1,5 @@
-# Aiko-chan アイコちゃん
+# Aiko-chan アイコちゃん 
+(Full name: Aino Aiko アイノ・アイコ aka 愛のAI子 aka 相野愛子)
 
 > A local-first AI companion with a browser WebUI + VRM avatar, optional simple CLI, persistent memory, web search, microphone input, and MioTTS voice output.
 > Optimised for constrained hardware — runs on a Jetson Orin Nano with 8GB unified RAM.
