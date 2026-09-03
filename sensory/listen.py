@@ -406,10 +406,22 @@ def _build_vad(threshold: float) -> sherpa_onnx.VoiceActivityDetector:
     return sherpa_onnx.VoiceActivityDetector(config, buffer_size_in_seconds=30)
 
 
-def _load_sense_voice_recognizer() -> sherpa_onnx.OfflineRecognizer:
-    """Load SenseVoice as a sherpa-onnx OfflineRecognizer via factory method."""
-    model_path, tokens_path = _resolve_sense_voice_files()
+def _load_sense_voice_recognizer():
+    """Load SenseVoice as a sherpa-onnx OfflineRecognizer via factory method.
 
+    Returns None if the full `sherpa-onnx` Python package is not installed
+    (only the C++ runtime `sherpa-onnx-core` is on the path). Callers must
+    check for None and skip ASR-dependent features gracefully — voice listen
+    will not work without the full Python bindings, but text chat continues.
+    """
+    model_path, tokens_path = _resolve_sense_voice_files()
+    if not hasattr(sherpa_onnx, "OfflineRecognizer"):
+        log.warning(
+            "sherpa_onnx.OfflineRecognizer not available — the installed package "
+            "is sherpa-onnx-core (C++ runtime only). To enable voice listen, install "
+            "the full 'sherpa-onnx' Python package on the active arch."
+        )
+        return None
     return sherpa_onnx.OfflineRecognizer.from_sense_voice(
         model=model_path,
         tokens=tokens_path,
@@ -1227,7 +1239,13 @@ class AikoListen:
         """
         Transcribe float32 16kHz audio using SenseVoice via sherpa-onnx,
         then apply post-ASR name/phrase corrections (see correct_asr_text).
+
+        Returns empty string if ASR is unavailable (sherpa-onnx Python package
+        not installed; only the C++ runtime sherpa-onnx-core is on the path).
         """
+        if self._model is None:
+            log.warning("listen: _transcribe called but ASR model is not loaded — returning empty text")
+            return ""
         with self._lock:
             stream = self._model.create_stream()
             stream.accept_waveform(SAMPLE_RATE, audio)
@@ -1246,6 +1264,9 @@ class AikoListen:
     # ── warmup ────────────────────────────────────────────────────────────────
 
     def _warmup(self) -> None:
+        if self._model is None:
+            log.debug("listen: _warmup skipped — ASR model not loaded")
+            return
         try:
             silence = np.zeros(int(SAMPLE_RATE * 0.1), dtype=np.float32)
             stream  = self._model.create_stream()
