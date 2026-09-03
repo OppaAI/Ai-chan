@@ -5,6 +5,7 @@ from pathlib import Path
 from fastapi import FastAPI, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
+from fastapi.responses import PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 
 app = FastAPI(title="Aiko Codebase Studio (Figure)")
@@ -53,6 +54,11 @@ def search(q: str = Query(..., description="Search codebase"), limit: int = Quer
 def get_module(module: str = Query(..., min_length=1)):
     from interface.webui.studio.codebase.backend.graph_export import module_details
     return module_details(module=module, user_id=current_user_id())
+
+@app.get("/api/export/markdown", response_class=PlainTextResponse)
+def export_markdown(limit: int = Query(400, ge=1, le=2000)):
+    from interface.webui.studio.codebase.backend.graph_export import markdown_atlas
+    return markdown_atlas(user_id=current_user_id(), limit=limit)
 
 @app.get("/api/ingest")
 def ingest(force: bool = Query(False)):
