@@ -1,6 +1,7 @@
 const svg = d3.select("#canvas");
 const W = 560, H = 720;
 let nodes = [], edges = [];
+let scene;
 let activeSystems = new Set();
 let selectedId = null;
 const statusEl = document.getElementById("status");
@@ -92,8 +93,9 @@ function drawFigure() {
   const pattern = defs.append("pattern").attr("id", "hex").attr("width", 12).attr("height", 12).attr("patternUnits", "userSpaceOnUse");
   pattern.append("path").attr("d", "M6 0l5.2 3v6L6 12 .8 9V3z").attr("fill", "none").attr("stroke", "rgba(168,136,232,0.15)").attr("stroke-width", 0.5);
 
-  const g = svg.append("g").attr("id", "figure");
-  const body = g.append("g").attr("transform", "translate(0, 120) scale(.74)");
+  const viewport = svg.append("g").attr("id", "viewport");
+  scene = viewport.append("g").attr("transform", "translate(0, 120) scale(.74)");
+  const body = scene.append("g").attr("id", "figure");
 
   // Head
   body.append("ellipse").attr("cx", 280).attr("cy", 95).attr("rx", 62).attr("ry", 56)
@@ -210,7 +212,7 @@ function drawFigure() {
 
 // ── Neural Edges with animated pulses ──
 function drawEdges() {
-  const edgeGroup = svg.append("g").attr("id", "edges");
+  const edgeGroup = scene.append("g").attr("id", "edges");
   
   edges.forEach((l, idx) => {
     const s = nodes.find(n => n.id === l.source);
@@ -247,7 +249,7 @@ function drawEdges() {
 
 // ── Nodes with neural glow ──
 function drawNodes() {
-  const nodeGroup = svg.append("g").attr("id", "nodes");
+  const nodeGroup = scene.append("g").attr("id", "nodes");
 
   const nodeEnter = nodeGroup.selectAll(".node")
     .data(nodes)
@@ -441,7 +443,7 @@ function exportMarkdown() {
 
 // ── Zoom ──
 const zoom = d3.zoom().scaleExtent([0.5, 4]).on("zoom", event => {
-  svg.selectAll("#figure, #edges, #nodes").attr("transform", event.transform);
+  svg.select("#viewport").attr("transform", event.transform);
 });
 document.getElementById("zoom-in").onclick = () => svg.transition().call(zoom.scaleBy, 1.3);
 document.getElementById("zoom-out").onclick = () => svg.transition().call(zoom.scaleBy, 0.75);
