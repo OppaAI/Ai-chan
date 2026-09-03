@@ -1,97 +1,67 @@
 const svg = d3.select("#canvas");
-const W=400,H=600;
+const W = 560, H = 720;
+let nodes = [], edges = [];
+const statusEl = document.getElementById("status");
+const statsEl = document.getElementById("stats");
+const detailsEl = document.getElementById("details");
 
-function drawFigure(){
-  // sharp human silhouette (head, torso, limbs)
-  const g = svg.append("g").attr("id","figure");
-  // head
-  g.append("ellipse").attr("cx",200).attr("cy",70).attr("rx",36).attr("ry",42).attr("class","figure-fill figure-outline");
-  // eyes
-  g.append("circle").attr("cx",188).attr("cy",68).attr("r",4).attr("fill","#4ecdc4").attr("opacity",0.9);
-  g.append("circle").attr("cx",212).attr("cy",68).attr("r",4).attr("fill","#4ecdc4").attr("opacity",0.9);
-  // ears
-  g.append("ellipse").attr("cx",165).attr("cy",70).attr("rx",6).attr("ry",10).attr("fill","#ffe66d").attr("opacity",0.7);
-  g.append("ellipse").attr("cx",235).attr("cy",70).attr("rx",6).attr("ry",10).attr("fill","#ffe66d").attr("opacity",0.7);
-  // mouth
-  g.append("ellipse").attr("cx",200).attr("cy",86).attr("rx",10).attr("ry",4).attr("fill","#ff9f43").attr("opacity",0.8);
-  // torso
-  g.append("path").attr("d","M165 115 L235 115 L225 260 L175 260 Z").attr("class","figure-fill figure-outline");
-  // arms
-  g.append("path").attr("d","M165 125 L110 200 L105 210 L155 240 L175 220").attr("class","figure-fill figure-outline");
-  g.append("path").attr("d","M235 125 L290 200 L295 210 L245 240 L225 220").attr("class","figure-fill figure-outline");
-  // legs
-  g.append("path").attr("d","M175 260 L150 420 L140 580 L170 580 L190 420").attr("class","figure-fill figure-outline");
-  g.append("path").attr("d","M225 260 L250 420 L260 580 L230 580 L210 420").attr("class","figure-fill figure-outline");
-  // spine line
-  g.append("line").attr("x1",200).attr("y1",115).attr("x2",200).attr("y2",260).attr("stroke","#636e72").attr("stroke-dasharray","4 4").attr("opacity",0.5);
+function setStatus(text) { statusEl.textContent = text; }
+function esc(text) { const node = document.createElement("span"); node.textContent = text || ""; return node.innerHTML; }
+
+function drawFigure() {
+  const defs = svg.append("defs");
+  defs.append("filter").attr("id", "glow").append("feGaussianBlur").attr("stdDeviation", 2).attr("result", "blur");
+  const g = svg.append("g").attr("id", "figure");
+  const stroke = { fill: "rgba(22,126,151,.08)", stroke: "#1cb7ca", "stroke-width": 1.35 };
+  // Technical mannequin outline; the interior is intentionally reserved for modules.
+  g.append("ellipse").attr("cx",280).attr("cy",94).attr("rx",68).attr("ry",77).attr("fill",stroke.fill).attr("stroke",stroke.stroke).attr("stroke-width",stroke["stroke-width"]);
+  g.append("path").attr("d","M212 89H348 M280 17V170 M218 53H342 M218 125H342 M258 170L252 190H308L302 170 M178 205L102 358L124 370L219 271 M382 205L458 358L436 370L341 271 M202 307L184 513L166 680H234L260 499 M358 307L376 513L394 680H326L300 499").attr("fill","none").attr("stroke","#1cb7ca").attr("stroke-width",1.35);
+  g.append("path").attr("d","M202 307Q280 345 358 307 M184 513H376 M166 680H234 M326 680H394 M196 250H364").attr("fill","none").attr("stroke","#155e76").attr("stroke-width",1);
+  [[251,80,23,14],[309,80,23,14]].forEach(([cx,cy,rx,ry]) => g.append("ellipse").attr("cx",cx).attr("cy",cy).attr("rx",rx).attr("ry",ry).attr("fill","rgba(53,231,242,.09)").attr("stroke","#35e7f2").attr("stroke-width",1));
+  g.append("path").attr("d","M267 120Q280 128 293 120 M280 170V503").attr("fill","none").attr("stroke","#35e7f2").attr("stroke-width",1).attr("stroke-dasharray","3 4").attr("opacity",.7);
+  [230,250,270,290,310,330].forEach(y => g.append("line").attr("x1",264).attr("x2",296).attr("y1",y).attr("y2",y).attr("stroke","#1a91a8").attr("stroke-width",1));
+  g.append("text").attr("x",280).attr("y",710).attr("text-anchor","middle").attr("fill","#3a8ba0").attr("font-size",8).attr("letter-spacing",3).text("CODEBASE BODY MAP");
 }
 
 drawFigure();
 
-let nodes=[], edges=[];
-const statusEl=document.getElementById("status");
-const statsEl=document.getElementById("stats");
-const detailsEl=document.getElementById("details");
-
-function setStatus(t){ statusEl.textContent=t; }
-
-async function loadGraph(){
-  const lim=document.getElementById("limit").value||400;
-  setStatus("loading…");
-  try{
-    const r=await fetch(`/studio/codebase/api/graph?limit=${lim}`);
-    const j=await r.json();
-    nodes=j.nodes||[]; edges=j.edges||[];
-    statsEl.textContent=`${nodes.length} files • ${edges.length} body edges • ${j.meta?.path||""}`;
-    setStatus(j.meta?.exists ? "codebase.db ready" : "codebase.db missing — run ingest");
-    render();
-  }catch(e){ setStatus("error: "+e); }
+async function loadGraph() {
+  const limit = document.getElementById("limit").value || 400;
+  setStatus("Loading atlas…");
+  try {
+    const response = await fetch(`/studio/codebase/api/graph?limit=${encodeURIComponent(limit)}`);
+    const graph = await response.json(); nodes = graph.nodes || []; edges = graph.edges || [];
+    statsEl.textContent = `${nodes.length} modules from ${limit} sampled files`;
+    setStatus(graph.meta?.exists ? "Index ready" : "Index missing — re-index to begin"); render();
+  } catch (error) { setStatus(`Could not load atlas: ${error.message}`); }
 }
 
-function render(){
-  svg.selectAll(".node").remove();
-  svg.selectAll(".edge").remove();
-  const showLabels=document.getElementById("show-labels").checked;
-  // edges (body co-located, faint)
-  const eg = svg.append("g").attr("id","edges");
-  edges.forEach(e=>{
-    const s=nodes.find(n=>n.id===e.source), t=nodes.find(n=>n.id===e.target);
-    if(!s||!t) return;
-    eg.append("line").attr("class","edge").attr("x1",s.x*W).attr("y1",s.y*H).attr("x2",t.x*W).attr("y2",t.y*H).attr("stroke","#3a2a5a").attr("stroke-width",0.7).attr("opacity",0.35);
-  });
-  // nodes
-  const ng = svg.append("g").attr("id","nodes");
-  const sel = ng.selectAll("g.node").data(nodes).enter().append("g").attr("class","node").attr("transform",d=>`translate(${d.x*W},${d.y*H})`).on("click", (ev,d)=>{
-    detailsEl.style.display="block";
-    detailsEl.innerHTML=`<b>${d.path}</b><br/><span style="font-size:10px;color:${d.color}">${d.body_part}</span><br/><span style="font-size:11px;word-break:break-all">${d.title}</span>`;
-  });
-  sel.append("circle").attr("r",4.5).attr("fill",d=>d.color).attr("stroke","#0d0a14").attr("stroke-width",1.2).attr("opacity",0.9);
-  if(showLabels){
-    sel.append("text").attr("x",7).attr("y",3).attr("font-size","7px").attr("fill","#cbb8ff").attr("opacity",0.85).text(d=>d.path.split("/").pop().slice(0,18));
-  }
+function render() {
+  svg.selectAll("#edges,#nodes,#callouts").remove();
+  const byId = new Map(nodes.map(node => [node.id, node]));
+  const edgeGroup = svg.append("g").attr("id","edges");
+  edges.forEach(edge => { const source=byId.get(edge.source), target=byId.get(edge.target); if (!source || !target) return; edgeGroup.append("line").attr("x1",source.x*W).attr("y1",source.y*H).attr("x2",target.x*W).attr("y2",target.y*H).attr("stroke","#238ba0").attr("stroke-width",.7).attr("opacity",.4); });
+  const group = svg.append("g").attr("id","nodes");
+  const selection = group.selectAll("g.node").data(nodes).enter().append("g").attr("class","node").attr("transform", d => `translate(${d.x*W},${d.y*H})`).style("cursor","pointer").on("click", (event, d) => showModule(event, d));
+  selection.append("circle").attr("r",8).attr("fill",d=>d.color).attr("opacity",.12).attr("stroke",d=>d.color).attr("stroke-width",.6);
+  selection.append("circle").attr("r",3.2).attr("fill",d=>d.color).attr("stroke","#d9ffff").attr("stroke-width",.7);
+  if (document.getElementById("show-labels").checked) selection.append("text").attr("x",7).attr("y",-5).attr("fill","#b9f4f8").attr("font-size",7.2).attr("letter-spacing",.4).text(d => d.module.split("/").slice(-1)[0].slice(0,22));
 }
 
-document.getElementById("refresh").onclick=loadGraph;
-document.getElementById("show-labels").onchange=render;
-document.getElementById("ingest").onclick=async()=>{
-  setStatus("ingesting… (SHA1 incremental)");
-  const r=await fetch("/studio/codebase/api/ingest?force=false");
-  const j=await r.json();
-  alert(JSON.stringify(j,null,2));
-  loadGraph();
-};
-document.getElementById("search-btn").onclick=async()=>{
-  const q=document.getElementById("search-q").value.trim();
-  if(!q) return;
-  setStatus("searching…");
-  const r=await fetch(`/studio/codebase/api/search?q=${encodeURIComponent(q)}&limit=8`);
-  const j=await r.json();
-  document.getElementById("search-stats").textContent=j.meta.count+" hits";
-  const hitsEl=document.getElementById("search-hits");
-  hitsEl.innerHTML=j.hits.map(h=>`<div><b>${h.path}</b> <span style="color:var(--dim)">[${(h.score||0).toFixed(3)}]</span><br/>${(h.text||"").slice(0,120).replace(/</g,"&lt;")}</div>`).join("");
-  // highlight
-  const hitIds=new Set(j.hits.map(h=>h.id));
-  svg.selectAll(".node circle").attr("stroke",d=> hitIds.has(d.id) ? "#fff" : "#0d0a14").attr("stroke-width",d=> hitIds.has(d.id) ? 2.2 : 1.2);
-  setStatus("search done");
-};
+async function showModule(event, node) {
+  svg.selectAll("g.node circle:last-child").attr("r",3.2); d3.select(event.currentTarget).select("circle:last-child").attr("r",5);
+  detailsEl.innerHTML = `<p class="details-kicker">Reading module</p><h2>${esc(node.module)}</h2><p>Building a natural-language brief from the indexed source…</p>`;
+  try {
+    const response = await fetch(`/studio/codebase/api/module?module=${encodeURIComponent(node.module)}`); const detail = await response.json();
+    if (detail.error) throw new Error(detail.error);
+    const functions = detail.functions.length ? `<ul>${detail.functions.map(name => `<li><code>${esc(name)}()</code></li>`).join("")}</ul>` : "<p>No callable symbols were extracted from the indexed excerpts.</p>";
+    const files = detail.files.slice(0, 7).map(file => `<li><code>${esc(file)}</code></li>`).join("");
+    detailsEl.innerHTML = `<p class="details-kicker">${esc(detail.body_part)} system · ${detail.files.length} files</p><h2>${esc(detail.module)}</h2><p>${esc(detail.summary)}</p><p class="details-kicker">Functions and classes</p>${functions}<p class="details-kicker">Included files</p><ul>${files}</ul>${detail.excerpt ? `<p class="details-kicker">Indexed context</p><p>${esc(detail.excerpt)}…</p>` : ""}`;
+  } catch (error) { detailsEl.innerHTML = `<p class="details-kicker">Module briefing</p><h2>${esc(node.module)}</h2><p>${esc(error.message)}</p>`; }
+}
+
+document.getElementById("refresh").onclick = loadGraph;
+document.getElementById("show-labels").onchange = render;
+document.getElementById("ingest").onclick = async () => { setStatus("Indexing codebase…"); try { const response=await fetch("/studio/codebase/api/ingest?force=false"); const result=await response.json(); setStatus(result.ok ? `Indexed ${result.docs_added} updated files` : result.error || "Indexing failed"); loadGraph(); } catch (error) { setStatus(error.message); } };
+document.getElementById("search-btn").onclick = async () => { const query=document.getElementById("search-q").value.trim(); if (!query) return; setStatus("Searching…"); const response=await fetch(`/studio/codebase/api/search?q=${encodeURIComponent(query)}&limit=8`); const result=await response.json(); document.getElementById("search-stats").textContent=`${result.meta.count || 0} matching excerpts`; document.getElementById("search-hits").innerHTML=result.hits.map(hit => `<div class="search-hit" title="${esc(hit.path)}"><b>${esc(hit.path)}</b><br><span>${esc((hit.text || "").slice(0,100))}</span></div>`).join("") || "<div class=\"stat\">No matching code was found.</div>"; setStatus("Search complete"); };
 loadGraph();

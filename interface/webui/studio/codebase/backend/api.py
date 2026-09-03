@@ -49,6 +49,11 @@ def search(q: str = Query(..., description="Search codebase"), limit: int = Quer
     except Exception as e:
         return {"query": query, "hits": [], "meta": {"user_id": uid, "error": str(e)}}
 
+@app.get("/api/module")
+def get_module(module: str = Query(..., min_length=1)):
+    from interface.webui.studio.codebase.backend.graph_export import module_details
+    return module_details(module=module, user_id=current_user_id())
+
 @app.get("/api/ingest")
 def ingest(force: bool = Query(False)):
     from cognition.knowledge.codebase import ingest_codebase
