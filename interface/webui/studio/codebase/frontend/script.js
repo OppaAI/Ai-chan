@@ -22,35 +22,34 @@ const SYSTEMS = {
   senses: { label: "Senses", color: "#51d4c8", glow: "#64ffd2" },
   core:   { label: "Core",   color: "#a888e8", glow: "#d8bcff" },
   tools:  { label: "Arms",   color: "#7298e8", glow: "#8ab4ff" },
-  move:   { label: "Legs",   color: "#51bfa5", glow: "#64ffd2" }
 };
 
 const MODULES = [
-  { id: "stm",      name: "STM",      system: "brain",  x: 260, y: 88,  r: 14, desc: "Short-term memory buffer. Holds recent conversation context and working memory.", files: ["memory/stm.py", "memory/buffer.py"] },
-  { id: "ltm",      name: "LTM",      system: "brain",  x: 300, y: 88,  r: 14, desc: "Long-term memory store. Vector-based embedding storage for persistent facts.", files: ["memory/ltm.py", "memory/vectors.py"] },
-  { id: "itm",      name: "ITM",      system: "brain",  x: 280, y: 112, r: 12, desc: "Intermediate-term memory. Compresses STM into durable LTM entries.", files: ["memory/itm.py", "memory/summarize.py"] },
-  { id: "kb",       name: "KB",       system: "brain",  x: 280, y: 62,  r: 11, desc: "Knowledge base. Structured fact graph and entity resolver.", files: ["memory/kb.py", "memory/graph.py"] },
-  { id: "reason",   name: "Reasoner", system: "brain",  x: 248, y: 130, r: 10, desc: "Cognitive reasoning engine. Chain-of-thought planner.", files: ["cognition/reason.py", "cognition/chain.py"] },
-  { id: "gate",     name: "Gate",     system: "brain",  x: 312, y: 130, r: 10, desc: "Attention gate. Filters stimuli reaching working memory.", files: ["cognition/gate.py", "cognition/attention.py"] },
-  { id: "vision",   name: "Vision",   system: "senses", x: 232, y: 142, r: 11, desc: "Visual perception. Image parsing, OCR, scene description.", files: ["senses/vision.py", "senses/ocr.py"] },
-  { id: "hearing",  name: "Hearing",  system: "senses", x: 328, y: 142, r: 11, desc: "Audio input. Speech-to-text and sound event detection.", files: ["senses/audio.py", "senses/stt.py"] },
-  { id: "web",      name: "Web",      system: "senses", x: 210, y: 108, r: 12, desc: "Web sense. Live page fetching and search integration.", files: ["senses/web.py", "senses/search.py"] },
-  { id: "touch",    name: "Touch",    system: "senses", x: 350, y: 108, r: 10, desc: "Input touch handler. File uploads and gesture parsing.", files: ["senses/touch.py", "senses/gesture.py"] },
-  { id: "voice",    name: "Voice",    system: "senses", x: 280, y: 168, r: 10, desc: "Speech synthesis and voice output formatting.", files: ["senses/tts.py", "senses/voice.py"] },
-  { id: "state",    name: "State",    system: "core",   x: 280, y: 236, r: 16, desc: "Central state manager. Session lifecycle and context.", files: ["core/state.py", "core/session.py"] },
-  { id: "config",   name: "Config",   system: "core",   x: 248, y: 260, r: 12, desc: "Configuration registry. Environment and secrets store.", files: ["core/config.py", "core/env.py"] },
-  { id: "identity", name: "Identity", system: "core",   x: 312, y: 260, r: 12, desc: "Personality module. Tone rules and persona switching.", files: ["core/identity.py", "core/persona.py"] },
-  { id: "bus",      name: "Bus",      system: "core",   x: 280, y: 280, r: 11, desc: "Internal message bus. Pub-sub backbone.", files: ["core/bus.py", "core/events.py"] },
-  { id: "coder",    name: "Coder",    system: "tools",  x: 184, y: 220, r: 14, desc: "Code generation and execution. Python sandbox.", files: ["tools/coder.py", "tools/sandbox.py"] },
-  { id: "shell",    name: "Shell",    system: "tools",  x: 164, y: 260, r: 12, desc: "System shell interface. Safe command execution.", files: ["tools/shell.py", "tools/guard.py"] },
-  { id: "browser",  name: "Browser",  system: "tools",  x: 148, y: 300, r: 12, desc: "Headless browser automation and screenshots.", files: ["tools/browser.py", "tools/puppet.py"] },
-  { id: "files",    name: "Files",    system: "tools",  x: 168, y: 340, r: 11, desc: "File system manager. Read, write, compress.", files: ["tools/files.py", "tools/fs.py"] },
-  { id: "calc",     name: "Calc",     system: "tools",  x: 196, y: 376, r: 10, desc: "Math and data toolkit. Calculator and plotter.", files: ["tools/calc.py", "tools/plot.py"] },
-  { id: "sched",    name: "Sched",    system: "move",   x: 376, y: 220, r: 13, desc: "Task scheduler. Cron-like job runner.", files: ["orchestra/scheduler.py"] },
-  { id: "pipeline", name: "Pipeline", system: "move",   x: 396, y: 260, r: 13, desc: "Workflow pipeline. DAG-based step runner.", files: ["orchestra/pipeline.py"] },
-  { id: "agent",    name: "Agent",    system: "move",   x: 412, y: 300, r: 12, desc: "Main agent orchestration loop.", files: ["orchestra/agent.py"] },
-  { id: "time",     name: "Clock",    system: "move",   x: 392, y: 340, r: 10, desc: "Time keeper. NTP sync and timers.", files: ["orchestra/clock.py"] },
-  { id: "health",   name: "Health",   system: "move",   x: 364, y: 376, r: 10, desc: "Health monitor. Self-diagnostics.", files: ["orchestra/health.py"] }
+  { id: "stm",      name: "STM",      system: "brain",  x: 245, y: 82,  r: 14, desc: "Short-term memory buffer. Holds recent conversation context and working memory.", files: ["memory/stm.py", "memory/buffer.py"] },
+  { id: "ltm",      name: "LTM",      system: "brain",  x: 315, y: 82,  r: 14, desc: "Long-term memory store. Vector-based embedding storage for persistent facts.", files: ["memory/ltm.py", "memory/vectors.py"] },
+  { id: "itm",      name: "ITM",      system: "brain",  x: 280, y: 116, r: 12, desc: "Intermediate-term memory. Compresses STM into durable LTM entries.", files: ["memory/itm.py", "memory/summarize.py"] },
+  { id: "kb",       name: "KB",       system: "brain",  x: 280, y: 42,  r: 11, desc: "Knowledge base. Structured fact graph and entity resolver.", files: ["memory/kb.py", "memory/graph.py"] },
+  { id: "reason",   name: "Reasoner", system: "brain",  x: 205, y: 152, r: 10, desc: "Cognitive reasoning engine. Chain-of-thought planner.", files: ["cognition/reason.py", "cognition/chain.py"] },
+  { id: "gate",     name: "Gate",     system: "brain",  x: 355, y: 152, r: 10, desc: "Attention gate. Filters stimuli reaching working memory.", files: ["cognition/gate.py", "cognition/attention.py"] },
+  { id: "vision",   name: "Vision",   system: "senses", x: 95, y: 310, r: 11, desc: "Visual perception. Image parsing, OCR, scene description.", files: ["senses/vision.py", "senses/ocr.py"] },
+  { id: "hearing",  name: "Hearing",  system: "senses", x: 85, y: 385, r: 11, desc: "Audio input. Speech-to-text and sound event detection.", files: ["senses/audio.py", "senses/stt.py"] },
+  { id: "web",      name: "Web",      system: "senses", x: 110, y: 245, r: 12, desc: "Web sense. Live page fetching and search integration.", files: ["senses/web.py", "senses/search.py"] },
+  { id: "touch",    name: "Touch",    system: "senses", x: 165, y: 310, r: 10, desc: "Input touch handler. File uploads and gesture parsing.", files: ["senses/touch.py", "senses/gesture.py"] },
+  { id: "voice",    name: "Voice",    system: "senses", x: 145, y: 430, r: 10, desc: "Speech synthesis and voice output formatting.", files: ["senses/tts.py", "senses/voice.py"] },
+  { id: "state",    name: "State",    system: "core",   x: 280, y: 480, r: 16, desc: "Central state manager. Session lifecycle and context.", files: ["core/state.py", "core/session.py"] },
+  { id: "config",   name: "Config",   system: "core",   x: 240, y: 522, r: 12, desc: "Configuration registry. Environment and secrets store.", files: ["core/config.py", "core/env.py"] },
+  { id: "identity", name: "Identity", system: "core",   x: 320, y: 522, r: 12, desc: "Personality module. Tone rules and persona switching.", files: ["core/identity.py", "core/persona.py"] },
+  { id: "bus",      name: "Bus",      system: "core",   x: 280, y: 560, r: 11, desc: "Internal message bus. Pub-sub backbone.", files: ["core/bus.py", "core/events.py"] },
+  { id: "coder",    name: "Coder",    system: "tools",  x: 450, y: 245, r: 14, desc: "Code generation and execution. Python sandbox.", files: ["tools/coder.py", "tools/sandbox.py"] },
+  { id: "shell",    name: "Shell",    system: "tools",  x: 405, y: 305, r: 12, desc: "System shell interface. Safe command execution.", files: ["tools/shell.py", "tools/guard.py"] },
+  { id: "browser",  name: "Browser",  system: "tools",  x: 485, y: 305, r: 12, desc: "Headless browser automation and screenshots.", files: ["tools/browser.py", "tools/puppet.py"] },
+  { id: "files",    name: "Files",    system: "tools",  x: 420, y: 375, r: 11, desc: "File system manager. Read, write, compress.", files: ["tools/files.py", "tools/fs.py"] },
+  { id: "calc",     name: "Calc",     system: "tools",  x: 475, y: 430, r: 10, desc: "Math and data toolkit. Calculator and plotter.", files: ["tools/calc.py", "tools/plot.py"] },
+  { id: "sched",    name: "Scheduler", system: "core", x: 280, y: 606, r: 13, desc: "Task scheduler. Cron-like job runner.", files: ["orchestra/scheduler.py"] },
+  { id: "pipeline", name: "Pipeline",  system: "core", x: 222, y: 628, r: 12, desc: "Workflow pipeline. DAG-based step runner.", files: ["orchestra/pipeline.py"] },
+  { id: "agent",    name: "Agent",     system: "core", x: 338, y: 628, r: 12, desc: "Main agent orchestration loop.", files: ["orchestra/agent.py"] },
+  { id: "time",     name: "Clock",     system: "core", x: 252, y: 666, r: 10, desc: "Time keeper. NTP sync and timers.", files: ["orchestra/clock.py"] },
+  { id: "health",   name: "Health",    system: "core", x: 308, y: 666, r: 10, desc: "Health monitor. Self-diagnostics.", files: ["orchestra/health.py"] }
 ];
 
 const LINKS = [
@@ -94,43 +93,44 @@ function drawFigure() {
   pattern.append("path").attr("d", "M6 0l5.2 3v6L6 12 .8 9V3z").attr("fill", "none").attr("stroke", "rgba(168,136,232,0.15)").attr("stroke-width", 0.5);
 
   const g = svg.append("g").attr("id", "figure");
+  const body = g.append("g").attr("transform", "translate(0, 120) scale(.74)");
 
   // Head
-  g.append("ellipse").attr("cx", 280).attr("cy", 95).attr("rx", 62).attr("ry", 56)
+  body.append("ellipse").attr("cx", 280).attr("cy", 95).attr("rx", 62).attr("ry", 56)
     .attr("fill", "url(#body-grad)").attr("stroke", "#ff8ec8").attr("stroke-width", 2);
 
   // Antenna ears
   for (const cx of [212, 348]) {
-    g.append("circle").attr("cx", cx).attr("cy", 95).attr("r", 10).attr("fill", "#171124").attr("stroke", "#ff8ec8").attr("stroke-width", 2);
-    g.append("circle").attr("cx", cx).attr("cy", 95).attr("r", 3).attr("fill", "#51d4c8").attr("filter", "url(#glow-cyan)");
+    body.append("circle").attr("cx", cx).attr("cy", 95).attr("r", 10).attr("fill", "#171124").attr("stroke", "#ff8ec8").attr("stroke-width", 2);
+    body.append("circle").attr("cx", cx).attr("cy", 95).attr("r", 3).attr("fill", "#51d4c8").attr("filter", "url(#glow-cyan)");
   }
 
   // Eyes
   for (const cx of [258, 302]) {
-    g.append("ellipse").attr("cx", cx).attr("cy", 100).attr("rx", 14).attr("ry", 16)
+    body.append("ellipse").attr("cx", cx).attr("cy", 100).attr("rx", 14).attr("ry", 16)
       .attr("fill", "rgba(100,255,210,0.15)").attr("stroke", "#64ffd2").attr("stroke-width", 2);
-    g.append("ellipse").attr("cx", cx).attr("cy", 100).attr("rx", 8).attr("ry", 10)
+    body.append("ellipse").attr("cx", cx).attr("cy", 100).attr("rx", 8).attr("ry", 10)
       .attr("fill", "#0a1f1c");
-    g.append("circle").attr("cx", cx + 4).attr("cy", 96).attr("r", 3).attr("fill", "#fff").attr("opacity", 0.9);
+    body.append("circle").attr("cx", cx + 4).attr("cy", 96).attr("r", 3).attr("fill", "#fff").attr("opacity", 0.9);
   }
 
   // Blush
   for (const cx of [242, 318]) {
-    g.append("ellipse").attr("cx", cx).attr("cy", 118).attr("rx", 6).attr("ry", 3)
+    body.append("ellipse").attr("cx", cx).attr("cy", 118).attr("rx", 6).attr("ry", 3)
       .attr("fill", "rgba(255,110,179,0.35)").attr("filter", "url(#glow-pink)");
   }
 
   // Smile
-  g.append("path").attr("d", "M272 128 Q280 134 288 128").attr("fill", "none")
+  body.append("path").attr("d", "M272 128 Q280 134 288 128").attr("fill", "none")
     .attr("stroke", "#ff8ec8").attr("stroke-width", 2).attr("stroke-linecap", "round");
 
   // Neck
-  g.append("rect").attr("x", 270).attr("y", 148).attr("width", 20).attr("height", 12).attr("rx", 4)
+  body.append("rect").attr("x", 270).attr("y", 148).attr("width", 20).attr("height", 12).attr("rx", 4)
     .attr("fill", "#171124").attr("stroke", "#ff8ec8").attr("stroke-width", 1.5);
 
   // Torso
   const torsoD = "M230 164 Q280 156 330 164 L340 180 Q350 220 345 280 L335 340 Q330 360 310 365 L280 368 L250 365 Q230 360 225 340 L215 280 Q210 220 220 180 Z";
-  g.append("path").attr("d", torsoD).attr("fill", "url(#body-grad)").attr("stroke", "#ff8ec8").attr("stroke-width", 2);
+  body.append("path").attr("d", torsoD).attr("fill", "url(#body-grad)").attr("stroke", "#ff8ec8").attr("stroke-width", 2);
 
   // Hex core
   const hexPts = [];
@@ -138,71 +138,71 @@ function drawFigure() {
     const a = Math.PI/6 + i * Math.PI/3;
     hexPts.push([280 + 16*Math.cos(a), 238 + 16*Math.sin(a)]);
   }
-  g.append("polygon").attr("points", hexPts.map(p => p.join(",")).join(" "))
+  body.append("polygon").attr("points", hexPts.map(p => p.join(",")).join(" "))
     .attr("fill", "url(#hex)").attr("stroke", "#a888e8").attr("stroke-width", 1.5).attr("filter", "url(#glow-core)");
-  g.append("circle").attr("cx", 280).attr("cy", 238).attr("r", 5).attr("fill", "#a888e8").attr("filter", "url(#glow-core)");
+  body.append("circle").attr("cx", 280).attr("cy", 238).attr("r", 5).attr("fill", "#a888e8").attr("filter", "url(#glow-core)");
 
   // Circuit traces
   const traces = [
     "M250 180 L250 210 L264 220", "M310 180 L310 210 L296 220",
     "M280 256 L280 280", "M240 260 L260 260 L270 280", "M320 260 L300 260 L290 280"
   ];
-  traces.forEach(d => g.append("path").attr("d", d).attr("fill", "none").attr("stroke", "rgba(168,136,232,0.3)").attr("stroke-width", 1));
+  traces.forEach(d => body.append("path").attr("d", d).attr("fill", "none").attr("stroke", "rgba(168,136,232,0.3)").attr("stroke-width", 1));
   [[250,180],[310,180],[250,210],[310,210],[264,220],[296,220],[280,280],[240,260],[320,260],[270,280],[290,280]]
-    .forEach(([cx,cy]) => g.append("circle").attr("cx",cx).attr("cy",cy).attr("r",2).attr("fill","#a888e8").attr("opacity",0.7));
+    .forEach(([cx,cy]) => body.append("circle").attr("cx",cx).attr("cy",cy).attr("r",2).attr("fill","#a888e8").attr("opacity",0.7));
 
   // Shoulders
   for (const cx of [210, 350]) {
-    g.append("ellipse").attr("cx", cx).attr("cy", 185).attr("rx", 18).attr("ry", 12)
+    body.append("ellipse").attr("cx", cx).attr("cy", 185).attr("rx", 18).attr("ry", 12)
       .attr("fill", "#171124").attr("stroke", "#ff8ec8").attr("stroke-width", 1.5);
   }
 
   // Left arm
-  g.append("path").attr("d", "M195 190 Q170 210 160 240 Q150 280 155 320 Q158 350 170 380")
+  body.append("path").attr("d", "M195 190 Q170 210 160 240 Q150 280 155 320 Q158 350 170 380")
     .attr("fill", "none").attr("stroke", "#ff8ec8").attr("stroke-width", 5).attr("stroke-linecap", "round");
-  g.append("path").attr("d", "M195 190 Q170 210 160 240 Q150 280 155 320 Q158 350 170 380")
+  body.append("path").attr("d", "M195 190 Q170 210 160 240 Q150 280 155 320 Q158 350 170 380")
     .attr("fill", "none").attr("stroke", "#171124").attr("stroke-width", 2).attr("stroke-linecap", "round");
   [[165,240],[158,300],[164,350]].forEach(([cx,cy], i) => {
-    g.append("circle").attr("cx",cx).attr("cy",cy).attr("r",4).attr("fill", i%2?"#51d4c8":"#ff6eb3").attr("filter","url(#glow-cyan)");
+    body.append("circle").attr("cx",cx).attr("cy",cy).attr("r",4).attr("fill", i%2?"#51d4c8":"#ff6eb3").attr("filter","url(#glow-cyan)");
   });
 
   // Right arm
-  g.append("path").attr("d", "M365 190 Q390 210 400 240 Q410 280 405 320 Q402 350 390 380")
+  body.append("path").attr("d", "M365 190 Q390 210 400 240 Q410 280 405 320 Q402 350 390 380")
     .attr("fill", "none").attr("stroke", "#ff8ec8").attr("stroke-width", 5).attr("stroke-linecap", "round");
-  g.append("path").attr("d", "M365 190 Q390 210 400 240 Q410 280 405 320 Q402 350 390 380")
+  body.append("path").attr("d", "M365 190 Q390 210 400 240 Q410 280 405 320 Q402 350 390 380")
     .attr("fill", "none").attr("stroke", "#171124").attr("stroke-width", 2).attr("stroke-linecap", "round");
   [[395,240],[402,300],[396,350]].forEach(([cx,cy], i) => {
-    g.append("circle").attr("cx",cx).attr("cy",cy).attr("r",4).attr("fill", i%2?"#51d4c8":"#ff6eb3").attr("filter","url(#glow-cyan)");
+    body.append("circle").attr("cx",cx).attr("cy",cy).attr("r",4).attr("fill", i%2?"#51d4c8":"#ff6eb3").attr("filter","url(#glow-cyan)");
   });
 
   // Legs
-  g.append("path").attr("d", "M250 365 Q240 420 242 480 Q244 520 248 560 L252 620 Q254 640 260 640 L275 640 Q280 640 280 620 L280 500")
+  body.append("path").attr("d", "M250 365 Q240 420 242 480 Q244 520 248 560 L252 620 Q254 640 260 640 L275 640 Q280 640 280 620 L280 500")
     .attr("fill", "url(#body-grad)").attr("stroke", "#ff8ec8").attr("stroke-width", 2);
-  g.append("path").attr("d", "M310 365 Q320 420 318 480 Q316 520 312 560 L308 620 Q306 640 300 640 L285 640 Q280 640 280 620 L280 500")
+  body.append("path").attr("d", "M310 365 Q320 420 318 480 Q316 520 312 560 L308 620 Q306 640 300 640 L285 640 Q280 640 280 620 L280 500")
     .attr("fill", "url(#body-grad)").attr("stroke", "#ff8ec8").attr("stroke-width", 2);
 
   [[248,420],[246,500],[250,580],[312,420],[314,500],[310,580]].forEach(([cx,cy], i) => {
-    g.append("circle").attr("cx",cx).attr("cy",cy).attr("r",3).attr("fill", i%2?"#51d4c8":"#ff6eb3").attr("opacity",0.8);
+    body.append("circle").attr("cx",cx).attr("cy",cy).attr("r",3).attr("fill", i%2?"#51d4c8":"#ff6eb3").attr("opacity",0.8);
   });
 
   // Feet
   for (const cx of [268, 292]) {
-    g.append("ellipse").attr("cx", cx).attr("cy", 645).attr("rx", 20).attr("ry", 8)
+    body.append("ellipse").attr("cx", cx).attr("cy", 645).attr("rx", 20).attr("ry", 8)
       .attr("fill", "#171124").attr("stroke", "#ff8ec8").attr("stroke-width", 1.5);
   }
 
   // Brain glow
-  g.append("ellipse").attr("cx", 280).attr("cy", 85).attr("rx", 36).attr("ry", 28)
+  body.append("ellipse").attr("cx", 280).attr("cy", 85).attr("rx", 36).attr("ry", 28)
     .attr("fill", "rgba(198,81,168,0.08)").attr("filter", "url(#glow-pink)");
 
   // Head lines
-  g.append("path").attr("d", "M240 75 Q280 70 320 75").attr("fill", "none")
+  body.append("path").attr("d", "M240 75 Q280 70 320 75").attr("fill", "none")
     .attr("stroke", "rgba(255,142,200,0.4)").attr("stroke-width", 1);
-  g.append("path").attr("d", "M235 95 Q280 100 325 95").attr("fill", "none")
+  body.append("path").attr("d", "M235 95 Q280 100 325 95").attr("fill", "none")
     .attr("stroke", "rgba(255,142,200,0.4)").attr("stroke-width", 1);
 
   // Label
-  g.append("text").attr("x", 280).attr("y", 708).attr("text-anchor", "middle")
+  body.append("text").attr("x", 280).attr("y", 708).attr("text-anchor", "middle")
     .attr("fill", "#d8bcff").attr("font-size", 9).attr("letter-spacing", 3)
     .attr("font-family", "system-ui, ui-sans-serif, sans-serif").attr("font-weight", "600")
     .text("AIKO · CODEBASE ATLAS");

@@ -20,10 +20,9 @@ _BODY_MAP = [
     (r"^sensory/(vision|video)|^interface/webui|^training/persona", "head_eyes", "senses", "#51d4c8"),
     (r"^sensory/(listen|audio)|^sensory/speak.*listen|sherpa", "head_ears", "senses", "#e8c84a"),
     (r"^sensory/speak|^interface/adapter|^agentic/toolkit/social", "head_mouth", "voice", "#e88c6a"),
-    (r"^system/(userspace|config|secure|bioclock|log)|^main\.py", "chest", "core", "#a888e8"),
-    (r"^agentic/workflows|^agentic/graph_engine", "chest", "core", "#51bfa5"),
+    (r"^system/(userspace|config|secure|bioclock|log|orchestrate|schedule|wakeup|prepare|turngate)|^main\.py", "chest", "core", "#a888e8"),
+    (r"^agentic/workflows|^agentic/graph_engine", "chest", "core", "#a888e8"),
     (r"^agentic/toolkit|^agentic/registry", "arms", "tools", "#7298e8"),
-    (r"^system/(orchestrate|schedule|wakeup|prepare|turngate)", "legs", "mobility", "#51bfa5"),
     (r"^agentic/mcp|^interface/mcp|^backend", "spine", "spine", "#8c7ab8"),
     (r".*", "tail", "support", "#887b9a"),
 ]
@@ -31,7 +30,7 @@ _BODY_MAP = [
 _BODY_ANCHORS = {
     "head": (0.50, 0.16), "head_eyes": (0.50, 0.12), "head_ears": (0.50, 0.15),
     "head_mouth": (0.50, 0.20), "chest": (0.50, 0.38), "arms": (0.50, 0.42),
-    "spine": (0.50, 0.51), "legs": (0.50, 0.74), "tail": (0.50, 0.89),
+    "spine": (0.50, 0.51), "tail": (0.50, 0.89),
 }
 
 _REPO_ROOT = Path(__file__).resolve().parents[5]
@@ -203,9 +202,6 @@ def export_codebase_graph(user_id: str | None = None, limit: int = 400) -> dict:
             if anchor == "arms":
                 # Alternate tool modules between left and right arm callouts.
                 ax, ay, radius = (.27 if index % 2 == 0 else .73), .42 + (index // 2) * .035, .025
-            elif anchor == "legs":
-                # Scheduling/orchestration modules read naturally as a pair of legs.
-                ax, ay, radius = (.42 if index % 2 == 0 else .58), .74 + (index // 2) * .035, .02
             metrics = _module_metrics(module_paths[module])
             changed = sum(change_counts.get(path, 0) for path in module_paths[module])
             test_files = [path for path in module_paths[module] if "/test" in path or path.startswith("tests/")]
