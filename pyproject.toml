@@ -47,6 +47,7 @@ dependencies = [
     "onnxruntime-gpu==1.29.0",
     "sherpa-onnx-core==1.13.7",
     "setuptools>=84.0.0",
+    "sherpa-onnx>=1.13.7",
 ]
 
 [project.optional-dependencies]
