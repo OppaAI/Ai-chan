@@ -3,72 +3,29 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Aiko Codebase — Figure</title>
+  <title>Aiko Codebase — Systems Figure</title>
   <link rel="stylesheet" href="static/style.css" />
 </head>
 <body>
   <header>
-    <div style="display:flex;align-items:center;gap:14px;">
-      <a href="#" id="back-btn" title="Back" style="display:flex;align-items:center;justify-content:center;width:32px;height:32px;background:#1a1028;border:1px solid var(--dim);border-radius:50%;color:var(--purple);text-decoration:none;font-weight:bold;">←</a>
-      <h1>Aiko — Codebase Figure</h1>
-      <span style="font-size:11px;color:var(--dim)">brain → legs • sharp silhouette</span>
-    </div>
-    <div class="actions">
-      <span id="status" style="font-size:11px;color:var(--dim)"></span>
-      <button class="btn" id="refresh">Refresh</button>
-      <button class="btn btn-primary" id="ingest">Re-ingest (22:00)</button>
-    </div>
+    <div class="brand"><a href="#" id="back-btn" title="Back">←</a><div><p class="eyebrow">Aiko systems atlas</p><h1>Codebase Figure</h1></div></div>
+    <div class="actions"><span id="status"></span><button class="btn" id="export-md">Export Markdown</button><button class="btn" id="refresh">Refresh</button><button class="btn btn-primary" id="ingest">Re-index codebase</button></div>
   </header>
   <div class="body">
     <aside class="sidebar">
-      <nav class="memory-studio-tabs" aria-label="Memory studio sections" style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px">
-        <a class="memory-studio-tab" href="/studio/memory/stm/">STM</a>
-        <a class="memory-studio-tab" href="/studio/memory/ltm/">LTM</a>
-        <a class="memory-studio-tab" href="/studio/memory/itm/">ITM</a>
-        <a class="memory-studio-tab" href="/studio/memory/kb/">KB</a>
-        <a class="memory-studio-tab active" href="/studio/codebase/" aria-current="page" style="border-color:#ff6b6b;color:#ff6b6b;background:rgba(255,107,107,0.12)">CODEBASE</a>
-      </nav>
-      <h2>Search codebase</h2>
-      <label>Query <input type="text" id="search-q" placeholder="e.g. attention gate, subliminal, vecstore" /></label>
-      <button class="btn btn-primary" id="search-btn" style="width:100%;margin-top:4px">Search</button>
-      <div class="stat" id="search-stats">—</div>
-      <div id="search-hits" style="max-height:220px;overflow:auto;font-size:12px;margin-top:6px"></div>
-      <h2>Body map</h2>
-      <div class="stat" style="line-height:1.6">
-        <span style="color:#ff6b6b">●</span> <b>head/brain</b> — cognition/*, memory<br/>
-        <span style="color:#4ecdc4">●</span> eyes — vision, webui<br/>
-        <span style="color:#ffe66d">●</span> ears — listen<br/>
-        <span style="color:#ff9f43">●</span> mouth — speak, adapters<br/>
-        <span style="color:#a29bfe">●</span> heart — userspace, config<br/>
-        <span style="color:#6c5ce7">●</span> hands — toolkit, workflows<br/>
-        <span style="color:#00b894">●</span> legs — orchestrate, schedule<br/>
-        <span style="color:#636e72">●</span> spine — mcp, webui, main<br/>
-      </div>
-      <h2>Filters</h2>
-      <label>Limit <input type="number" id="limit" value="400" min="20" max="2000" /></label>
-      <label><input type="checkbox" id="show-labels" checked /> Show file labels</label>
-      <div class="stat" id="stats">—</div>
+      <nav class="memory-studio-tabs" aria-label="Memory studio sections"><a href="/studio/memory/stm/">STM</a><a href="/studio/memory/ltm/">LTM</a><a href="/studio/memory/itm/">ITM</a><a href="/studio/memory/kb/">KB</a><a class="active" href="/studio/codebase/" aria-current="page">CODEBASE</a></nav>
+      <section><p class="section-label">Find code</p><label for="search-q">Ask about an implementation</label><input type="text" id="search-q" placeholder="attention gate, vector store…" /><button class="btn btn-primary wide" id="search-btn">Search indexed code</button><div class="stat" id="search-stats">Enter a question to search.</div><div id="search-hits"></div></section>
+      <section><p class="section-label">Atlas controls</p><label for="limit">Indexed files sampled</label><input type="number" id="limit" value="400" min="20" max="2000" /><label class="check"><input type="checkbox" id="show-labels" checked /> Show module labels</label><div class="filter-group" id="system-filters" aria-label="Filter systems"></div><div class="stat" id="stats">—</div></section>
+      <section class="map-key"><p class="section-label">Body map</p><div><i class="brain"></i> Brain · cognition and memory</div><div><i class="senses"></i> Senses · web, input, voice</div><div><i class="core"></i> Core · state and configuration</div><div><i class="tools"></i> Arms · tools and workflows</div><div><i class="move"></i> Legs · orchestration and time</div></section>
     </aside>
-    <div class="canvas-area" id="canvas-area">
-      <svg id="canvas" viewBox="0 0 400 600" preserveAspectRatio="xMidYMid meet"></svg>
-      <div class="details" id="details"></div>
-      <div class="legend">
-        <span><i style="background:#ff6b6b"></i>brain</span>
-        <span><i style="background:#4ecdc4"></i>eyes</span>
-        <span><i style="background:#ffe66d"></i>ears</span>
-        <span><i style="background:#ff9f43"></i>mouth</span>
-        <span><i style="background:#a29bfe"></i>heart</span>
-        <span><i style="background:#6c5ce7"></i>hands</span>
-        <span><i style="background:#00b894"></i>legs</span>
-      </div>
-    </div>
+    <main class="canvas-area" id="canvas-area">
+      <div class="scanlines"></div><div class="diagram-copy"><span>AIKO / INTERNAL SYSTEMS</span><small>SELECT A MODULE FOR A PLAIN-LANGUAGE BRIEF</small></div><div class="canvas-tools"><button class="btn" id="zoom-in">+</button><button class="btn" id="zoom-out">−</button><button class="btn" id="zoom-reset">Reset view</button><button class="btn" id="print-atlas">Print / PDF</button></div>
+      <svg id="canvas" viewBox="0 0 560 720" preserveAspectRatio="xMidYMid meet" aria-label="Aiko codebase module figure"></svg>
+      <aside class="details" id="details" aria-live="polite"><p class="details-kicker">Module briefing</p><h2>Select a module</h2><p>Each marker represents a grouped part of the codebase. Select one to see its responsibilities, functions, and files in plain language.</p></aside>
+      <div class="legend"><span><i></i> module</span><span class="line-key"></span> shared system</div>
+    </main>
   </div>
-  <script src="https://cdn.jsdelivr.net/npm/d3@7/dist/d3.min.js"></script>
-  <script src="static/script.js"></script>
-  <script>
-    document.getElementById('back-btn').addEventListener('click', function(e){
-      e.preventDefault(); if(window.history.length>1) window.history.back(); else window.location.href='/';
-    });
-  </script>
+  <script src="https://cdn.jsdelivr.net/npm/d3@7/dist/d3.min.js"></script><script src="static/script.js"></script>
+  <script>document.getElementById('back-btn').addEventListener('click', e => { e.preventDefault(); history.length > 1 ? history.back() : location.assign('/'); });</script>
 </body>
 </html>
