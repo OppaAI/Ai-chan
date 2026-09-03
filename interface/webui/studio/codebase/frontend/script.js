@@ -1,6 +1,7 @@
 const svg = d3.select("#canvas");
 const W = 560, H = 720;
 let nodes = [], edges = [];
+let graphRequestGeneration = 0;
 let scene;
 let activeSystems = new Set();
 let selectedId = null;
@@ -498,20 +499,24 @@ function graphNodeToDisplay(node) {
 }
 
 async function init() {
+  const requestGeneration = ++graphRequestGeneration;
   svg.selectAll("*").remove();
   drawFigure();
 
   const limit = parseInt(limitInput.value) || 400;
   try {
     const response = await fetch(`/api/graph?limit=${encodeURIComponent(limit)}`);
+    if (requestGeneration !== graphRequestGeneration) return;
     if (!response.ok) throw new Error(`Graph failed (${response.status})`);
     const graph = await response.json();
+    if (requestGeneration !== graphRequestGeneration) return;
     if (!graph.meta?.exists || !graph.nodes?.length) throw new Error("No codebase index");
     nodes = graph.nodes.map(graphNodeToDisplay);
     const ids = new Set(nodes.map(node => node.id));
     edges = (graph.edges || []).filter(edge => ids.has(edge.source) && ids.has(edge.target));
     setStatus(`Atlas ready · ${nodes.length} indexed modules`);
   } catch (_error) {
+    if (requestGeneration !== graphRequestGeneration) return;
     nodes = MODULES.slice(0, limit);
     edges = LINKS.map(l => ({ source: l.s, target: l.t })).filter(l =>
       nodes.some(n => n.id === l.source) && nodes.some(n => n.id === l.target)
@@ -519,6 +524,7 @@ async function init() {
     setStatus("Demo atlas · index unavailable");
   }
 
+  if (requestGeneration !== graphRequestGeneration) return;
   drawEdges();
   drawNodes();
   buildFilters();
