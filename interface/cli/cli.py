@@ -100,6 +100,7 @@ class AikoSimpleCLI:
                 print()                                                    # finalize previous line before starting a new one
             self._boot_current = label
             self._boot_done += 1
+        print(f"\r  ⠋ {label:<60}", end="", flush=True)                   # paint first spinner frame immediately
 
     def step_done(self, key: str) -> None:
         if self._chat_started:
