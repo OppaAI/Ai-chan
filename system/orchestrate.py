@@ -995,7 +995,7 @@ def run_session(ui, args) -> None:
     # ── init spin ─────────────────────────────────────────────────────────────
 
     spin_stop = threading.Event()
-    spin_t    = threading.Thread(target=ui.spin_loop, args=(spin_stop,), daemon=True)
+    spin_t    = threading.Thread(target=getattr(ui, "_spin_loop", ui.spin_loop), args=(spin_stop,), daemon=True)
     spin_t.start()
 
     # Wire the brain tracer to the UI sink so per-step traces stream into

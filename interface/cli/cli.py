@@ -79,31 +79,45 @@ class AikoSimpleCLI:
         self._agent_step = 0
 
     # ── boot / status ────────────────────────────────────────────────────
-    def spin_loop(self, stop_event: threading.Event) -> None:
+    _SPINNER_FRAMES = ("⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏")
+
+    def _spin_loop(self, stop_event: threading.Event) -> None:
+        idx = 0
         while not stop_event.is_set():
-            stop_event.wait(0.25)
+            with self._boot_lock:
+                label = self._boot_current
+            frame = self._SPINNER_FRAMES[idx % len(self._SPINNER_FRAMES)]
+            print(f"\r  {frame} {label:<60}", end="", flush=True)
+            idx += 1
+            stop_event.wait(0.08)
 
     def step_loading(self, key: str) -> None:
         if self._chat_started:
             return
         label = AikoWakeup.ALL_BOOT_LABELS.get(key, key)
         with self._boot_lock:
+            if self._boot_current and self._boot_current != label:
+                print()                                                    # finalize previous line before starting a new one
             self._boot_current = label
-            self._render_progress()
+            self._boot_done += 1
 
     def step_done(self, key: str) -> None:
         if self._chat_started:
             return
+        label = AikoWakeup.ALL_BOOT_LABELS.get(key, key)
         with self._boot_lock:
             self._boot_done += 1
-            self._render_progress()
+            self._boot_current = ""
+            print(f"\r  ✓ {label:<60}")                                   # overwrite spinner line with ✓ then newline
 
     def step_skip(self, key: str) -> None:
         if self._chat_started:
             return
+        label = AikoWakeup.ALL_BOOT_LABELS.get(key, key)
         with self._boot_lock:
             self._boot_done += 1
-            self._render_progress()
+            self._boot_current = ""
+            print(f"\r  ✗ {label:<60}  (skipped)")                        # mark skipped distinctly
 
     def _render_progress(self) -> None:
         pct = int(100 * self._boot_done / (self._boot_total or 1))
