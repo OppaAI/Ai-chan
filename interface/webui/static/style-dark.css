@@ -689,6 +689,13 @@ body {
   font-size: 12px;
 }
 
+#camera-btn {
+  width: 30px;
+  padding: 4px 0;
+  letter-spacing: 0;
+  font-size: 12px;
+}
+
 #mic-btn.on {
   border-color: var(--cyan);
   color: var(--cyan);

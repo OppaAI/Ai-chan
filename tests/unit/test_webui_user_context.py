@@ -1,12 +1,13 @@
 from __future__ import annotations
 
+import base64
 import os
 import queue
 import threading
 
 import pytest
 
-from interface.webui.webui import AikoWeb
+from interface.webui.webui import AikoWeb, _validate_image_data_uri, _vision_base_url
 from interface.webui.studio.session_binding import _relative_path
 from system.prepare import run_post_auth
 from system.userspace import current_display_name, current_user_id, reset_current_display_name, reset_current_user_id
@@ -81,6 +82,56 @@ def test_get_input_uses_queued_identity_not_shared_state(monkeypatch):
     assert web.get_input() == "hello"
     assert current_user_id() == "bob"
     assert current_display_name() == "Bobby"
+
+
+def test_camera_image_validation_accepts_small_jpeg_data_uri():
+    image = "data:image/jpeg;base64,/9j/2Q=="
+
+    assert _validate_image_data_uri(image) == image
+
+
+@pytest.mark.parametrize(("mime", "raw"), [
+    ("image/png", b"\x89PNG\r\n\x1a\n"),
+    ("image/webp", b"RIFF\x04\x00\x00\x00WEBP"),
+])
+def test_camera_image_validation_accepts_matching_image_signatures(mime, raw):
+    image = f"data:{mime};base64,{base64.b64encode(raw).decode()}"
+
+    assert _validate_image_data_uri(image) == image
+
+
+@pytest.mark.parametrize(("mime", "raw"), [
+    ("image/jpeg", b"\x89PNG\r\n\x1a\n"),
+    ("image/png", b"RIFF\x04\x00\x00\x00WEBP"),
+    ("image/webp", b"\xff\xd8\xff\xd9"),
+])
+def test_camera_image_validation_rejects_mismatched_image_signatures(mime, raw):
+    encoded = base64.b64encode(raw).decode()
+
+    assert _validate_image_data_uri(f"data:{mime};base64,{encoded}") is None
+
+
+@pytest.mark.parametrize("image", [
+    "https://example.test/image.jpg",
+    "data:image/gif;base64,R0lGODlh",
+    "data:image/jpeg;base64,not valid base64!",
+])
+def test_camera_image_validation_rejects_unsafe_or_invalid_payloads(image):
+    assert _validate_image_data_uri(image) is None
+
+
+@pytest.mark.parametrize(("webui_url", "vision_url", "llm_url", "expected"), [
+    ("https://webui.test/v1", "https://vision.test/v1", "https://llm.test/v1", "https://webui.test/v1"),
+    ("", "https://vision.test/v1", "https://llm.test/v1", "https://vision.test/v1"),
+    (" ", "", "https://llm.test/v1", "https://llm.test/v1"),
+    ("", "", "", "http://localhost:8080/v1"),
+])
+def test_vision_base_url_uses_first_non_blank_value(monkeypatch, webui_url, vision_url, llm_url, expected):
+    monkeypatch.setenv("WEBUI_VISION_BASE_URL", webui_url)
+    monkeypatch.setenv("VISION_BASE_URL", vision_url)
+    monkeypatch.setenv("LLM_BASE_URL", llm_url)
+
+    assert _vision_base_url() == expected
 
 
 def test_studio_api_path_is_relative_to_its_mount():

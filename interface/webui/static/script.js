@@ -27,6 +27,7 @@ const toolStatus = document.getElementById('tool-status');
 const content = document.getElementById('content');
 const allOnline = document.getElementById('all-online');
 const input = document.getElementById('user-input');
+const cameraBtn = document.getElementById('camera-btn');
 const micBtn = document.getElementById('mic-btn');
 const sendBtn = document.getElementById('send-btn');
 const voiceSt = document.getElementById('voice-status');
@@ -878,10 +879,61 @@ function submitInput() {
   input.value = '';
 }
 
+async function captureImage() {
+  if (!wsReady()) {
+    addMessage('sys', 'WebSocket bridge is offline. Cannot use the camera.');
+    return;
+  }
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+    addMessage('sys', 'This browser does not support camera capture.');
+    return;
+  }
+
+  cameraBtn.disabled = true;
+  toolStatus.textContent = '  📷  opening camera…';
+  let stream;
+  let submitted = false;
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 }, height: { ideal: 720 } },
+      audio: false,
+    });
+    const video = document.createElement('video');
+    video.srcObject = stream;
+    video.playsInline = true;
+    await video.play();
+    await new Promise(resolve => setTimeout(resolve, 250));
+    const canvas = document.createElement('canvas');
+    const maxWidth = 1024;
+    const scale = Math.min(1, maxWidth / video.videoWidth);
+    canvas.width = Math.max(1, Math.round(video.videoWidth * scale));
+    canvas.height = Math.max(1, Math.round(video.videoHeight * scale));
+    canvas.getContext('2d').drawImage(video, 0, 0, canvas.width, canvas.height);
+    const image = canvas.toDataURL('image/jpeg', 0.85);
+    const text = input.value.trim();
+    if (!wsReady()) {
+      addMessage('sys', 'WebSocket bridge is offline. Cannot submit the camera image.');
+      return;
+    }
+    ws.send(JSON.stringify({ type: 'image_input', image, text }));
+    submitted = true;
+    input.value = '';
+    addMessage('user', text ? `📷 Camera image — ${text}` : '📷 Camera image');
+  } catch (err) {
+    console.error('[camera] capture failed:', err);
+    addMessage('sys', 'Camera access was unavailable. Allow camera permission and try again.');
+  } finally {
+    if (stream) stream.getTracks().forEach(track => track.stop());
+    if (!submitted) cameraBtn.disabled = false;
+    input.focus();
+  }
+}
+
 input.addEventListener('keydown', e => {
   if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); submitInput(); }
 });
 sendBtn.addEventListener('click', submitInput);
+cameraBtn.addEventListener('click', captureImage);
 micBtn.addEventListener('click', async () => {
   if (!wsReady()) {
     addMessage('sys', 'WebSocket bridge is offline. Cannot toggle voice mode.');
@@ -954,6 +1006,12 @@ function connectWS() {
       case 'step': handleStep(msg); break;
       case 'phase': if (msg.value === 'chat') switchToChat(); break;
       case 'chat': addMessage(msg.sender, msg.text); break;
+      case 'vision':
+        if (msg.status === 'working') toolStatus.textContent = '  👁  analyzing camera image…';
+        else if (msg.status === 'done') { toolStatus.textContent = ''; cameraBtn.disabled = false; }
+        else if (msg.status === 'error') { toolStatus.textContent = ''; cameraBtn.disabled = false; addMessage('sys', msg.message); }
+        else if (msg.status === 'busy') addMessage('sys', msg.message);
+        break;
       case 'token': appendToken(msg.text); break;
       case 'sources': renderSources(msg.items || []); break;
       case 'files': renderFiles(msg.items || []); break;
