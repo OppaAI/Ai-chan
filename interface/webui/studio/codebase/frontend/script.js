@@ -336,7 +336,7 @@ async function doSearch() {
   if (!q) { searchHits.innerHTML = ""; searchStats.textContent = "Enter a question to search."; return; }
   let hits = [];
   try {
-    const response = await fetch(`/api/search?q=${encodeURIComponent(q)}&limit=8`);
+    const response = await fetch(`/studio/codebase/api/search?q=${encodeURIComponent(q)}&limit=8`);
     if (!response.ok) throw new Error(`Search failed (${response.status})`);
     const payload = await response.json();
     hits = (payload.hits || []).map(hit => ({
@@ -389,7 +389,7 @@ document.getElementById("refresh").onclick = () => init();
 document.getElementById("ingest").onclick = async () => {
   setStatus("Re-indexing…");
   try {
-    const response = await fetch("/api/ingest?force=true");
+    const response = await fetch("/studio/codebase/api/ingest?force=true");
     if (!response.ok) throw new Error(`Indexing failed (${response.status})`);
     await response.json();
     await init();
@@ -412,13 +412,17 @@ async function init() {
   drawBackdrop();
 
   const limit = parseInt(limitInput.value) || 400;
+  let needIngest = false;
   try {
-    const response = await fetch(`/api/graph?limit=${encodeURIComponent(limit)}`);
+    const response = await fetch(`/studio/codebase/api/graph?limit=${encodeURIComponent(limit)}`);
     if (requestGeneration !== graphRequestGeneration) return;
     if (!response.ok) throw new Error(`Graph failed (${response.status})`);
     const graph = await response.json();
     if (requestGeneration !== graphRequestGeneration) return;
-    if (!graph.meta?.exists || !graph.nodes?.length) throw new Error("No codebase index");
+    if (!graph.meta?.exists || !graph.nodes?.length) {
+      needIngest = !graph.meta?.exists;
+      throw new Error(needIngest ? "Codebase index missing" : "No codebase index");
+    }
     nodes = graph.nodes.map(graphNodeToDisplay);
     const ids = new Set(nodes.map(node => node.id));
     edges = (graph.edges || []).filter(edge => {
@@ -428,6 +432,31 @@ async function init() {
     }).map(e => ({ source: e.source.id || e.source, target: e.target.id || e.target, kind: e.kind, weight: e.weight || 0.2 }));
     setStatus(`Atlas ready · ${nodes.length} indexed modules`);
   } catch (_error) {
+    if (requestGeneration !== graphRequestGeneration) return;
+    if (needIngest) {
+      setStatus("Indexing codebase…");
+      try {
+        const ing = await fetch("/studio/codebase/api/ingest?force=false");
+        if (ing.ok) await ing.json();
+        if (requestGeneration !== graphRequestGeneration) return;
+        setStatus("Re-checking index…");
+        const retry = await fetch(`/studio/codebase/api/graph?limit=${encodeURIComponent(limit)}`);
+        if (retry.ok) {
+          const graph = await retry.json();
+          if (graph.meta?.exists && graph.nodes?.length) {
+            nodes = graph.nodes.map(graphNodeToDisplay);
+            const ids = new Set(nodes.map(n => n.id));
+            edges = (graph.edges || []).filter(e => {
+              const s = e.source.id || e.source, t = e.target.id || e.target;
+              return ids.has(s) && ids.has(t);
+            }).map(e => ({ source: e.source.id || e.source, target: e.target.id || e.target, kind: e.kind, weight: e.weight || 0.2 }));
+            setStatus(`Atlas ready · ${nodes.length} indexed modules`);
+            drawEdges(); drawNodes(); buildFilters(); updateVisibility(); svg.call(zoom); startSimulation();
+            return;
+          }
+        }
+      } catch (_) { /* fall through to demo */ }
+    }
     if (requestGeneration !== graphRequestGeneration) return;
     nodes = MODULES.slice(0, limit).map((m, i) => ({
       ...m,

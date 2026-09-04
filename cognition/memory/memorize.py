@@ -256,6 +256,14 @@ class _MemoryBackend:
         self._json_schema_supported: bool | None = None
         self._conn = self._connect()
         self._db_lock = threading.RLock()
+        # Search-result cache — _search_top() reads/writes this directly, so it
+        # must live on _MemoryBackend (the type that actually owns the method),
+        # not just on the AikoMemorize wrapper. AikoMemorize's __init__ also
+        # creates its own copy (used by switch_user paths) but the backend's
+        # instance is the one the search path touches.
+        from collections import OrderedDict as _OD
+        self._search_cache: _OD[tuple[str, str, int, bool], tuple[float, list[dict]]] = _OD()
+        self._search_cache_lock = threading.RLock()
         # Super-node cache for entity-graph fusion (see _refresh_high_freq_entities /
         # _graph_pass). Initialized here rather than lazily via getattr — this
         # class owns its own __init__, so there's no reason to defend against
@@ -280,6 +288,35 @@ class _MemoryBackend:
 
     def _connect(self) -> sqlite3.Connection:
         return initialize_store_db(self._db_path, _DDL, user_id=self._user_id, vector=True)
+
+    def _ensure_open(self) -> None:
+        """Re-open the sqlite connection if it has been closed.
+
+        Long-running scheduled jobs (monthly_consolidate, daily_reflect_and_dream)
+        can outlive a user switch — the write worker drains in-flight writes and
+        the boot process may close the connection under us, leaving the backend
+        holding a closed connection. Re-opening here is safe because the DB
+        schema migrations are idempotent and a re-open does not change the
+        schema or row visibility (sqlite-vec is file-backed and same-process).
+        """
+        try:
+            # Cheap probe — does not allocate, just checks connection state.
+            self._conn.execute("SELECT 1").fetchone()
+        except (sqlite3.ProgrammingError, sqlite3.OperationalError):
+            log.warning(
+                "Memory backend connection was closed (user switch / boot teardown?) — re-opening."
+            )
+            try:
+                self._conn = self._connect()
+            except Exception as e:
+                log.error("Memory backend re-open failed: %s", e)
+                raise
+
+    def _clear_search_cache(self) -> None:
+        """Drop the search-result cache. Called by AikoMemorize._clear_search_cache
+        after identity / persona updates so the next recall rebuilds fresh."""
+        with self._search_cache_lock:
+            self._search_cache.clear()
 
     # ── shim for callers that hold an AikoMemorize vs _MemoryBackend interchangeably ──
     def _resolve_user_id(self, user_id: str | None = None) -> str:
@@ -774,6 +811,7 @@ class _MemoryBackend:
             vector = None
         mem_id: str | None = None
         with self._db_lock:
+            self._ensure_open()
             try:
                 if vector is not None:
                     op, supersedes_id = self._maybe_supersede_neighbor(user_id, vector, text)
@@ -1616,6 +1654,7 @@ class _MemoryBackend:
 
         # ── Quick pass: fetch candidate IDs only (short lock scope) ──
         with self._db_lock:
+            self._ensure_open()
             quick_knn_rows = _sqlite_knn_search(
                 self._conn, vector, user_id, QUICK_KNN_LIMIT, active_only=active_only
             )
@@ -1795,6 +1834,7 @@ class _MemoryBackend:
 
         # ── Quick pass: fetch candidate IDs only (short lock scope) ──
         with self._db_lock:
+            self._ensure_open()
             quick_knn_rows = _sqlite_knn_search(
                 self._conn, vector, user_id, QUICK_KNN_LIMIT, active_only=active_only
             )
@@ -2066,6 +2106,7 @@ class _MemoryBackend:
         """Return all memories created after the given datetime."""
         user_id = user_id or self._user_id
         with self._db_lock:
+            self._ensure_open()
             rows = self._conn.execute(
                 """
                 SELECT * FROM memories
@@ -2089,6 +2130,7 @@ class _MemoryBackend:
             sql += " LIMIT ?"
             params.append(limit)
         with self._db_lock:
+            self._ensure_open()
             rows = self._conn.execute(sql, params).fetchall()
         return [dict(r) for r in rows]
       
@@ -2136,6 +2178,7 @@ class _MemoryBackend:
         """
         user_id = None
         with self._db_lock:
+            self._ensure_open()
             user_id = self._conn.execute(
                 "SELECT user_id FROM memories WHERE id = ?", (memory_id,)
             ).fetchone()
@@ -2328,6 +2371,11 @@ class AikoMemorize:
         different sqlite-vec binding) only needs updating here, not at
         every call site that currently reads self._conn directly.
         """
+        # Touch the lazy materializer so callers that grab _conn before
+        # _open() has been called (e.g. early boot, scheduled jobs that
+        # ran without an authenticated session) get a real backend, not
+        # an AttributeError on _mem.
+        _ = self._mem
         return self._mem._conn
 
     def _exec(self, sql: str, params: tuple = ()) -> sqlite3.Cursor:
@@ -3025,8 +3073,11 @@ class AikoMemorize:
     MIN_CLEAR_INTERVAL: float = 0.5  # seconds — debounce window for cache invalidation
 
     def _clear_search_cache(self) -> None:
-        with self._search_cache_lock:
-            self._search_cache.clear()
+        # The search-result cache lives on _MemoryBackend now (see _MemoryBackend.__init__).
+        # Delegate so we don't keep a separate copy on AikoMemorize that would
+        # silently desync from the one the search path actually reads/writes.
+        if self._mem_backend is not None:
+            self._mem._clear_search_cache()
         # Persona blob is identity-derived; a new/changed identity fact must
         # be reflected on the next turn.
         with self._persona_lock:

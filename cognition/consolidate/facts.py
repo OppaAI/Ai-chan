@@ -103,11 +103,26 @@ def parse_fact_items(raw: str) -> list[dict]:
         if not candidate:
             continue
         if all(isinstance(f, str) for f in candidate):
-            return [{"fact": f.strip(), "source_ids": []} for f in candidate if isinstance(f, str) and f.strip()]
+            cleaned: list[str] = []
+            for f in candidate:
+                s = f.strip()
+                if not s or s.casefold() in {"fact", "text", "memory", "string", "value"}:
+                    continue
+                if len(s) < 3:
+                    continue
+                cleaned.append(s)
+            if cleaned:
+                return [{"fact": f, "source_ids": []} for f in cleaned]
         if all(isinstance(f, dict) for f in candidate):
             for f in candidate:
                 fact = (f.get("fact") or f.get("text") or f.get("memory") or "").strip()
-                if not fact:
+                # Reject obvious LLM echoes where the value is literally the
+                # key name (e.g. {"fact": "fact"} or {"memory": "memory"}).
+                # These were making it through as `fact='"fact"'` and then
+                # failing the LLM schema check downstream.
+                if not fact or fact.casefold() in {"fact", "text", "memory", "string", "value"}:
+                    continue
+                if len(fact) < 3:
                     continue
                 sids = f.get("source_ids") or f.get("sources") or f.get("ids") or []
                 if isinstance(sids, str):

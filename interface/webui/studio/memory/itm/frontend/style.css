@@ -1,21 +1,8 @@
-:root {
-  --bg: #050510;
-  --bg2: #0a0a14;
-  --border: #1e1428;
-  --pink: #c651a8;
-  --purple: #a888e8;
-  --cyan-ui: #51d4c8;
-  --gold: #e8c84a;
-  --dim: #4a3a6a;
-  --dimmer: #2a1a4a;
-  --text: #cdbfe6;
-  --muted: #8a9bb8;
-  --episode: #51d4c8;
-}
+/* Per-studio colors now live in /shared/css/studio-theme.css. */
+
 * { box-sizing: border-box; margin: 0; padding: 0; }
 body {
   background: var(--bg); color: var(--text);
-  font-family: system-ui, -apple-system, sans-serif;
   height: 100vh; overflow: hidden;
 }
 header {

@@ -1,26 +1,8 @@
-:root {
-  /* Match Neural LTM / Aiko purple studio theme */
-  --bg: #050510;
-  --bg2: #0a0a14;
-  --border: #1e1428;
-  --pink: #c651a8;
-  --purple: #a888e8;
-  --cyan: #51d4c8;
-  --dim: #4a3a6a;
-  --dim-text: #8a7aaa;
-  --text: #cdbfe6;
-  --orange: #e8843a;
-  --gold: #f0c14a;
-  --glass: rgba(10, 12, 28, 0.82);
-  --slot: #120a1c;
-  --danger: #e8843a;
-  --weak: #f0c14a;
-}
+/* Per-studio colors now live in /shared/css/studio-theme.css. */
 
 * { box-sizing: border-box; }
 body {
   margin: 0;
-  font-family: system-ui, -apple-system, sans-serif;
   background: var(--bg);
   color: var(--text);
   min-height: 100vh;

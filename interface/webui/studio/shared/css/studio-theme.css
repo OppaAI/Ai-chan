@@ -1,0 +1,107 @@
+/* Shared purple-studio theme — used by every Memory Studio (STM, LTM, ITM, KB, Codebase).
+   Single source of truth so all four studios match the KB look. */
+:root {
+  --bg:      #0c0614;
+  --panel:   #160e22;
+  --text:    #e8e0f0;
+  --muted:   #8b7a9e;
+  --dim:     #3d2f4f;
+  --accent:  #c084fc;
+  --accent2: #a78bfa;
+  --green:   #4ade80;
+  --purple:  #a78bfa;
+  --pink:    #c651a8;
+  --brown:   #a67c52;
+  --cyan:    #51d4c8;
+  --orange:  #e8843a;
+  --gold:    #f0c14a;
+  --danger:  #e8516a;
+  --bg2:     #160e22;
+  --border:  #3d2f4f;
+  --dimmer:  #2a1a4a;
+  --glass:   rgba(22, 14, 34, 0.82);
+  --slot:    #160e22;
+  --dim-text:#8b7a9e;
+  --font-main: system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: ui-monospace, "SF Mono", menlo, consolas, monospace;
+}
+
+body {
+  font: 13px var(--font-main);
+  background: var(--bg);
+  color: var(--text);
+}
+
+header h1,
+.top h1,
+.brand h1,
+.memory-studio-tabs,
+.section-label,
+.details-kicker,
+.eyebrow,
+h1, h2 {
+  color: var(--accent);
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  font-weight: 600;
+}
+
+header h1,
+.top h1,
+.brand h1 {
+  font-size: 15px;
+  margin: 0;
+}
+
+.btn {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  color: var(--muted);
+  font: 12px var(--font-main);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  padding: 6px 12px;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.btn:hover {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.btn-primary {
+  background: var(--accent);
+  color: var(--bg);
+  border-color: var(--accent);
+}
+
+.memory-studio-tabs {
+  display: flex;
+  gap: 6px;
+  margin: 0 -16px;
+  padding: 0 16px 10px;
+  border-bottom: 1px solid var(--border);
+}
+
+.memory-studio-tab {
+  font: 12px var(--font-main);
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--muted);
+  text-decoration: none;
+  padding: 8px 12px;
+  border: 1px solid transparent;
+  border-radius: 4px 4px 0 0;
+}
+
+.memory-studio-tab:hover {
+  color: var(--text);
+}
+
+.memory-studio-tab.active {
+  color: var(--accent);
+  border-color: var(--border);
+  border-bottom-color: transparent;
+  background: var(--panel);
+}

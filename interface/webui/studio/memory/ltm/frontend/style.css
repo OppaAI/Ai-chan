@@ -1,16 +1,8 @@
+/* Per-studio colors now live in /shared/css/studio-theme.css.
+   Graph-valence palette (--neg/--pos/--neutral/--entity/--episode) kept local —
+   the LTM graph nodes use a distinct neural-valence scheme that other studios
+   don't share, so it stays scoped to this file. */
 :root {
-  /* UI chrome — purple studio theme (matches other Aiko studios) */
-  --bg: #050510;
-  --bg2: #0a0a14;
-  --border: #1e1428;
-  --pink: #c651a8;
-  --purple: #a888e8;
-  --cyan-ui: #51d4c8;
-  --dim: #4a3a6a;
-  --text: #cdbfe6;
-  --orange: #e8843a;
-  --glass: rgba(10, 12, 28, 0.82);
-  /* Graph nodes only — neural valence palette (unchanged) */
   --neg: #3de0ff;
   --pos: #f0c14a;
   --neutral: #8a9bb8;
@@ -20,7 +12,6 @@
 * { box-sizing: border-box; margin: 0; padding: 0; }
 body {
   background: var(--bg); color: var(--text);
-  font-family: system-ui, -apple-system, sans-serif;
   height: 100vh; overflow: hidden;
 }
 header {

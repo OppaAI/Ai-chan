@@ -1884,7 +1884,18 @@ class AikoThink:
     @staticmethod
     def _is_system_role_error(exc: Exception) -> bool:
         msg = str(exc)
-        return "Only user, assistant and tool roles are supported" in msg and "got system" in msg
+        if "got system" not in msg and "system role" not in msg.lower():
+            return False
+        # The Jinja template error from llama-server truncates the inner
+        # raise_exception(...) call to "...Only user, assistant and tool roles ar..."
+        # which then fails the literal substring check below. Match on either
+        # the full phrase OR the prefix that always survives truncation, plus
+        # the templated "role" indicator.
+        return (
+            "Only user, assistant and tool roles are supported" in msg
+            or "Only user, assistant and tool roles ar" in msg
+            or "raise_exception" in msg and "system" in msg
+        )
 
     def _stream_response(self, messages: list[dict], system: str = "", token_callback=None, emit: bool = True, system_tail: str = "") -> str:
         full_response = []

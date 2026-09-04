@@ -370,7 +370,13 @@ class _ScratchStore:
 
     def save_chunk(self, url: str, chunk: str, chunk_hash: str, embedding: list[float] | None, query: str) -> None:
         """Store a text chunk with its embedding and source query."""
-        embedding_json = json.dumps(embedding) if embedding is not None else None
+        # Numpy float32 values from the embedder aren't JSON-serializable by
+        # default — convert to plain Python floats so json.dumps doesn't crash
+        # (was previously failing as "Object of type float32 is not JSON serializable").
+        if embedding is not None:
+            embedding_json = json.dumps([float(x) for x in embedding])
+        else:
+            embedding_json = None
         with self._lock:
             try:
                 self._conn.execute(
