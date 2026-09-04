@@ -892,6 +892,7 @@ async function captureImage() {
   cameraBtn.disabled = true;
   toolStatus.textContent = '  📷  opening camera…';
   let stream;
+  let submitted = false;
   try {
     stream = await navigator.mediaDevices.getUserMedia({
       video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 }, height: { ideal: 720 } },
@@ -910,15 +911,20 @@ async function captureImage() {
     canvas.getContext('2d').drawImage(video, 0, 0, canvas.width, canvas.height);
     const image = canvas.toDataURL('image/jpeg', 0.85);
     const text = input.value.trim();
-    input.value = '';
+    if (!wsReady()) {
+      addMessage('sys', 'WebSocket bridge is offline. Cannot submit the camera image.');
+      return;
+    }
     ws.send(JSON.stringify({ type: 'image_input', image, text }));
+    submitted = true;
+    input.value = '';
     addMessage('user', text ? `📷 Camera image — ${text}` : '📷 Camera image');
   } catch (err) {
     console.error('[camera] capture failed:', err);
     addMessage('sys', 'Camera access was unavailable. Allow camera permission and try again.');
   } finally {
     if (stream) stream.getTracks().forEach(track => track.stop());
-    cameraBtn.disabled = false;
+    if (!submitted) cameraBtn.disabled = false;
     input.focus();
   }
 }
@@ -1002,8 +1008,9 @@ function connectWS() {
       case 'chat': addMessage(msg.sender, msg.text); break;
       case 'vision':
         if (msg.status === 'working') toolStatus.textContent = '  👁  analyzing camera image…';
-        else if (msg.status === 'done') toolStatus.textContent = '';
-        else if (msg.status === 'error') { toolStatus.textContent = ''; addMessage('sys', msg.message); }
+        else if (msg.status === 'done') { toolStatus.textContent = ''; cameraBtn.disabled = false; }
+        else if (msg.status === 'error') { toolStatus.textContent = ''; cameraBtn.disabled = false; addMessage('sys', msg.message); }
+        else if (msg.status === 'busy') addMessage('sys', msg.message);
         break;
       case 'token': appendToken(msg.text); break;
       case 'sources': renderSources(msg.items || []); break;

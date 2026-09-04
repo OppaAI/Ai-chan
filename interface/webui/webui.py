@@ -55,6 +55,7 @@ SSL_CERT = os.getenv("SSL_CERT", "")
 SSL_KEY = os.getenv("SSL_KEY", "")
 WEBUI_BROWSER_VAD_GATE = os.getenv("WEBUI_BROWSER_VAD_GATE", "1").lower() in {"1", "true", "yes", "on"}
 WEBUI_VISION_MAX_IMAGE_BYTES = 8 * 1024 * 1024
+WEBUI_VISION_MAX_IN_FLIGHT = 1
 
 
 def _validate_image_data_uri(value: object) -> str | None:
@@ -80,7 +81,23 @@ def _validate_image_data_uri(value: object) -> str | None:
         return None
     if not raw or len(raw) > WEBUI_VISION_MAX_IMAGE_BYTES:
         return None
+    signatures_match = {
+        "image/jpeg": raw.startswith(b"\xff\xd8\xff"),
+        "image/png": raw.startswith(b"\x89PNG\r\n\x1a\n"),
+        "image/webp": len(raw) >= 12 and raw[:4] == b"RIFF" and raw[8:12] == b"WEBP",
+    }
+    if not signatures_match[mime]:
+        return None
     return value
+
+
+def _vision_base_url() -> str:
+    return (
+        os.getenv("WEBUI_VISION_BASE_URL", "").strip()
+        or os.getenv("VISION_BASE_URL", "").strip()
+        or os.getenv("LLM_BASE_URL", "").strip()
+        or "http://localhost:8080/v1"
+    )
 
 
 def _barge_in_enabled() -> bool:
@@ -412,6 +429,7 @@ class AikoWeb:
         with self._clients_lock:
             self._clients.add(ws)
             self._client_users[ws] = uid
+        vision_tasks: set[asyncio.Task[None]] = set()
         log.info("[aiko-web] browser connected  (total=%d)", len(self._clients))
         try:
             while True:
@@ -462,8 +480,16 @@ class AikoWeb:
                                 "message": "That camera image was invalid or too large.",
                             }))
                             continue
+                        if len(vision_tasks) >= WEBUI_VISION_MAX_IN_FLIGHT:
+                            await self._safe_send(ws, json.dumps({
+                                "type": "vision", "status": "busy",
+                                "message": "A camera image is already being analyzed.",
+                            }))
+                            continue
                         prompt = str(msg.get("text") or "").strip()
-                        asyncio.create_task(self._handle_image_input(image, prompt, uid))
+                        task = asyncio.create_task(self._handle_image_input(image, prompt, uid))
+                        vision_tasks.add(task)
+                        task.add_done_callback(vision_tasks.discard)
 
                     elif mtype == "vad":
                         event = msg.get("event")
@@ -491,6 +517,10 @@ class AikoWeb:
         except Exception:
             log.exception("[aiko-web] error in WebSocket loop")
         finally:
+            for task in vision_tasks:
+                task.cancel()
+            if vision_tasks:
+                await asyncio.gather(*vision_tasks, return_exceptions=True)
             reset_current_display_name(display_context_token)
             reset_current_user_id(user_context_token)
             with self._clients_lock:
@@ -529,9 +559,7 @@ class AikoWeb:
         from openai import OpenAI
 
         model = os.getenv("WEBUI_VISION_MODEL", os.getenv("VISION_MODEL", "minicpm-v"))
-        base_url = os.getenv("WEBUI_VISION_BASE_URL", os.getenv("VISION_BASE_URL", "")) or os.getenv(
-            "LLM_BASE_URL", "http://localhost:8080/v1"
-        )
+        base_url = _vision_base_url()
         timeout = float(os.getenv("WEBUI_VISION_TIMEOUT", "60"))
         instruction = question or "Describe what you see in this camera image clearly and helpfully."
         response = OpenAI(base_url=base_url, api_key=os.getenv("OPENAI_API_KEY", "not-needed")).chat.completions.create(
