@@ -3,6 +3,7 @@ const W = 560, H = 720;
 let nodes = [], edges = [];
 let graphRequestGeneration = 0;
 let scene;
+let simulation = null;
 let activeSystems = new Set();
 let selectedId = null;
 const statusEl = document.getElementById("status");
@@ -20,38 +21,45 @@ function setStatus(text) { statusEl.textContent = text; }
 function esc(text) { const node = document.createElement("span"); node.textContent = text || ""; return node.innerHTML; }
 
 const SYSTEMS = {
-  brain:  { label: "Brain",  color: "#c651a8", glow: "#ff6eb3" },
-  senses: { label: "Senses", color: "#51d4c8", glow: "#64ffd2" },
-  core:   { label: "Core",   color: "#a888e8", glow: "#d8bcff" },
-  tools:  { label: "Arms",   color: "#7298e8", glow: "#8ab4ff" },
+  brain:     { label: "Brain",     color: "#c651a8", glow: "#ff6eb3" },
+  senses:    { label: "Senses",    color: "#51d4c8", glow: "#64ffd2" },
+  core:      { label: "Core",      color: "#a888e8", glow: "#d8bcff" },
+  tools:     { label: "Arms",      color: "#7298e8", glow: "#8ab4ff" },
+  interface: { label: "Interface", color: "#8ab4ff", glow: "#b0c8ff" },
+  training:  { label: "Training",  color: "#e88c6a", glow: "#ffae8e" },
+  tests:     { label: "Tests",     color: "#9aa0b4", glow: "#bcc0d0" },
+  support:   { label: "Support",   color: "#887b9a", glow: "#a89bb8" },
 };
 
 const MODULES = [
-  { id: "stm",      name: "STM",      system: "brain",  x: 245, y: 82,  r: 14, desc: "Short-term memory buffer. Holds recent conversation context and working memory.", files: ["memory/stm.py", "memory/buffer.py"] },
-  { id: "ltm",      name: "LTM",      system: "brain",  x: 315, y: 82,  r: 14, desc: "Long-term memory store. Vector-based embedding storage for persistent facts.", files: ["memory/ltm.py", "memory/vectors.py"] },
-  { id: "itm",      name: "ITM",      system: "brain",  x: 280, y: 116, r: 12, desc: "Intermediate-term memory. Compresses STM into durable LTM entries.", files: ["memory/itm.py", "memory/summarize.py"] },
-  { id: "kb",       name: "KB",       system: "brain",  x: 280, y: 42,  r: 11, desc: "Knowledge base. Structured fact graph and entity resolver.", files: ["memory/kb.py", "memory/graph.py"] },
-  { id: "reason",   name: "Reasoner", system: "brain",  x: 205, y: 152, r: 10, desc: "Cognitive reasoning engine. Chain-of-thought planner.", files: ["cognition/reason.py", "cognition/chain.py"] },
-  { id: "gate",     name: "Gate",     system: "brain",  x: 355, y: 152, r: 10, desc: "Attention gate. Filters stimuli reaching working memory.", files: ["cognition/gate.py", "cognition/attention.py"] },
-  { id: "vision",   name: "Vision",   system: "senses", x: 95, y: 310, r: 11, desc: "Visual perception. Image parsing, OCR, scene description.", files: ["senses/vision.py", "senses/ocr.py"] },
-  { id: "hearing",  name: "Hearing",  system: "senses", x: 85, y: 385, r: 11, desc: "Audio input. Speech-to-text and sound event detection.", files: ["senses/audio.py", "senses/stt.py"] },
-  { id: "web",      name: "Web",      system: "senses", x: 110, y: 245, r: 12, desc: "Web sense. Live page fetching and search integration.", files: ["senses/web.py", "senses/search.py"] },
-  { id: "touch",    name: "Touch",    system: "senses", x: 165, y: 310, r: 10, desc: "Input touch handler. File uploads and gesture parsing.", files: ["senses/touch.py", "senses/gesture.py"] },
-  { id: "voice",    name: "Voice",    system: "senses", x: 145, y: 430, r: 10, desc: "Speech synthesis and voice output formatting.", files: ["senses/tts.py", "senses/voice.py"] },
-  { id: "state",    name: "State",    system: "core",   x: 280, y: 480, r: 16, desc: "Central state manager. Session lifecycle and context.", files: ["core/state.py", "core/session.py"] },
-  { id: "config",   name: "Config",   system: "core",   x: 240, y: 522, r: 12, desc: "Configuration registry. Environment and secrets store.", files: ["core/config.py", "core/env.py"] },
-  { id: "identity", name: "Identity", system: "core",   x: 320, y: 522, r: 12, desc: "Personality module. Tone rules and persona switching.", files: ["core/identity.py", "core/persona.py"] },
-  { id: "bus",      name: "Bus",      system: "core",   x: 280, y: 560, r: 11, desc: "Internal message bus. Pub-sub backbone.", files: ["core/bus.py", "core/events.py"] },
-  { id: "coder",    name: "Coder",    system: "tools",  x: 450, y: 245, r: 14, desc: "Code generation and execution. Python sandbox.", files: ["tools/coder.py", "tools/sandbox.py"] },
-  { id: "shell",    name: "Shell",    system: "tools",  x: 405, y: 305, r: 12, desc: "System shell interface. Safe command execution.", files: ["tools/shell.py", "tools/guard.py"] },
-  { id: "browser",  name: "Browser",  system: "tools",  x: 485, y: 305, r: 12, desc: "Headless browser automation and screenshots.", files: ["tools/browser.py", "tools/puppet.py"] },
-  { id: "files",    name: "Files",    system: "tools",  x: 420, y: 375, r: 11, desc: "File system manager. Read, write, compress.", files: ["tools/files.py", "tools/fs.py"] },
-  { id: "calc",     name: "Calc",     system: "tools",  x: 475, y: 430, r: 10, desc: "Math and data toolkit. Calculator and plotter.", files: ["tools/calc.py", "tools/plot.py"] },
-  { id: "sched",    name: "Scheduler", system: "core", x: 280, y: 606, r: 13, desc: "Task scheduler. Cron-like job runner.", files: ["orchestra/scheduler.py"] },
-  { id: "pipeline", name: "Pipeline",  system: "core", x: 222, y: 628, r: 12, desc: "Workflow pipeline. DAG-based step runner.", files: ["orchestra/pipeline.py"] },
-  { id: "agent",    name: "Agent",     system: "core", x: 338, y: 628, r: 12, desc: "Main agent orchestration loop.", files: ["orchestra/agent.py"] },
-  { id: "time",     name: "Clock",     system: "core", x: 252, y: 666, r: 10, desc: "Time keeper. NTP sync and timers.", files: ["orchestra/clock.py"] },
-  { id: "health",   name: "Health",    system: "core", x: 308, y: 666, r: 10, desc: "Health monitor. Self-diagnostics.", files: ["orchestra/health.py"] }
+  { id: "stm",      name: "STM",      system: "brain",     desc: "Short-term memory buffer. Holds recent conversation context and working memory.", files: ["memory/stm.py", "memory/buffer.py"] },
+  { id: "ltm",      name: "LTM",      system: "brain",     desc: "Long-term memory store. Vector-based embedding storage for persistent facts.", files: ["memory/ltm.py", "memory/vectors.py"] },
+  { id: "itm",      name: "ITM",      system: "brain",     desc: "Intermediate-term memory. Compresses STM into durable LTM entries.", files: ["memory/itm.py", "memory/summarize.py"] },
+  { id: "kb",       name: "KB",       system: "brain",     desc: "Knowledge base. Structured fact graph and entity resolver.", files: ["memory/kb.py", "memory/graph.py"] },
+  { id: "reason",   name: "Reasoner", system: "brain",     desc: "Cognitive reasoning engine. Chain-of-thought planner.", files: ["cognition/reason.py", "cognition/chain.py"] },
+  { id: "gate",     name: "Gate",     system: "brain",     desc: "Attention gate. Filters stimuli reaching working memory.", files: ["cognition/gate.py", "cognition/attention.py"] },
+  { id: "vision",   name: "Vision",   system: "senses",    desc: "Visual perception. Image parsing, OCR, scene description.", files: ["senses/vision.py", "senses/ocr.py"] },
+  { id: "hearing",  name: "Hearing",  system: "senses",    desc: "Audio input. Speech-to-text and sound event detection.", files: ["senses/audio.py", "senses/stt.py"] },
+  { id: "web",      name: "Web",      system: "senses",    desc: "Web sense. Live page fetching and search integration.", files: ["senses/web.py", "senses/search.py"] },
+  { id: "touch",    name: "Touch",    system: "senses",    desc: "Input touch handler. File uploads and gesture parsing.", files: ["senses/touch.py", "senses/gesture.py"] },
+  { id: "voice",    name: "Voice",    system: "senses",    desc: "Speech synthesis and voice output formatting.", files: ["senses/tts.py", "senses/voice.py"] },
+  { id: "state",    name: "State",    system: "core",      desc: "Central state manager. Session lifecycle and context.", files: ["core/state.py", "core/session.py"] },
+  { id: "config",   name: "Config",   system: "core",      desc: "Configuration registry. Environment and secrets store.", files: ["core/config.py", "core/env.py"] },
+  { id: "identity", name: "Identity", system: "core",      desc: "Personality module. Tone rules and persona switching.", files: ["core/identity.py", "core/persona.py"] },
+  { id: "bus",      name: "Bus",      system: "core",      desc: "Internal message bus. Pub-sub backbone.", files: ["core/bus.py", "core/events.py"] },
+  { id: "coder",    name: "Coder",    system: "tools",     desc: "Code generation and execution. Python sandbox.", files: ["tools/coder.py", "tools/sandbox.py"] },
+  { id: "shell",    name: "Shell",    system: "tools",     desc: "System shell interface. Safe command execution.", files: ["tools/shell.py", "tools/guard.py"] },
+  { id: "browser",  name: "Browser",  system: "tools",     desc: "Headless browser automation and screenshots.", files: ["tools/browser.py", "tools/puppet.py"] },
+  { id: "files",    name: "Files",    system: "tools",     desc: "File system manager. Read, write, compress.", files: ["tools/files.py", "tools/fs.py"] },
+  { id: "calc",     name: "Calc",     system: "tools",     desc: "Math and data toolkit. Calculator and plotter.", files: ["tools/calc.py", "tools/plot.py"] },
+  { id: "sched",    name: "Scheduler", system: "core",     desc: "Task scheduler. Cron-like job runner.", files: ["orchestra/scheduler.py"] },
+  { id: "pipeline", name: "Pipeline",  system: "core",     desc: "Workflow pipeline. DAG-based step runner.", files: ["orchestra/pipeline.py"] },
+  { id: "agent",    name: "Agent",     system: "core",     desc: "Main agent orchestration loop.", files: ["orchestra/agent.py"] },
+  { id: "time",     name: "Clock",     system: "core",     desc: "Time keeper. NTP sync and timers.", files: ["orchestra/clock.py"] },
+  { id: "health",   name: "Health",    system: "core",     desc: "Health monitor. Self-diagnostics.", files: ["orchestra/health.py"] },
+  { id: "ui",       name: "WebUI",     system: "interface", desc: "Web front-end, static assets, API.", files: ["interface/webui/webui.py"] },
+  { id: "train",    name: "Trainer",   system: "training",  desc: "Model fine-tuning pipelines.", files: ["training/"] },
+  { id: "tests",    name: "Tests",     system: "tests",     desc: "Unit, integration, and stress test suite.", files: ["tests/"] },
 ];
 
 const LINKS = [
@@ -63,289 +71,223 @@ const LINKS = [
   { s: "bus", t: "agent" }, { s: "agent", t: "coder" }, { s: "agent", t: "shell" },
   { s: "agent", t: "browser" }, { s: "agent", t: "files" }, { s: "agent", t: "calc" },
   { s: "sched", t: "agent" }, { s: "pipeline", t: "agent" }, { s: "health", t: "state" },
-  { s: "coder", t: "calc" }, { s: "browser", t: "web" }
+  { s: "coder", t: "calc" }, { s: "browser", t: "web" }, { s: "ui", t: "state" },
+  { s: "ui", t: "vision" }, { s: "ui", t: "hearing" }, { s: "ui", t: "voice" },
+  { s: "ui", t: "kb" }, { s: "ui", t: "ltm" }, { s: "ui", t: "stm" },
+  { s: "train", t: "state" }, { s: "tests", t: "agent" }, { s: "tests", t: "ui" },
 ];
 
-// ── Draw Robot ──
-function drawFigure() {
+function drawBackdrop() {
   const defs = svg.append("defs");
 
-  // Gradients
-  const bodyGrad = defs.append("linearGradient").attr("id", "body-grad")
-    .attr("x1", "0%").attr("y1", "0%").attr("x2", "100%").attr("y2", "100%");
-  bodyGrad.append("stop").attr("offset", "0%").attr("stop-color", "#ff6eb3");
-  bodyGrad.append("stop").attr("offset", "50%").attr("stop-color", "#7a3a8a");
-  bodyGrad.append("stop").attr("offset", "100%").attr("stop-color", "#1e0f33");
+  const glow = defs.append("filter").attr("id", "glow-soft");
+  glow.append("feGaussianBlur").attr("stdDeviation", "3").attr("result", "b");
+  glow.append("feMerge").selectAll("feMergeNode").data(["b","SourceGraphic"]).enter().append("feMergeNode").attr("in", d=>d);
 
-  // Glow filters
-  const glowPink = defs.append("filter").attr("id", "glow-pink");
-  glowPink.append("feGaussianBlur").attr("stdDeviation", "3").attr("result", "b");
-  glowPink.append("feMerge").selectAll("feMergeNode").data(["b","SourceGraphic"]).enter().append("feMergeNode").attr("in", d=>d);
+  const halo = defs.append("filter").attr("id", "glow-strong");
+  halo.append("feGaussianBlur").attr("stdDeviation", "6").attr("result", "b");
+  halo.append("feMerge").selectAll("feMergeNode").data(["b","SourceGraphic"]).enter().append("feMergeNode").attr("in", d=>d);
 
-  const glowCyan = defs.append("filter").attr("id", "glow-cyan");
-  glowCyan.append("feGaussianBlur").attr("stdDeviation", "2.5").attr("result", "b");
-  glowCyan.append("feMerge").selectAll("feMergeNode").data(["b","SourceGraphic"]).enter().append("feMergeNode").attr("in", d=>d);
+  // Soft web background — radial gradient + faint grid
+  const bg = defs.append("radialGradient").attr("id", "bg-grad").attr("cx", "50%").attr("cy", "50%").attr("r", "70%");
+  bg.append("stop").attr("offset", "0%").attr("stop-color", "rgba(168,136,232,0.08)");
+  bg.append("stop").attr("offset", "100%").attr("stop-color", "rgba(15,10,24,0)");
 
-  const glowCore = defs.append("filter").attr("id", "glow-core");
-  glowCore.append("feGaussianBlur").attr("stdDeviation", "5").attr("result", "b");
-  glowCore.append("feMerge").selectAll("feMergeNode").data(["b","SourceGraphic"]).enter().append("feMergeNode").attr("in", d=>d);
+  svg.append("rect").attr("x", 0).attr("y", 0).attr("width", W).attr("height", H).attr("fill", "url(#bg-grad)").attr("class", "bg");
 
-  // Hex pattern
-  const pattern = defs.append("pattern").attr("id", "hex").attr("width", 12).attr("height", 12).attr("patternUnits", "userSpaceOnUse");
-  pattern.append("path").attr("d", "M6 0l5.2 3v6L6 12 .8 9V3z").attr("fill", "none").attr("stroke", "rgba(168,136,232,0.15)").attr("stroke-width", 0.5);
-
-  const viewport = svg.append("g").attr("id", "viewport");
-  scene = viewport.append("g").attr("transform", "translate(0, 120) scale(.74)");
-  const body = scene.append("g").attr("id", "figure");
-
-  // Head
-  body.append("ellipse").attr("cx", 280).attr("cy", 95).attr("rx", 62).attr("ry", 56)
-    .attr("fill", "url(#body-grad)").attr("stroke", "#ff8ec8").attr("stroke-width", 2);
-
-  // Antenna ears
-  for (const cx of [212, 348]) {
-    body.append("circle").attr("cx", cx).attr("cy", 95).attr("r", 10).attr("fill", "#171124").attr("stroke", "#ff8ec8").attr("stroke-width", 2);
-    body.append("circle").attr("cx", cx).attr("cy", 95).attr("r", 3).attr("fill", "#51d4c8").attr("filter", "url(#glow-cyan)");
-  }
-
-  // Eyes
-  for (const cx of [258, 302]) {
-    body.append("ellipse").attr("cx", cx).attr("cy", 100).attr("rx", 14).attr("ry", 16)
-      .attr("fill", "rgba(100,255,210,0.15)").attr("stroke", "#64ffd2").attr("stroke-width", 2);
-    body.append("ellipse").attr("cx", cx).attr("cy", 100).attr("rx", 8).attr("ry", 10)
-      .attr("fill", "#0a1f1c");
-    body.append("circle").attr("cx", cx + 4).attr("cy", 96).attr("r", 3).attr("fill", "#fff").attr("opacity", 0.9);
-  }
-
-  // Blush
-  for (const cx of [242, 318]) {
-    body.append("ellipse").attr("cx", cx).attr("cy", 118).attr("rx", 6).attr("ry", 3)
-      .attr("fill", "rgba(255,110,179,0.35)").attr("filter", "url(#glow-pink)");
-  }
-
-  // Smile
-  body.append("path").attr("d", "M272 128 Q280 134 288 128").attr("fill", "none")
-    .attr("stroke", "#ff8ec8").attr("stroke-width", 2).attr("stroke-linecap", "round");
-
-  // Neck
-  body.append("rect").attr("x", 270).attr("y", 148).attr("width", 20).attr("height", 12).attr("rx", 4)
-    .attr("fill", "#171124").attr("stroke", "#ff8ec8").attr("stroke-width", 1.5);
-
-  // Torso
-  const torsoD = "M230 164 Q280 156 330 164 L340 180 Q350 220 345 280 L335 340 Q330 360 310 365 L280 368 L250 365 Q230 360 225 340 L215 280 Q210 220 220 180 Z";
-  body.append("path").attr("d", torsoD).attr("fill", "url(#body-grad)").attr("stroke", "#ff8ec8").attr("stroke-width", 2);
-
-  // Hex core
-  const hexPts = [];
-  for (let i = 0; i < 6; i++) {
-    const a = Math.PI/6 + i * Math.PI/3;
-    hexPts.push([280 + 16*Math.cos(a), 238 + 16*Math.sin(a)]);
-  }
-  body.append("polygon").attr("points", hexPts.map(p => p.join(",")).join(" "))
-    .attr("fill", "url(#hex)").attr("stroke", "#a888e8").attr("stroke-width", 1.5).attr("filter", "url(#glow-core)");
-  body.append("circle").attr("cx", 280).attr("cy", 238).attr("r", 5).attr("fill", "#a888e8").attr("filter", "url(#glow-core)");
-
-  // Circuit traces
-  const traces = [
-    "M250 180 L250 210 L264 220", "M310 180 L310 210 L296 220",
-    "M280 256 L280 280", "M240 260 L260 260 L270 280", "M320 260 L300 260 L290 280"
-  ];
-  traces.forEach(d => body.append("path").attr("d", d).attr("fill", "none").attr("stroke", "rgba(168,136,232,0.3)").attr("stroke-width", 1));
-  [[250,180],[310,180],[250,210],[310,210],[264,220],[296,220],[280,280],[240,260],[320,260],[270,280],[290,280]]
-    .forEach(([cx,cy]) => body.append("circle").attr("cx",cx).attr("cy",cy).attr("r",2).attr("fill","#a888e8").attr("opacity",0.7));
-
-  // Shoulders
-  for (const cx of [210, 350]) {
-    body.append("ellipse").attr("cx", cx).attr("cy", 185).attr("rx", 18).attr("ry", 12)
-      .attr("fill", "#171124").attr("stroke", "#ff8ec8").attr("stroke-width", 1.5);
-  }
-
-  // Left arm
-  body.append("path").attr("d", "M195 190 Q170 210 160 240 Q150 280 155 320 Q158 350 170 380")
-    .attr("fill", "none").attr("stroke", "#ff8ec8").attr("stroke-width", 5).attr("stroke-linecap", "round");
-  body.append("path").attr("d", "M195 190 Q170 210 160 240 Q150 280 155 320 Q158 350 170 380")
-    .attr("fill", "none").attr("stroke", "#171124").attr("stroke-width", 2).attr("stroke-linecap", "round");
-  [[165,240],[158,300],[164,350]].forEach(([cx,cy], i) => {
-    body.append("circle").attr("cx",cx).attr("cy",cy).attr("r",4).attr("fill", i%2?"#51d4c8":"#ff6eb3").attr("filter","url(#glow-cyan)");
-  });
-
-  // Right arm
-  body.append("path").attr("d", "M365 190 Q390 210 400 240 Q410 280 405 320 Q402 350 390 380")
-    .attr("fill", "none").attr("stroke", "#ff8ec8").attr("stroke-width", 5).attr("stroke-linecap", "round");
-  body.append("path").attr("d", "M365 190 Q390 210 400 240 Q410 280 405 320 Q402 350 390 380")
-    .attr("fill", "none").attr("stroke", "#171124").attr("stroke-width", 2).attr("stroke-linecap", "round");
-  [[395,240],[402,300],[396,350]].forEach(([cx,cy], i) => {
-    body.append("circle").attr("cx",cx).attr("cy",cy).attr("r",4).attr("fill", i%2?"#51d4c8":"#ff6eb3").attr("filter","url(#glow-cyan)");
-  });
-
-  // Legs
-  body.append("path").attr("d", "M250 365 Q240 420 242 480 Q244 520 248 560 L252 620 Q254 640 260 640 L275 640 Q280 640 280 620 L280 500")
-    .attr("fill", "url(#body-grad)").attr("stroke", "#ff8ec8").attr("stroke-width", 2);
-  body.append("path").attr("d", "M310 365 Q320 420 318 480 Q316 520 312 560 L308 620 Q306 640 300 640 L285 640 Q280 640 280 620 L280 500")
-    .attr("fill", "url(#body-grad)").attr("stroke", "#ff8ec8").attr("stroke-width", 2);
-
-  [[248,420],[246,500],[250,580],[312,420],[314,500],[310,580]].forEach(([cx,cy], i) => {
-    body.append("circle").attr("cx",cx).attr("cy",cy).attr("r",3).attr("fill", i%2?"#51d4c8":"#ff6eb3").attr("opacity",0.8);
-  });
-
-  // Feet
-  for (const cx of [268, 292]) {
-    body.append("ellipse").attr("cx", cx).attr("cy", 645).attr("rx", 20).attr("ry", 8)
-      .attr("fill", "#171124").attr("stroke", "#ff8ec8").attr("stroke-width", 1.5);
-  }
-
-  // Brain glow
-  body.append("ellipse").attr("cx", 280).attr("cy", 85).attr("rx", 36).attr("ry", 28)
-    .attr("fill", "rgba(198,81,168,0.08)").attr("filter", "url(#glow-pink)");
-
-  // Head lines
-  body.append("path").attr("d", "M240 75 Q280 70 320 75").attr("fill", "none")
-    .attr("stroke", "rgba(255,142,200,0.4)").attr("stroke-width", 1);
-  body.append("path").attr("d", "M235 95 Q280 100 325 95").attr("fill", "none")
-    .attr("stroke", "rgba(255,142,200,0.4)").attr("stroke-width", 1);
-
-  // Label
-  body.append("text").attr("x", 280).attr("y", 708).attr("text-anchor", "middle")
-    .attr("fill", "#d8bcff").attr("font-size", 9).attr("letter-spacing", 3)
-    .attr("font-family", "system-ui, ui-sans-serif, sans-serif").attr("font-weight", "600")
-    .text("AIKO · CODEBASE ATLAS");
+  scene = svg.append("g").attr("id", "viewport");
+  scene.append("g").attr("id", "edges");
+  scene.append("g").attr("id", "nodes");
 }
 
-// ── Neural Edges with animated pulses ──
-function drawEdges() {
-  const edgeGroup = scene.append("g").attr("id", "edges");
-  
-  edges.forEach((l, idx) => {
-    const s = nodes.find(n => n.id === l.source);
-    const t = nodes.find(n => n.id === l.target);
+function graphNodeToDisplay(node) {
+  const system = SYSTEMS[node.system] ? node.system : "support";
+  const moduleName = node.module || node.path || node.id;
+  return {
+    id: node.id,
+    module: moduleName,
+    name: moduleName.split("/").pop(),
+    system,
+    color: node.color || SYSTEMS[system].color,
+    // seed from backend (stable across reloads); force layout will overwrite these
+    x: W * (0.1 + 0.8 * (node.x_seed ?? Math.random())),
+    y: H * (0.1 + 0.8 * (node.y_seed ?? Math.random())),
+    r: Math.max(8, Math.min(20, 7 + Math.log2((node.file_count || 1) + 1) * 3)),
+    desc: `${node.title || "Indexed module"} · ${node.loc || 0} lines · ${node.function_count || 0} functions`,
+    files: [moduleName],
+    complexity: node.complexity || 1,
+    dependency_count: node.dependency_count || 0,
+  };
+}
+
+function startSimulation() {
+  if (simulation) simulation.stop();
+  simulation = d3.forceSimulation(nodes)
+    .force("link", d3.forceLink(edges).id(d => d.id).distance(d => 60 + (1 - (d.weight || 0.2)) * 60).strength(d => 0.15 + (d.weight || 0.2) * 0.4))
+    .force("charge", d3.forceManyBody().strength(-260).distanceMax(420))
+    .force("center", d3.forceCenter(W / 2, H / 2))
+    .force("collide", d3.forceCollide().radius(d => d.r + 4))
+    .force("x", d3.forceX(W / 2).strength(0.04))
+    .force("y", d3.forceY(H / 2).strength(0.04))
+    .alpha(1)
+    .alphaDecay(0.025)
+    .on("tick", tick);
+}
+
+function tick() {
+  // Clamp nodes inside the canvas so nothing escapes the viewport
+  nodes.forEach(n => {
+    n.x = Math.max(n.r + 4, Math.min(W - n.r - 4, n.x));
+    n.y = Math.max(n.r + 4, Math.min(H - n.r - 4, n.y));
+  });
+
+  scene.select("#edges").selectAll("line.edge").each(function(d) {
+    const s = nodes.find(n => n.id === d.source.id || n.id === d.source);
+    const t = nodes.find(n => n.id === d.target.id || n.id === d.target);
     if (!s || !t) return;
-    
-    const color = SYSTEMS[s.system]?.color || "#4a3a6a";
-    
-    // Base edge
+    d3.select(this).attr("x1", s.x).attr("y1", s.y).attr("x2", t.x).attr("y2", t.y);
+  });
+  scene.select("#edges").selectAll("line.edge-spark").each(function(d) {
+    const s = nodes.find(n => n.id === d.source.id || n.id === d.source);
+    const t = nodes.find(n => n.id === d.target.id || n.id === d.target);
+    if (!s || !t) return;
+    d3.select(this).attr("x1", s.x).attr("y1", s.y).attr("x2", t.x).attr("y2", t.y);
+  });
+  scene.select("#nodes").selectAll(".node").attr("transform", d => `translate(${d.x},${d.y})`);
+}
+
+// ── Edges with curved sparks ──
+function drawEdges() {
+  const edgeGroup = scene.select("#edges");
+  edgeGroup.selectAll("*").remove();
+
+  edges.forEach(l => {
+    const color = SYSTEMS[nodes.find(n => n.id === (l.source.id || l.source))?.system]?.color || "#4a3a6a";
+
     edgeGroup.append("line")
       .attr("class", "edge")
       .datum(l)
-      .attr("data-source", l.source)
-      .attr("data-target", l.target)
-      .attr("x1", s.x).attr("y1", s.y)
-      .attr("x2", t.x).attr("y2", t.y)
+      .attr("data-source", l.source.id || l.source)
+      .attr("data-target", l.target.id || l.target)
       .attr("stroke", color)
-      .attr("stroke-width", 1.2)
-      .attr("stroke-opacity", 0.3)
-      .attr("stroke-dasharray", "3,3");
+      .attr("stroke-width", l.kind === "dependency" ? 1.1 : 0.6)
+      .attr("stroke-opacity", l.kind === "dependency" ? 0.35 : 0.18)
+      .attr("stroke-dasharray", l.kind === "dependency" ? null : "2,4");
 
-    // Animated spark traveling along edge
-    const spark = edgeGroup.append("line")
+    edgeGroup.append("line")
       .attr("class", "edge-spark")
       .datum(l)
-      .attr("x1", s.x).attr("y1", s.y)
-      .attr("x2", t.x).attr("y2", t.y)
       .attr("stroke", color)
-      .attr("stroke-dasharray", "6 40")
-      .style("animation", `data-spark ${2 + Math.random() * 2}s linear infinite`)
-      .style("animation-delay", `${Math.random() * 3}s`);
+      .attr("stroke-width", 1.4)
+      .attr("stroke-dasharray", "6 60")
+      .attr("stroke-opacity", 0.9)
+      .style("animation", `data-spark ${2 + Math.random() * 3}s linear infinite`)
+      .style("animation-delay", `${Math.random() * 4}s`);
   });
 }
 
 // ── Nodes with neural glow ──
 function drawNodes() {
-  const nodeGroup = scene.append("g").attr("id", "nodes");
+  const nodeGroup = scene.select("#nodes");
+  nodeGroup.selectAll("*").remove();
 
   const nodeEnter = nodeGroup.selectAll(".node")
-    .data(nodes)
+    .data(nodes, d => d.id)
     .enter()
     .append("g")
     .attr("class", "node")
     .attr("data-id", d => d.id)
     .attr("data-system", d => d.system)
-    .attr("transform", d => `translate(${d.x},${d.y})`)
     .style("cursor", "pointer")
     .on("click", (event, d) => selectNode(d))
     .on("mouseenter", (event, d) => {
-      d3.select(event.currentTarget).select("circle.main").attr("stroke-width", 3).attr("r", d.r + 2);
+      d3.select(event.currentTarget).select("circle.main").attr("stroke-width", 2.5).attr("r", d.r + 2.5);
+      d3.select(event.currentTarget).select(".node-glow").attr("opacity", 0.35);
       highlightEdges(d.id, true);
     })
     .on("mouseleave", (event, d) => {
       const isSel = selectedId === d.id;
-      d3.select(event.currentTarget).select("circle.main").attr("stroke-width", isSel ? 3 : 1.5).attr("r", d.r);
+      d3.select(event.currentTarget).select("circle.main").attr("stroke-width", isSel ? 2.5 : 1.6).attr("r", d.r);
+      d3.select(event.currentTarget).select(".node-glow").attr("opacity", 0.15);
       highlightEdges(d.id, false);
     });
 
-  // Neural glow ring (breathing)
   nodeEnter.append("circle")
     .attr("class", "node-glow")
-    .attr("r", d => d.r + 6)
-    .attr("fill", d => SYSTEMS[d.system].color)
-    .attr("opacity", 0.12)
-    .style("animation", (d, i) => `node-breathe ${2.5 + Math.random()}s ease-in-out infinite`)
-    .style("animation-delay", `${Math.random() * 2}s`);
+    .attr("r", d => d.r + 8)
+    .attr("fill", d => SYSTEMS[d.system]?.color || d.color)
+    .attr("opacity", 0.15)
+    .attr("filter", "url(#glow-strong)")
+    .style("animation", (d, i) => `node-breathe ${2.5 + (i % 7) * 0.4}s ease-in-out infinite`)
+    .style("animation-delay", `${(i => i * 0.13)(nodes.indexOf(d))}s`);
 
-  // Main circle
   nodeEnter.append("circle")
     .attr("class", "main")
     .attr("r", d => d.r)
     .attr("fill", "#0f0a18")
-    .attr("stroke", d => SYSTEMS[d.system].color)
-    .attr("stroke-width", 1.5);
+    .attr("stroke", d => SYSTEMS[d.system]?.color || d.color)
+    .attr("stroke-width", 1.6);
 
-  // Inner dot
   nodeEnter.append("circle")
-    .attr("r", d => Math.max(2, d.r * 0.25))
-    .attr("fill", d => SYSTEMS[d.system].color);
+    .attr("class", "core")
+    .attr("r", d => Math.max(1.5, d.r * 0.28))
+    .attr("fill", d => SYSTEMS[d.system]?.color || d.color)
+    .attr("filter", "url(#glow-soft)");
 
-  // Labels
   nodeEnter.append("text")
     .attr("class", "node-label")
     .attr("y", d => d.r + 11)
     .attr("text-anchor", "middle")
-    .attr("fill", "#d8bcff")
-    .attr("font-size", 8)
+    .attr("fill", "#e8d8ff")
+    .attr("font-size", 8.5)
     .attr("font-family", "system-ui, ui-sans-serif, sans-serif")
     .attr("font-weight", "600")
-    .attr("letter-spacing", 0.5)
+    .attr("letter-spacing", 0.4)
     .style("pointer-events", "none")
+    .style("text-shadow", "0 0 4px rgba(15,10,24,0.9)")
     .style("opacity", showLabels.checked ? 1 : 0)
     .text(d => d.name.toUpperCase());
+
+  // Bind to current simulation positions
+  nodeEnter.attr("transform", d => `translate(${d.x},${d.y})`);
 }
 
 function highlightEdges(nodeId, on) {
-  d3.selectAll(".edge").filter(function() {
+  scene.selectAll(".edge").filter(function() {
     const s = this.getAttribute("data-source");
     const t = this.getAttribute("data-target");
     return s === nodeId || t === nodeId;
   })
-  .attr("stroke-opacity", on ? 0.85 : 0.3)
-  .attr("stroke-width", on ? 2 : 1.2);
+  .attr("stroke-opacity", function() { return on ? 0.9 : (this.getAttribute("stroke-dasharray") ? 0.18 : 0.35); })
+  .attr("stroke-width", on ? 2.2 : (this.getAttribute("stroke-dasharray") ? 0.6 : 1.1));
 }
 
-// ── Selection ──
 function selectNode(d) {
   selectedId = d.id;
-  d3.selectAll(".node circle.main").attr("stroke-width", 1.5).attr("r", n => n.r);
-  const sel = d3.selectAll(".node").filter(n => n.id === d.id);
-  sel.select("circle.main").attr("stroke-width", 3).attr("r", d.r + 2);
+  scene.selectAll(".node .main").attr("stroke-width", 1.6).attr("r", n => n.r);
+  const sel = scene.selectAll(".node").filter(n => n.id === d.id);
+  sel.select(".main").attr("stroke-width", 2.5).attr("r", d.r + 2.5);
   sel.select(".node-glow").classed("firing", true);
-  setTimeout(() => sel.select(".node-glow").classed("firing", false), 600);
+  setTimeout(() => sel.select(".node-glow").classed("firing", false), 700);
 
-  const sys = SYSTEMS[d.system];
+  const sys = SYSTEMS[d.system] || { label: d.system, color: d.color };
   detailsEl.innerHTML = `
     <p class="details-kicker" style="color:${sys.color}">${esc(sys.label)} · ${esc(d.system)}</p>
     <h2>${esc(d.name)}</h2>
     <p>${esc(d.desc)}</p>
     <p style="color:var(--dim);font-size:10px;letter-spacing:0.1em;text-transform:uppercase;margin-top:12px;">Source files</p>
     <div style="margin-top:4px;">${d.files.map(f => `<span class="badge">${esc(f)}</span>`).join("")}</div>
-    <p style="margin-top:14px;"><span class="source-link" style="cursor:pointer" onclick="alert('Open ${esc(d.id)} module')">Open module →</span></p>
+    <p style="color:var(--dim);font-size:10px;letter-spacing:0.1em;text-transform:uppercase;margin-top:12px;">Network</p>
+    <p style="margin-top:2px;font-size:11px;">${d.dependency_count || 0} outgoing · ${d.files.length} files</p>
   `;
 }
 
 function clearSelection() {
   selectedId = null;
-  d3.selectAll(".node circle.main").attr("stroke-width", 1.5).attr("r", d => d.r);
-  detailsEl.innerHTML = `<p class="details-kicker">Module briefing</p><h2>Select a module</h2><p>Each marker represents a grouped part of the codebase. Select one to see its responsibilities, functions, and files in plain language.</p>`;
+  scene.selectAll(".node .main").attr("stroke-width", 1.6).attr("r", n => n.r);
+  detailsEl.innerHTML = `<p class="details-kicker">Module briefing</p><h2>Select a module</h2><p>Each node is a grouped part of the codebase. Drag, scroll, or click to inspect.</p>`;
 }
 
-// ── Filters ──
 function buildFilters() {
   systemFilters.innerHTML = "";
   Object.entries(SYSTEMS).forEach(([key, sys]) => {
@@ -375,21 +317,20 @@ function toggleSystem(sys, btn) {
 }
 
 function updateVisibility() {
-  d3.selectAll(".node").each(function(d) {
+  scene.selectAll(".node").each(function(d) {
     const visible = activeSystems.has(d.system);
     d3.select(this).style("opacity", visible ? 1 : 0.08).style("pointer-events", visible ? "all" : "none");
   });
-  d3.selectAll(".edge, .edge-spark").each(function(d) {
-    const s = nodes.find(n => n.id === d.source);
-    const t = nodes.find(n => n.id === d.target);
+  scene.selectAll(".edge, .edge-spark").each(function(d) {
+    const s = nodes.find(n => n.id === (d.source.id || d.source));
+    const t = nodes.find(n => n.id === (d.target.id || d.target));
     const visible = s && t && activeSystems.has(s.system) && activeSystems.has(t.system);
-    d3.select(this).style("opacity", visible ? 1 : 0.03);
+    d3.select(this).style("opacity", visible ? 1 : 0.02);
   });
   const visibleCount = nodes.filter(n => activeSystems.has(n.system)).length;
   statsEl.textContent = `${visibleCount} modules visible · ${edges.length} connections`;
 }
 
-// ── Search ──
 async function doSearch() {
   const q = searchInput.value.trim().toLowerCase();
   if (!q) { searchHits.innerHTML = ""; searchStats.textContent = "Enter a question to search."; return; }
@@ -401,30 +342,23 @@ async function doSearch() {
     hits = (payload.hits || []).map(hit => ({
       id: hit.path,
       name: hit.path,
-      system: hit.path.startsWith("cognition/") ? "brain" : "core",
+      system: hit.path.startsWith("cognition/") ? "brain" : (hit.path.startsWith("sensory/") ? "senses" : (hit.path.startsWith("system/") ? "core" : (hit.path.startsWith("agentic/") ? "tools" : "support"))),
       desc: hit.text || "Indexed source excerpt",
       files: [hit.path],
     }));
   } catch (_error) {
-    // Keep the atlas usable before the index has been created.
     hits = nodes.filter(n => n.name.toLowerCase().includes(q) || n.desc.toLowerCase().includes(q) || n.id.toLowerCase().includes(q) || n.files.some(f => f.toLowerCase().includes(q)));
   }
   searchStats.textContent = `${hits.length} hit${hits.length !== 1 ? "s" : ""}`;
-  searchHits.innerHTML = hits.map(h => `<div class="search-hit" data-id="${esc(h.id)}"><strong style="color:${SYSTEMS[h.system].color}">${esc(h.name)}</strong><span> · ${esc(h.desc.slice(0, 70))}…</span></div>`).join("");
+  searchHits.innerHTML = hits.map(h => `<div class="search-hit" data-id="${esc(h.id)}"><strong style="color:${SYSTEMS[h.system]?.color || '#888'}">${esc(h.name)}</strong><span> · ${esc(h.desc.slice(0, 70))}…</span></div>`).join("");
   searchHits.querySelectorAll(".search-hit").forEach(el => {
     el.addEventListener("click", () => {
       const node = nodes.find(n => n.id === el.dataset.id || n.files.includes(el.dataset.id));
-      if (node) {
-        selectNode(node);
-        const scale = 1.8;
-        const t = d3.zoomIdentity.translate(W/2 - node.x*scale, H/2 - node.y*scale).scale(scale);
-        svg.transition().duration(600).call(zoom.transform, t);
-      }
+      if (node) selectNode(node);
     });
   });
 }
 
-// ── Export ──
 function exportMarkdown() {
   let md = "# Aiko Codebase Atlas\n\n";
   Object.entries(SYSTEMS).forEach(([key, sys]) => {
@@ -442,16 +376,14 @@ function exportMarkdown() {
   setTimeout(() => setStatus("Neural atlas active"), 2000);
 }
 
-// ── Zoom ──
-const zoom = d3.zoom().scaleExtent([0.5, 4]).on("zoom", event => {
-  svg.select("#viewport").attr("transform", event.transform);
+const zoom = d3.zoom().scaleExtent([0.4, 5]).on("zoom", event => {
+  scene.attr("transform", event.transform);
 });
 document.getElementById("zoom-in").onclick = () => svg.transition().call(zoom.scaleBy, 1.3);
 document.getElementById("zoom-out").onclick = () => svg.transition().call(zoom.scaleBy, 0.75);
 document.getElementById("zoom-reset").onclick = () => svg.transition().call(zoom.transform, d3.zoomIdentity);
 document.getElementById("print-atlas").onclick = () => window.print();
 
-// Events
 document.getElementById("export-md").onclick = exportMarkdown;
 document.getElementById("refresh").onclick = () => init();
 document.getElementById("ingest").onclick = async () => {
@@ -468,40 +400,16 @@ document.getElementById("ingest").onclick = async () => {
 searchBtn.onclick = doSearch;
 searchInput.addEventListener("keydown", e => { if (e.key === "Enter") doSearch(); });
 showLabels.addEventListener("change", () => {
-  d3.selectAll(".node-label").style("opacity", showLabels.checked ? 1 : 0);
+  scene.selectAll(".node-label").style("opacity", showLabels.checked ? 1 : 0);
 });
 limitInput.addEventListener("change", init);
 
-svg.on("click", (e) => { if (e.target.tagName === "svg") clearSelection(); });
-
-// ── Init ──
-function systemForBodyPart(bodyPart) {
-  if (bodyPart === "brain") return "brain";
-  if (["senses", "voice"].includes(bodyPart)) return "senses";
-  if (bodyPart === "tools") return "tools";
-  return "core";
-}
-
-function graphNodeToDisplay(node) {
-  const system = systemForBodyPart(node.body_part);
-  const moduleName = node.module || node.path || node.id;
-  return {
-    id: node.id,
-    module: moduleName,
-    name: moduleName.split("/").pop(),
-    system,
-    x: Math.round(node.x * W),
-    y: Math.round(node.y * H),
-    r: Math.max(9, Math.min(16, 8 + Math.log2((node.file_count || 1) + 1) * 3)),
-    desc: `${node.title || "Indexed module"} · ${node.loc || 0} lines · ${node.function_count || 0} functions`,
-    files: [moduleName],
-  };
-}
+svg.on("click", (e) => { if (e.target.tagName === "svg" || e.target.classList.contains("bg")) clearSelection(); });
 
 async function init() {
   const requestGeneration = ++graphRequestGeneration;
   svg.selectAll("*").remove();
-  drawFigure();
+  drawBackdrop();
 
   const limit = parseInt(limitInput.value) || 400;
   try {
@@ -513,14 +421,24 @@ async function init() {
     if (!graph.meta?.exists || !graph.nodes?.length) throw new Error("No codebase index");
     nodes = graph.nodes.map(graphNodeToDisplay);
     const ids = new Set(nodes.map(node => node.id));
-    edges = (graph.edges || []).filter(edge => ids.has(edge.source) && ids.has(edge.target));
+    edges = (graph.edges || []).filter(edge => {
+      const s = edge.source.id || edge.source;
+      const t = edge.target.id || edge.target;
+      return ids.has(s) && ids.has(t);
+    }).map(e => ({ source: e.source.id || e.source, target: e.target.id || e.target, kind: e.kind, weight: e.weight || 0.2 }));
     setStatus(`Atlas ready · ${nodes.length} indexed modules`);
   } catch (_error) {
     if (requestGeneration !== graphRequestGeneration) return;
-    nodes = MODULES.slice(0, limit);
-    edges = LINKS.map(l => ({ source: l.s, target: l.t })).filter(l =>
-      nodes.some(n => n.id === l.source) && nodes.some(n => n.id === l.target)
-    );
+    nodes = MODULES.slice(0, limit).map((m, i) => ({
+      ...m,
+      x: W * (0.1 + 0.8 * ((m.id.charCodeAt(0) % 17) / 17)),
+      y: H * (0.1 + 0.8 * ((m.id.charCodeAt(m.id.length - 1) % 19) / 19)),
+      r: 11,
+      color: SYSTEMS[m.system].color,
+      dependency_count: 0,
+    }));
+    edges = LINKS.map(l => ({ source: l.s, target: l.t, kind: "demo", weight: 0.5 }))
+      .filter(l => nodes.some(n => n.id === l.source) && nodes.some(n => n.id === l.target));
     setStatus("Demo atlas · index unavailable");
   }
 
@@ -530,6 +448,7 @@ async function init() {
   buildFilters();
   updateVisibility();
   svg.call(zoom);
+  startSimulation();
 }
 
 init();

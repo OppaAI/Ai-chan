@@ -1,8 +1,11 @@
-"""Export an explorable, body-shaped map of the indexed codebase."""
+"""Export an explorable neural-net map of the indexed codebase.
+
+The front-end runs a D3 force simulation — the backend only classifies every
+top-level package into a coherent system bucket and exposes dependency edges.
+"""
 from __future__ import annotations
 
 import hashlib
-import math
 import re
 import sqlite3
 import subprocess
@@ -15,22 +18,28 @@ from system.userspace import current_user_id, user_state_path
 
 
 _BODY_MAP = [
-    (r"^cognition/(memory|knowledge|subliminal|attention|think|reason|consolidate)", "head", "brain", "#c651a8"),
-    (r"^cognition/", "head", "brain", "#d8bcff"),
-    (r"^sensory/(vision|video)|^interface/webui|^training/persona", "head_eyes", "senses", "#51d4c8"),
-    (r"^sensory/(listen|audio)|^sensory/speak.*listen|sherpa", "head_ears", "senses", "#e8c84a"),
-    (r"^sensory/speak|^interface/adapter|^agentic/toolkit/social", "head_mouth", "voice", "#e88c6a"),
-    (r"^system/(userspace|config|secure|bioclock|log|orchestrate|schedule|wakeup|prepare|turngate)|^main\.py", "chest", "core", "#a888e8"),
-    (r"^agentic/workflows|^agentic/graph_engine", "chest", "core", "#a888e8"),
-    (r"^agentic/toolkit|^agentic/registry", "arms", "tools", "#7298e8"),
-    (r"^agentic/mcp|^interface/mcp|^backend", "spine", "spine", "#8c7ab8"),
-    (r".*", "tail", "support", "#887b9a"),
+    (r"^cognition/(memory|knowledge|subliminal|attention|think|reason|consolidate)", "brain", "#c651a8"),
+    (r"^cognition/", "brain", "#d8bcff"),
+    (r"^sensory/", "senses", "#51d4c8"),
+    (r"^system/", "core", "#a888e8"),
+    (r"^agentic/(workflows|graph_engine)", "core", "#a888e8"),
+    (r"^agentic/(toolkit|registry|mcp|bridge)", "tools", "#7298e8"),
+    (r"^interface/", "interface", "#8ab4ff"),
+    (r"^training/", "training", "#e88c6a"),
+    (r"^tests/", "tests", "#9aa0b4"),
+    (r"^main\.py$", "core", "#a888e8"),
+    (r".*", "support", "#887b9a"),
 ]
 
-_BODY_ANCHORS = {
-    "head": (0.50, 0.16), "head_eyes": (0.50, 0.12), "head_ears": (0.50, 0.15),
-    "head_mouth": (0.50, 0.20), "chest": (0.50, 0.38), "arms": (0.50, 0.42),
-    "spine": (0.50, 0.51), "tail": (0.50, 0.89),
+_SYSTEM_LABELS = {
+    "brain":     "Brain",
+    "senses":    "Senses",
+    "core":      "Core",
+    "tools":     "Arms",
+    "interface": "Interface",
+    "training":  "Training",
+    "tests":     "Tests",
+    "support":   "Support",
 }
 
 _REPO_ROOT = Path(__file__).resolve().parents[5]
@@ -134,11 +143,11 @@ def _coverage_for_paths(paths: list[str]) -> float | None:
     return round(sum(values) / len(values), 1) if values else None
 
 
-def _body_for_path(path: str) -> tuple[str, str, str]:
-    for pattern, anchor, label, color in _BODY_MAP:
+def _body_for_path(path: str) -> tuple[str, str]:
+    for pattern, label, color in _BODY_MAP:
         if re.search(pattern, path):
-            return anchor, label, color
-    return "tail", "support", "#887b9a"
+            return label, color
+    return "support", "#887b9a"
 
 
 def _module_for_path(path: str) -> str:
@@ -191,25 +200,19 @@ def export_codebase_graph(user_id: str | None = None, limit: int = 400) -> dict:
                 inbound[target].add(source)
         change_counts = _git_change_counts([path for paths in module_paths.values() for path in paths])
         for module, members in modules.items():
-            anchor, label, color = _body_for_path(module)
-            body_counts[label] += 1
-            index = len(groups[anchor])
-            groups[anchor].append(module)
-            # Wider fan spacing so nodes don't crowd (cuter, high-tech robot layout).
-            angle = (index * 3.5) - 2.2
-            radius = 0.035 + min(index, 10) * 0.018
-            ax, ay = _BODY_ANCHORS[anchor]
-            if anchor == "arms":
-                # Alternate tool modules between left and right arm callouts.
-                ax, ay, radius = (.27 if index % 2 == 0 else .73), .42 + (index // 2) * .035, .025
+            system, color = _body_for_path(module)
+            body_counts[system] += 1
+            groups[system].append(module)
             metrics = _module_metrics(module_paths[module])
             changed = sum(change_counts.get(path, 0) for path in module_paths[module])
             test_files = [path for path in module_paths[module] if "/test" in path or path.startswith("tests/")]
             nodes.append({
                 "id": _node_id(module), "module": module, "path": module, "title": f"{len(members)} indexed file{'s' if len(members) != 1 else ''}",
-                "file_count": len(members), "body_part": label, "anchor": anchor, "color": color,
-                "x": max(.05, min(.95, ax + radius * math.cos(angle))),
-                "y": max(.05, min(.95, ay + radius * math.sin(angle))),
+                "file_count": len(members), "system": system, "color": color,
+                # Position is computed by the front-end force layout — backend only supplies
+                # an optional seed (deterministic hash) so the layout is stable across reloads.
+                "x_seed": (hashlib.sha1(module.encode()).digest()[0] / 255),
+                "y_seed": (hashlib.sha1(module.encode()).digest()[1] / 255),
                 "loc": metrics["loc"], "function_count": metrics["function_count"], "complexity": metrics["complexity"],
                 "change_count": changed, "test_file_count": len(test_files), "coverage": _coverage_for_paths(module_paths[module]),
                 "dependency_count": len(module_imports[module]), "dependent_count": len(inbound[module]),
@@ -218,11 +221,14 @@ def export_codebase_graph(user_id: str | None = None, limit: int = 400) -> dict:
         for source, targets in module_imports.items():
             for target in targets:
                 edges.append({"source": _node_id(source), "target": _node_id(target), "kind": "dependency", "weight": 1})
-        # Keep a small amount of visual structure for subsystems without pretending it is a code dependency.
-        for anchor, module_names in groups.items():
-            for module in module_names[1:3]:
-                edges.append({"source": _node_id(module_names[0]), "target": _node_id(module), "kind": "shared_body_system", "weight": 0.25})
-        return {"nodes": nodes, "edges": edges, "meta": {"user_id": uid, "path": str(path), "exists": True, "count": len(nodes), "body_counts": dict(body_counts), "limit": limit}, "anchors": {key: {"x": x, "y": y} for key, (x, y) in _BODY_ANCHORS.items()}}
+        # Light intra-system "neighborhood" edges so dense clusters look like a mesh
+        # rather than isolated dots — kept at low weight so dependency edges dominate.
+        for system, module_names in groups.items():
+            members = list(module_names)
+            for i, src in enumerate(members):
+                for dst in members[i + 1: i + 3]:
+                    edges.append({"source": _node_id(src), "target": _node_id(dst), "kind": "neighbor", "weight": 0.15})
+        return {"nodes": nodes, "edges": edges, "meta": {"user_id": uid, "path": str(path), "exists": True, "count": len(nodes), "system_counts": dict(body_counts), "limit": limit}, "systems": {key: {"label": _SYSTEM_LABELS[key]} for key in _SYSTEM_LABELS}}
     finally:
         conn.close()
 
@@ -231,9 +237,9 @@ def markdown_atlas(user_id: str | None = None, limit: int = 400) -> str:
     """Create a portable architecture handout from the same graph data shown in the UI."""
     graph = export_codebase_graph(user_id=user_id, limit=limit)
     lines = ["# Aiko Codebase Atlas", "", "Generated from the indexed Codebase Studio graph.", ""]
-    for body_part in sorted({node["body_part"] for node in graph["nodes"]}):
-        lines.extend([f"## {body_part.title()} system", ""])
-        for node in sorted((node for node in graph["nodes"] if node["body_part"] == body_part), key=lambda node: node["module"]):
+    for system in sorted({node["system"] for node in graph["nodes"]}):
+        lines.extend([f"## {system.title()} system", ""])
+        for node in sorted((node for node in graph["nodes"] if node["system"] == system), key=lambda node: node["module"]):
             lines.append(f"### `{node['module']}`")
             lines.append(f"{node['file_count']} files · {node['loc']} lines · {node['function_count']} functions · complexity estimate {node['complexity']} · {node['change_count']} git changes")
             lines.append("")
@@ -256,7 +262,7 @@ def module_details(module: str, user_id: str | None = None) -> dict:
         text = "\n".join(row["text"] for row in chunks)
         metrics = _module_metrics(paths)
         functions = metrics["functions"] or _symbols(text)
-        anchor, body_part, _ = _body_for_path(module)
+        body_part, _ = _body_for_path(module)
         function_phrase = ", ".join(functions[:8]) if functions else "No named functions were found in the indexed excerpts"
         all_paths = [row["path"] for row in conn.execute("SELECT path FROM codebase_docs WHERE user_id=?", (uid,)).fetchall()]
         indexed_modules = {_module_for_path(path) for path in all_paths}
@@ -267,7 +273,7 @@ def module_details(module: str, user_id: str | None = None) -> dict:
         repo_url = _repository_url()
         summary = f"{module} is a {body_part} module in Aiko's codebase. It contains {len(paths)} indexed file{'s' if len(paths) != 1 else ''} and appears to provide {function_phrase}."
         return {
-            "module": module, "body_part": body_part, "anchor": anchor, "summary": summary,
+            "module": module, "system": body_part, "summary": summary,
             "functions": functions[:12], "files": paths, "excerpt": re.sub(r"\s+", " ", text)[:360],
             "docstrings": _docstrings(paths), "metrics": {key: metrics[key] for key in ("loc", "function_count", "complexity")},
             "dependencies": dependencies, "dependents": dependents, "change_count": changes,
