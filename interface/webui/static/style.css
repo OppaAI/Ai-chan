@@ -850,6 +850,13 @@ body {
   justify-content: center;
 }
 
+#camera-btn {
+  width: 36px;
+  padding: 8px 0;
+  letter-spacing: 0;
+  font-size: 14px;
+}
+
 #mic-btn.on {
   background: linear-gradient(135deg, #B5EAD7, #7dd3c0);
   color: #1a5e5a;

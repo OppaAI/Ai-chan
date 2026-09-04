@@ -9,6 +9,13 @@ LLM_MODEL: "ministral"  # Main chat model id/alias; must match the server model 
 REFLECT_MODEL: "ministral"  # Model used for reflection/consolidation; often same as LLM_MODEL.
 LLM_TIMEOUT: "120"  # Seconds before chat/reflection LLM HTTP calls time out.
 
+# -- WebUI camera vision --
+# The camera button sends one in-memory JPEG to this OpenAI-compatible vision
+# endpoint. Leave the URL blank to use VISION_BASE_URL, then LLM_BASE_URL.
+WEBUI_VISION_MODEL: "minicpm-v"
+WEBUI_VISION_BASE_URL: ""
+WEBUI_VISION_TIMEOUT: "60"
+
 # -- Token budgets --
 LLM_MAX_TOKENS: "280"  # Base max tokens for normal chat replies.
 BASE_PREDICT: "280"  # Legacy alias for LLM_MAX_TOKENS; keep equal unless old scripts need another value.

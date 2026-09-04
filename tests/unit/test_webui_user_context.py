@@ -6,7 +6,7 @@ import threading
 
 import pytest
 
-from interface.webui.webui import AikoWeb
+from interface.webui.webui import AikoWeb, _validate_image_data_uri
 from interface.webui.studio.session_binding import _relative_path
 from system.prepare import run_post_auth
 from system.userspace import current_display_name, current_user_id, reset_current_display_name, reset_current_user_id
@@ -81,6 +81,21 @@ def test_get_input_uses_queued_identity_not_shared_state(monkeypatch):
     assert web.get_input() == "hello"
     assert current_user_id() == "bob"
     assert current_display_name() == "Bobby"
+
+
+def test_camera_image_validation_accepts_small_jpeg_data_uri():
+    image = "data:image/jpeg;base64,/9j/2Q=="
+
+    assert _validate_image_data_uri(image) == image
+
+
+@pytest.mark.parametrize("image", [
+    "https://example.test/image.jpg",
+    "data:image/gif;base64,R0lGODlh",
+    "data:image/jpeg;base64,not valid base64!",
+])
+def test_camera_image_validation_rejects_unsafe_or_invalid_payloads(image):
+    assert _validate_image_data_uri(image) is None
 
 
 def test_studio_api_path_is_relative_to_its_mount():

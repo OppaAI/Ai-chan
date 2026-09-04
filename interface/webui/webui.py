@@ -25,6 +25,7 @@ Notes:
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 import logging
 import os
@@ -53,6 +54,33 @@ WEBUI_HTTPS = os.getenv("WEBUI_HTTPS", "0").lower() in {"1", "true", "yes", "on"
 SSL_CERT = os.getenv("SSL_CERT", "")
 SSL_KEY = os.getenv("SSL_KEY", "")
 WEBUI_BROWSER_VAD_GATE = os.getenv("WEBUI_BROWSER_VAD_GATE", "1").lower() in {"1", "true", "yes", "on"}
+WEBUI_VISION_MAX_IMAGE_BYTES = 8 * 1024 * 1024
+
+
+def _validate_image_data_uri(value: object) -> str | None:
+    """Return a safe, bounded image data URI, or ``None`` for invalid input.
+
+    Camera frames stay in memory and are sent only to the configured vision
+    endpoint.  Keeping this validation at the WebSocket boundary prevents a
+    client from using the inference request as an oversized data transport.
+    """
+    if not isinstance(value, str) or not value.startswith("data:image/"):
+        return None
+    try:
+        header, encoded = value.split(",", 1)
+        mime = header[5:].split(";", 1)[0].lower()
+        if mime not in {"image/jpeg", "image/png", "image/webp"} or ";base64" not in header:
+            return None
+        # Reject before decoding so a malicious client cannot force a large
+        # temporary allocation merely to fail the post-decode size check.
+        if len(encoded) > (WEBUI_VISION_MAX_IMAGE_BYTES * 4 // 3) + 4:
+            return None
+        raw = base64.b64decode(encoded, validate=True)
+    except (ValueError, UnicodeEncodeError):
+        return None
+    if not raw or len(raw) > WEBUI_VISION_MAX_IMAGE_BYTES:
+        return None
+    return value
 
 
 def _barge_in_enabled() -> bool:
@@ -426,6 +454,17 @@ class AikoWeb:
                                 )
                             self._input_q.put((text, uid, display_name))
 
+                    elif mtype == "image_input":
+                        image = _validate_image_data_uri(msg.get("image"))
+                        if image is None:
+                            await self._safe_send(ws, json.dumps({
+                                "type": "vision", "status": "error",
+                                "message": "That camera image was invalid or too large.",
+                            }))
+                            continue
+                        prompt = str(msg.get("text") or "").strip()
+                        asyncio.create_task(self._handle_image_input(image, prompt, uid))
+
                     elif mtype == "vad":
                         event = msg.get("event")
                         if event == "start":
@@ -483,6 +522,43 @@ class AikoWeb:
             *(self._safe_send(ws, raw) for ws in targets),
             return_exceptions=True,
         )
+
+    @staticmethod
+    def _infer_image(image: str, question: str) -> str:
+        """Ask the configured OpenAI-compatible vision model about a camera frame."""
+        from openai import OpenAI
+
+        model = os.getenv("WEBUI_VISION_MODEL", os.getenv("VISION_MODEL", "minicpm-v"))
+        base_url = os.getenv("WEBUI_VISION_BASE_URL", os.getenv("VISION_BASE_URL", "")) or os.getenv(
+            "LLM_BASE_URL", "http://localhost:8080/v1"
+        )
+        timeout = float(os.getenv("WEBUI_VISION_TIMEOUT", "60"))
+        instruction = question or "Describe what you see in this camera image clearly and helpfully."
+        response = OpenAI(base_url=base_url, api_key=os.getenv("OPENAI_API_KEY", "not-needed")).chat.completions.create(
+            model=model,
+            messages=[{"role": "user", "content": [
+                {"type": "text", "text": instruction[:1000]},
+                {"type": "image_url", "image_url": {"url": image}},
+            ]}],
+            max_tokens=300,
+            timeout=timeout,
+        )
+        return (response.choices[0].message.content or "I couldn't interpret that image.").strip()
+
+    async def _handle_image_input(self, image: str, question: str, uid: str) -> None:
+        """Run vision off the socket loop and return its result to the requesting user."""
+        self._broadcast({"type": "vision", "status": "working"}, user_id=uid)
+        try:
+            answer = await asyncio.to_thread(self._infer_image, image, question)
+        except Exception:
+            log.exception("webui: vision inference failed")
+            self._broadcast({
+                "type": "vision", "status": "error",
+                "message": "I couldn't analyze that image. Check that the vision model is running.",
+            }, user_id=uid)
+            return
+        self._broadcast({"type": "vision", "status": "done"}, user_id=uid)
+        self._broadcast({"type": "chat", "sender": "aiko", "text": answer}, user_id=uid)
 
     def broadcast_audio_bytes(self, wav_bytes: bytes) -> None:
         """Broadcast TTS audio bytes to the current user's connected browsers.
