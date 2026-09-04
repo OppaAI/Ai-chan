@@ -562,7 +562,7 @@ class AikoWeb:
         base_url = _vision_base_url()
         timeout = float(os.getenv("WEBUI_VISION_TIMEOUT", "60"))
         instruction = question or "Describe what you see in this camera image clearly and helpfully."
-        response = OpenAI(base_url=base_url, api_key=os.getenv("OPENAI_API_KEY", "not-needed")).chat.completions.create(
+        response = OpenAI(base_url=base_url, api_key=os.getenv("VISION_API_KEY", "") or os.getenv("LLM_API_KEY", "") or "not-needed").chat.completions.create(
             model=model,
             messages=[{"role": "user", "content": [
                 {"type": "text", "text": instruction[:1000]},

@@ -109,7 +109,7 @@ def _get_llm() -> OpenAI:
     global _LLM_CLIENT
     if _LLM_CLIENT is None:
         _LLM_CLIENT = OpenAI(
-            base_url=env("LLM_BASE_URL", "http://localhost:8080/v1"), api_key="not-needed"
+            base_url=env("LLM_BASE_URL", "http://localhost:8080/v1"), api_key=env("LLM_API_KEY", "") or "not-needed"
         )
     return _LLM_CLIENT
 

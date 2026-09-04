@@ -244,7 +244,7 @@ class _MemoryBackend:
         self._user_id  = user_id or current_user_id()   # CHANGED
         self._llm_base = llm_base_url.rstrip("/")
         self._model    = model
-        self._client   = OpenAI(base_url=self._llm_base, api_key="not-needed")
+        self._client   = OpenAI(base_url=self._llm_base, api_key=os.getenv("LLM_API_KEY", "") or "not-needed")
         # Reuse the owner's shared embedder when given (keeps its TTL cache
         # warm and avoids re-reading the disk cache on every user switch);
         # standalone construction still works via embed_cache.

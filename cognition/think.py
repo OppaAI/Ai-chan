@@ -439,7 +439,7 @@ def _extract_search_results_block(system_prompt: str) -> str:
 
 class AikoThink:
     def __init__(self) -> None:
-        self._client    = OpenAI(base_url=LLM_BASE_URL, api_key="not-needed")
+        self._client    = OpenAI(base_url=LLM_BASE_URL, api_key=os.getenv("LLM_API_KEY", "") or "not-needed")
         self._llm_model = LLM_MODEL
         self._router_model = ROUTER_MODEL
         self._memorize  = None    # injected later via set_memorize() — see system/wakeup.py

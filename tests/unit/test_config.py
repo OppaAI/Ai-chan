@@ -477,3 +477,11 @@ class TestLoadConfigCaching:
         assert config_module._LOADED is False
         load_config()
         assert config_module._LOADED is True
+
+
+def test_cognition_config_exposes_blank_llm_api_key_defaults():
+    """Local OpenAI-compatible servers do not need credentials by default."""
+    cognition = load_yaml("cognition.yaml")
+
+    assert cognition["LLM_API_KEY"] == ""
+    assert cognition["VISION_API_KEY"] == ""
