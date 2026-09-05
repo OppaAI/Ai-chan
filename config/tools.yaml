@@ -1,6 +1,6 @@
 # Declarative tool catalog for Aiko's agentic toolkit.
 # Runtime source of truth for @tool decorator metadata.
-# Normalize with: python util/export_tools_catalog.py
+# Normalize with: uv run python util/export_tools_catalog.py
 {
   "tools": [
     {
@@ -19,6 +19,130 @@
       "react": true,
       "graph": true,
       "wiki": true,
+      "skill": false
+    },
+    {
+      "handler": "agentic.toolkit.tool_result_cache_tools:cache_gc_tool",
+      "name": "cache_gc",
+      "description": "Drop old tool-result cache runs for a workflow (retention).",
+      "props": {
+        "workflow": {
+          "type": "string"
+        },
+        "keep_runs": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "workflow"
+      ],
+      "domain": "cache",
+      "react": false,
+      "graph": true,
+      "wiki": false,
+      "skill": false
+    },
+    {
+      "handler": "agentic.toolkit.tool_result_cache_tools:cache_read_tool",
+      "name": "cache_read",
+      "description": "Read records from the tool-result cache (debug / drill-down).",
+      "props": {
+        "workflow": {
+          "type": "string"
+        },
+        "source": {
+          "type": "string"
+        },
+        "run_id": {
+          "type": "string"
+        },
+        "limit": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "workflow"
+      ],
+      "domain": "cache",
+      "react": false,
+      "graph": true,
+      "wiki": false,
+      "skill": false
+    },
+    {
+      "handler": "agentic.toolkit.tool_result_cache_tools:cache_select_tool",
+      "name": "cache_select",
+      "description": "Select a compact ranked subset from the tool-result cache for LLM synthesis. Returns plain-text evidence (not full JSONL) for synthesize_report.",
+      "props": {
+        "workflow": {
+          "type": "string"
+        },
+        "source": {
+          "type": "string"
+        },
+        "run_id": {
+          "type": "string"
+        },
+        "keywords": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "keywords_env": {
+          "type": "string",
+          "description": "Environment variable name containing comma-separated keywords"
+        },
+        "matched_only": {
+          "type": "boolean"
+        },
+        "limit": {
+          "type": "integer"
+        },
+        "to_state": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "workflow"
+      ],
+      "domain": "cache",
+      "react": false,
+      "graph": true,
+      "wiki": false,
+      "skill": false
+    },
+    {
+      "handler": "agentic.toolkit.tool_result_cache_tools:cache_write_tool",
+      "name": "cache_write",
+      "description": "Append tool results to the unified on-disk JSONL tool-result cache. Use after fetch/search so full payloads stay out of the LLM context. Pass items (string or list) or from_state to read a GraphState key.",
+      "props": {
+        "items": {
+          "description": "Result object(s) or text from prior node ($result:...)"
+        },
+        "workflow": {
+          "type": "string",
+          "description": "Workflow id, e.g. research_and_report"
+        },
+        "source": {
+          "type": "string",
+          "description": "rss|email|web|kb|tool"
+        },
+        "run_id": {
+          "type": "string"
+        },
+        "from_state": {
+          "type": "string",
+          "description": "GraphState key holding items"
+        }
+      },
+      "required": [
+        "workflow"
+      ],
+      "domain": "cache",
+      "react": false,
+      "graph": true,
+      "wiki": false,
       "skill": false
     },
     {
@@ -52,6 +176,87 @@
         "job_id"
       ],
       "domain": "scheduling",
+      "react": true,
+      "graph": true,
+      "wiki": false,
+      "skill": false
+    },
+    {
+      "handler": "agentic.workflows.aurora_forecast.graph:check_aurora",
+      "name": "check_aurora",
+      "description": "Fetch NOAA aurora + Kp + cloud cover and score viewability (domain adapter).",
+      "props": {
+        "config_path": {
+          "type": "string"
+        }
+      },
+      "domain": "weather",
+      "react": true,
+      "graph": true,
+      "wiki": false,
+      "skill": false
+    },
+    {
+      "handler": "agentic.workflows.job_hunt.graph:check_jobs_remaining",
+      "name": "check_jobs_remaining",
+      "description": "Check if more jobs remain to be processed. Returns 'more' or 'done'.",
+      "props": {},
+      "domain": "jobs",
+      "react": false,
+      "graph": true,
+      "wiki": false,
+      "skill": false
+    },
+    {
+      "handler": "agentic.workflows.owner_email.graph:check_owner_email",
+      "name": "check_owner_email",
+      "description": "Poll ProtonMail inbox for messages FROM AIKO_EMAIL and extract prompts.",
+      "props": {},
+      "domain": "email",
+      "react": true,
+      "graph": true,
+      "wiki": false,
+      "skill": false
+    },
+    {
+      "handler": "agentic.toolkit.codebase:codebase_context",
+      "name": "codebase_context",
+      "description": "Retrieve formatted <codebase_context> block for a codebase question (RAG). For prompt injection.",
+      "props": {},
+      "domain": "codebase",
+      "react": true,
+      "graph": true,
+      "wiki": false,
+      "skill": false
+    },
+    {
+      "handler": "agentic.toolkit.codebase:codebase_ingest",
+      "name": "codebase_ingest",
+      "description": "Ingest (or refresh) the entire Aiko codebase into the per-user codebase.db. Incremental by SHA1; safe to call repeatedly. Optimized for Jetson (batched 32, WAL, cosine).",
+      "props": {},
+      "domain": "codebase",
+      "react": true,
+      "graph": true,
+      "wiki": false,
+      "skill": false
+    },
+    {
+      "handler": "agentic.workflows.codebase_refresh.graph:codebase_refresh_status_tool",
+      "name": "codebase_refresh_status",
+      "description": "Check codebase.db existence and stats.",
+      "props": {},
+      "domain": "codebase",
+      "react": true,
+      "graph": true,
+      "wiki": false,
+      "skill": false
+    },
+    {
+      "handler": "agentic.toolkit.codebase:codebase_search",
+      "name": "codebase_search",
+      "description": "Search Aiko's codebase RAG (separate DB at <USER_SPACE_ROOT>/<user_id>/knowledge/codebase.db) for code/docs relevant to the query. Optimized for Jetson Orin Nano 8GB (harrier 640d, 900-char chunks). Use for 'where is X', 'how does Y work', 'find file for Z'.",
+      "props": {},
+      "domain": "codebase",
       "react": true,
       "graph": true,
       "wiki": false,
@@ -202,6 +407,29 @@
       "skill": false
     },
     {
+      "handler": "agentic.workflows.job_hunt.graph:draft_single_job",
+      "name": "draft_single_job",
+      "description": "Draft a single job post from one job dict, optionally enriching with LLM.",
+      "props": {
+        "job_json": {
+          "type": "string",
+          "description": "JSON from get_next_job containing job dict."
+        },
+        "template": {
+          "type": "string",
+          "description": "Optional template override."
+        }
+      },
+      "required": [
+        "job_json"
+      ],
+      "domain": "jobs",
+      "react": false,
+      "graph": true,
+      "wiki": false,
+      "skill": false
+    },
+    {
       "handler": "agentic.toolkit.social:draft_video_social",
       "name": "draft_video_social",
       "description": "Queue the oldest not-yet-drafted video in the video inbox that already has a matching .txt description file (same stem, case-insensitive), polishing it into a YouTube title/description for human review. Does NOT post, and does NOT choose which video — dropping the file with its description IS the selection.",
@@ -241,6 +469,25 @@
       "skill": false
     },
     {
+      "handler": "agentic.workflows.job_hunt.graph:fetch_rss_and_email_into_state",
+      "name": "fetch_rss_and_email_into_state",
+      "description": "Fetch all RSS + email jobs into state for incremental graph processing. Returns summary with total_found and sources.",
+      "props": {
+        "plan_json": {
+          "type": "string",
+          "description": "JSON plan with max_results and other fetch options."
+        }
+      },
+      "required": [
+        "plan_json"
+      ],
+      "domain": "jobs",
+      "react": false,
+      "graph": true,
+      "wiki": false,
+      "skill": false
+    },
+    {
       "handler": "agentic.agentic:final_answer",
       "name": "final_answer",
       "description": "Final answer.",
@@ -256,6 +503,53 @@
       "always_on": true,
       "react": true,
       "graph": false,
+      "wiki": false,
+      "skill": false
+    },
+    {
+      "handler": "agentic.workflows.job_hunt.graph:get_next_job",
+      "name": "get_next_job",
+      "description": "Get the next unprocessed job from state.job_all_postings (thread-safe). Returns job dict or done signal.",
+      "props": {
+        "worker_id": {
+          "type": "string",
+          "description": "Worker identifier for logging."
+        }
+      },
+      "domain": "jobs",
+      "react": false,
+      "graph": true,
+      "wiki": false,
+      "skill": false
+    },
+    {
+      "handler": "agentic.workflows.common.nodes:ingest_data",
+      "name": "ingest_data",
+      "description": "Layer-1 shared node: ingest from sources (http_json, adapter:aurora, …) into normalized items[].",
+      "props": {
+        "sources_json": {
+          "type": "string",
+          "description": "JSON list of source objects {type, id, ...}."
+        },
+        "filters_json": {
+          "type": "string",
+          "description": "Optional filter tree JSON."
+        },
+        "parallel": {
+          "type": "string",
+          "description": "true|false"
+        },
+        "max_items": {
+          "type": "string"
+        },
+        "config_json": {
+          "type": "string",
+          "description": "Optional config overlay JSON."
+        }
+      },
+      "domain": "workflow",
+      "react": false,
+      "graph": true,
       "wiki": false,
       "skill": false
     },
@@ -276,6 +570,46 @@
       ],
       "domain": "kb",
       "react": false,
+      "graph": true,
+      "wiki": false,
+      "skill": false
+    },
+    {
+      "handler": "",
+      "name": "learn_knowledge",
+      "description": "Store durable learned knowledge in Aiko's vector RAG store (encrypted when SQLite encryption is enabled). Use only when the user asks Aiko to remember/add/store knowledge, ingest pasted document text, or after explicit self-learning/research should be retained. Do not use for private personal preferences; those belong in memory. Do not use for merely saving a human-readable note; use save_note for that.",
+      "props": {
+        "title": {
+          "type": "string",
+          "description": "Short title for the learned document or fact set."
+        },
+        "text": {
+          "type": "string",
+          "description": "Knowledge text to chunk, embed, and retrieve later. Use this for pasted/extracted text."
+        },
+        "relative_path": {
+          "type": "string",
+          "description": "Optional workspace-relative document path to ingest instead of text."
+        },
+        "source": {
+          "type": "string",
+          "description": "Optional source URL/path/context for pasted text."
+        },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "ingested",
+            "self_learned",
+            "study_note"
+          ],
+          "description": "Where this knowledge came from."
+        }
+      },
+      "required": [
+        "title"
+      ],
+      "domain": "kb",
+      "react": true,
       "graph": true,
       "wiki": false,
       "skill": false
@@ -402,6 +736,30 @@
       "skill": false
     },
     {
+      "handler": "agentic.workflows.common.nodes:output_user_results",
+      "name": "output_user_results",
+      "description": "Layer-1 shared node: deliver verified results via email and/or social tools.",
+      "props": {
+        "results_json": {
+          "type": "string"
+        },
+        "email_json": {
+          "type": "string"
+        },
+        "social_json": {
+          "type": "string"
+        },
+        "config_json": {
+          "type": "string"
+        }
+      },
+      "domain": "workflow",
+      "react": false,
+      "graph": true,
+      "wiki": false,
+      "skill": false
+    },
+    {
       "handler": "agentic.toolkit.synthesize:polish_text",
       "name": "polish_text",
       "description": "Rewrite an already-synthesized draft in the requested style.",
@@ -457,7 +815,34 @@
           }
         }
       },
-      "required": [],
+      "domain": "social",
+      "react": true,
+      "graph": true,
+      "wiki": true,
+      "skill": false
+    },
+    {
+      "handler": "agentic.toolkit.social:post_to_social",
+      "name": "post_to_social",
+      "description": "Post text and optional image to one or more social platforms. services is a comma-separated list e.g. 'bluesky,mastodon'. Supported platforms: x, threads, bluesky, mastodon, discord. Does NOT require human approval.",
+      "props": {
+        "text": {
+          "type": "string",
+          "description": "The text content to post."
+        },
+        "services": {
+          "type": "string",
+          "description": "Comma-separated list of target platforms, e.g. 'bluesky,mastodon'."
+        },
+        "image_path": {
+          "type": "string",
+          "description": "Optional absolute path to an image file to attach."
+        }
+      },
+      "required": [
+        "text",
+        "services"
+      ],
       "domain": "social",
       "react": true,
       "graph": true,
@@ -483,7 +868,6 @@
           }
         }
       },
-      "required": [],
       "domain": "social",
       "react": true,
       "graph": true,
@@ -525,6 +909,28 @@
       ],
       "domain": "planning",
       "always_on": true,
+      "react": true,
+      "graph": true,
+      "wiki": false,
+      "skill": false
+    },
+    {
+      "handler": "agentic.workflows.codebase_refresh.graph:refresh_codebase_tool",
+      "name": "refresh_codebase",
+      "description": "Refresh per-user codebase RAG DB (incremental SHA1, prune stale). Nightly 22:00, Jetson-optimized.",
+      "props": {},
+      "domain": "codebase",
+      "react": true,
+      "graph": true,
+      "wiki": false,
+      "skill": false
+    },
+    {
+      "handler": "agentic.workflows.owner_email.graph:reply_owner_email",
+      "name": "reply_owner_email",
+      "description": "Generate LLM replies for owner email prompts and send them back.",
+      "props": {},
+      "domain": "email",
       "react": true,
       "graph": true,
       "wiki": false,
@@ -594,6 +1000,71 @@
       "skill": false
     },
     {
+      "handler": "agentic.workflows.job_hunt.graph:report_job_run",
+      "name": "report_job_run",
+      "description": "Generate an RSS Lane D audit report from accumulated results.",
+      "props": {
+        "plan": {
+          "type": "string",
+          "description": "JSON from fetch_rss_and_email_into_state."
+        },
+        "search": {
+          "type": "string",
+          "description": "JSON search results."
+        },
+        "draft": {
+          "type": "string",
+          "description": "JSON draft results."
+        },
+        "save": {
+          "type": "string",
+          "description": "JSON save results."
+        }
+      },
+      "domain": "jobs",
+      "react": false,
+      "graph": true,
+      "wiki": false,
+      "skill": false
+    },
+    {
+      "handler": "agentic.toolkit.social:run_job_post_playbook",
+      "name": "run_job_post_playbook",
+      "description": "Legacy schedule tool name → Spec gen_job_post graph.",
+      "props": {},
+      "react": true,
+      "graph": false,
+      "wiki": false,
+      "skill": false
+    },
+    {
+      "handler": "",
+      "name": "run_playbook",
+      "description": "Run a saved graph/playbook workflow by matching this task prompt. This uses deterministic graph execution, not an LLM planner; if no graph matches, continue with ReAct once and learn the sequence.",
+      "props": {
+        "task": {
+          "type": "string",
+          "description": "The task prompt to match against graph playbooks."
+        },
+        "cap_ids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Optional matched capability ids."
+        }
+      },
+      "required": [
+        "task"
+      ],
+      "domain": "graph",
+      "always_on": true,
+      "react": true,
+      "graph": true,
+      "wiki": false,
+      "skill": false
+    },
+    {
       "handler": "agentic.toolkit.plan:save_note",
       "name": "save_note",
       "description": "Save a note to a workspace file. content MUST be plain text only, under 400 characters. No markdown tables, no bullet lists, no backticks, no quotes. Write a brief plain-text summary only.",
@@ -618,6 +1089,22 @@
       "domain": "planning",
       "always_on": true,
       "react": true,
+      "graph": true,
+      "wiki": false,
+      "skill": false
+    },
+    {
+      "handler": "agentic.workflows.job_hunt.graph:save_single_job_draft",
+      "name": "save_single_job_draft",
+      "description": "Save the most recently drafted job to disk as a Threads draft.",
+      "props": {
+        "auto_post": {
+          "type": "string",
+          "description": "Auto-post flag (false = draft only)."
+        }
+      },
+      "domain": "jobs",
+      "react": false,
       "graph": true,
       "wiki": false,
       "skill": false
@@ -746,7 +1233,7 @@
       "skill": false
     },
     {
-      "handler": "agentic.toolkit.job_hunt:search_jobs",
+      "handler": "agentic.workflows.job_hunt.toolset:search_jobs",
       "name": "search_jobs",
       "description": "Return today's tech job postings from configured RSS feeds only. query, location, max_age_days, and job_type are accepted for compatibility but ignored; use max_results to cap output.",
       "props": {
@@ -771,120 +1258,6 @@
           "description": "Ignored; keyword filtering comes from job_hunt settings."
         }
       },
-      "required": [],
-      "domain": "jobs",
-      "react": false,
-      "graph": true,
-      "wiki": false,
-      "skill": false
-    },
-    {
-      "handler": "agentic.workflows.job_hunt.toolset:fetch_rss_and_email_into_state",
-      "name": "fetch_rss_and_email_into_state",
-      "description": "Fetch all RSS + email jobs into state for incremental graph processing. Returns summary with total_found and sources.",
-      "props": {
-        "plan_json": {
-          "type": "string",
-          "description": "JSON plan with max_results and other fetch options."
-        }
-      },
-      "required": ["plan_json"],
-      "domain": "jobs",
-      "react": false,
-      "graph": true,
-      "wiki": false,
-      "skill": false
-    },
-    {
-      "handler": "agentic.workflows.job_hunt.toolset:get_next_job",
-      "name": "get_next_job",
-      "description": "Get the next unprocessed job from state.job_all_postings (thread-safe). Returns job dict or done signal.",
-      "props": {
-        "worker_id": {
-          "type": "string",
-          "description": "Worker identifier for logging."
-        }
-      },
-      "required": [],
-      "domain": "jobs",
-      "react": false,
-      "graph": true,
-      "wiki": false,
-      "skill": false
-    },
-    {
-      "handler": "agentic.workflows.job_hunt.toolset:draft_single_job",
-      "name": "draft_single_job",
-      "description": "Draft a single job post from one job dict, optionally enriching with LLM.",
-      "props": {
-        "job_json": {
-          "type": "string",
-          "description": "JSON from get_next_job containing job dict."
-        },
-        "template": {
-          "type": "string",
-          "description": "Optional template override."
-        }
-      },
-      "required": ["job_json"],
-      "domain": "jobs",
-      "react": false,
-      "graph": true,
-      "wiki": false,
-      "skill": false
-    },
-    {
-      "handler": "agentic.workflows.job_hunt.toolset:save_single_job_draft",
-      "name": "save_single_job_draft",
-      "description": "Save the most recently drafted job to disk as a Threads draft.",
-      "props": {
-        "auto_post": {
-          "type": "string",
-          "description": "Auto-post flag (false = draft only)."
-        }
-      },
-      "required": [],
-      "domain": "jobs",
-      "react": false,
-      "graph": true,
-      "wiki": false,
-      "skill": false
-    },
-    {
-      "handler": "agentic.workflows.job_hunt.toolset:check_jobs_remaining",
-      "name": "check_jobs_remaining",
-      "description": "Check if more jobs remain to be processed. Returns 'more' or 'done'.",
-      "props": {},
-      "required": [],
-      "domain": "jobs",
-      "react": false,
-      "graph": true,
-      "wiki": false,
-      "skill": false
-    },
-    {
-      "handler": "agentic.workflows.job_hunt.toolset:report_job_run",
-      "name": "report_job_run",
-      "description": "Generate an RSS Lane D audit report from accumulated results.",
-      "props": {
-        "plan": {
-          "type": "string",
-          "description": "JSON from fetch_rss_and_email_into_state."
-        },
-        "search": {
-          "type": "string",
-          "description": "JSON search results."
-        },
-        "draft": {
-          "type": "string",
-          "description": "JSON draft results."
-        },
-        "save": {
-          "type": "string",
-          "description": "JSON save results."
-        }
-      },
-      "required": [],
       "domain": "jobs",
       "react": false,
       "graph": true,
@@ -909,6 +1282,33 @@
       "domain": "skills",
       "react": true,
       "graph": false,
+      "wiki": false,
+      "skill": false
+    },
+    {
+      "handler": "agentic.workflows.common.nodes:store_data",
+      "name": "store_data",
+      "description": "Layer-1 shared node: persist items to TTL JSONL store and prune by retain_days.",
+      "props": {
+        "workflow_id": {
+          "type": "string"
+        },
+        "items_json": {
+          "type": "string"
+        },
+        "mode": {
+          "type": "string"
+        },
+        "retain_days": {
+          "type": "string"
+        },
+        "config_json": {
+          "type": "string"
+        }
+      },
+      "domain": "workflow",
+      "react": false,
+      "graph": true,
       "wiki": false,
       "skill": false
     },
@@ -941,6 +1341,33 @@
       "skill": false
     },
     {
+      "handler": "agentic.workflows.common.nodes:synthesis_data",
+      "name": "synthesis_data",
+      "description": "Layer-1 shared node: fill template from items (optional LLM enrichment later).",
+      "props": {
+        "items_json": {
+          "type": "string"
+        },
+        "template": {
+          "type": "string"
+        },
+        "llm_enriched": {
+          "type": "string"
+        },
+        "per_item": {
+          "type": "string"
+        },
+        "config_json": {
+          "type": "string"
+        }
+      },
+      "domain": "workflow",
+      "react": false,
+      "graph": true,
+      "wiki": false,
+      "skill": false
+    },
+    {
       "handler": "agentic.toolkit.synthesize:synthesize_report",
       "name": "synthesize_report",
       "description": "Produce a synthesized long-form report from combined evidence.",
@@ -959,6 +1386,33 @@
         }
       },
       "domain": "reports",
+      "react": false,
+      "graph": true,
+      "wiki": false,
+      "skill": false
+    },
+    {
+      "handler": "agentic.workflows.common.nodes:verify_results",
+      "name": "verify_results",
+      "description": "Layer-1 shared node: HITL gate or auto-pass rules on synthesized results.",
+      "props": {
+        "results_json": {
+          "type": "string"
+        },
+        "human_in_the_loop": {
+          "type": "string"
+        },
+        "llm_verify": {
+          "type": "string"
+        },
+        "auto_pass_json": {
+          "type": "string"
+        },
+        "config_json": {
+          "type": "string"
+        }
+      },
+      "domain": "workflow",
       "react": false,
       "graph": true,
       "wiki": false,
@@ -1014,137 +1468,6 @@
         "title"
       ],
       "domain": "reports",
-      "react": true,
-      "graph": true,
-      "wiki": false,
-      "skill": false
-    },
-    {
-      "handler": "agentic.toolkit.social:post_to_social",
-      "name": "post_to_social",
-      "description": "Post text and optional image to one or more social platforms. services is a comma-separated list e.g. 'bluesky,mastodon'. Supported platforms: x, threads, bluesky, mastodon, discord. Does NOT require human approval.",
-      "props": {
-        "text": {
-          "type": "string",
-          "description": "The text content to post."
-        },
-        "services": {
-          "type": "string",
-          "description": "Comma-separated list of target platforms, e.g. 'bluesky,mastodon'."
-        },
-        "image_path": {
-          "type": "string",
-          "description": "Optional absolute path to an image file to attach."
-        }
-      },
-      "required": [
-        "text",
-        "services"
-      ],
-      "domain": "social",
-      "react": true,
-      "graph": true,
-      "wiki": true,
-      "skill": false
-    },
-{
-      "handler": "agentic.workflows.common.nodes:ingest_data",
-      "name": "ingest_data",
-      "description": "Layer-1 shared node: ingest from sources (http_json, adapter:aurora, …) into normalized items[].",
-      "props": {
-        "sources_json": {"type": "string", "description": "JSON list of source objects {type, id, ...}."},
-        "filters_json": {"type": "string", "description": "Optional filter tree JSON."},
-        "parallel": {"type": "string", "description": "true|false"},
-        "max_items": {"type": "string"},
-        "config_json": {"type": "string", "description": "Optional config overlay JSON."}
-      },
-      "required": [],
-      "domain": "workflow",
-      "react": false,
-      "graph": true,
-      "wiki": false,
-      "skill": false
-    },
-    {
-      "handler": "agentic.workflows.common.nodes:store_data",
-      "name": "store_data",
-      "description": "Layer-1 shared node: persist items to TTL JSONL store and prune by retain_days.",
-      "props": {
-        "workflow_id": {"type": "string"},
-        "items_json": {"type": "string"},
-        "mode": {"type": "string"},
-        "retain_days": {"type": "string"},
-        "config_json": {"type": "string"}
-      },
-      "required": [],
-      "domain": "workflow",
-      "react": false,
-      "graph": true,
-      "wiki": false,
-      "skill": false
-    },
-    {
-      "handler": "agentic.workflows.common.nodes:synthesis_data",
-      "name": "synthesis_data",
-      "description": "Layer-1 shared node: fill template from items (optional LLM enrichment later).",
-      "props": {
-        "items_json": {"type": "string"},
-        "template": {"type": "string"},
-        "llm_enriched": {"type": "string"},
-        "per_item": {"type": "string"},
-        "config_json": {"type": "string"}
-      },
-      "required": [],
-      "domain": "workflow",
-      "react": false,
-      "graph": true,
-      "wiki": false,
-      "skill": false
-    },
-    {
-      "handler": "agentic.workflows.common.nodes:verify_results",
-      "name": "verify_results",
-      "description": "Layer-1 shared node: HITL gate or auto-pass rules on synthesized results.",
-      "props": {
-        "results_json": {"type": "string"},
-        "human_in_the_loop": {"type": "string"},
-        "llm_verify": {"type": "string"},
-        "auto_pass_json": {"type": "string"},
-        "config_json": {"type": "string"}
-      },
-      "required": [],
-      "domain": "workflow",
-      "react": false,
-      "graph": true,
-      "wiki": false,
-      "skill": false
-    },
-    {
-      "handler": "agentic.workflows.common.nodes:output_user_results",
-      "name": "output_user_results",
-      "description": "Layer-1 shared node: deliver verified results via email and/or social tools.",
-      "props": {
-        "results_json": {"type": "string"},
-        "email_json": {"type": "string"},
-        "social_json": {"type": "string"},
-        "config_json": {"type": "string"}
-      },
-      "required": [],
-      "domain": "workflow",
-      "react": false,
-      "graph": true,
-      "wiki": false,
-      "skill": false
-    },
-    {
-      "handler": "agentic.workflows.aurora_forecast.graph:check_aurora",
-      "name": "check_aurora",
-      "description": "Fetch NOAA aurora + Kp + cloud cover and score viewability (domain adapter).",
-      "props": {
-        "config_path": {"type": "string"}
-      },
-      "required": [],
-      "domain": "weather",
       "react": true,
       "graph": true,
       "wiki": false,
