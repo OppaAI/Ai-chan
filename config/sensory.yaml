@@ -5,9 +5,13 @@
 # verification, and wake word activation gating. (Trigger-phrase gating was
 # removed — wake word is the sole activation mechanism.)
 # -- ASR --
-ASR_DEVICE: "cuda"  # sherpa-onnx execution provider; options usually cpu or cuda.
+# Default cpu on Jetson Orin Nano 8GB: SenseVoice-int8 is small enough that
+# CPU inference (~real-time) avoids a second CUDA EP session competing with
+# llama-server + MioTTS for unified RAM. Set to "cuda" only if you have
+# headroom and set OMP/ORT threads low.
+ASR_DEVICE: "cpu"  # sherpa-onnx execution provider; options usually cpu or cuda.
 ASR_LANGUAGE: "auto"  # Transcription language; options: auto, en, ja, zh, ko, yue, nospeech.
-ASR_NUM_THREADS: "4"  # CPU inference threads for ASR.
+ASR_NUM_THREADS: "2"  # CPU inference threads for ASR (2 on 6xA78 Nano; 4 starves llama-server).
 ASR_MODEL: "csukuangfj/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17"  # sherpa-onnx SenseVoice model id/path; first run may download files.
 
 # -- Post-ASR name / phrase fixes (S2, no finetune) --

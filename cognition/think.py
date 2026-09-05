@@ -31,6 +31,8 @@ import os
 import json
 import warnings
 
+from system.config import env_float, env_int
+
 import numpy as np
 
 warnings.filterwarnings("ignore")
@@ -111,7 +113,7 @@ BOOT_LABELS = {
 LLM_BASE_URL = os.getenv("LLM_BASE_URL", "http://localhost:8080/v1")
 LLM_MODEL    = os.getenv("LLM_MODEL",    "ministral")
 ROUTER_MODEL = os.getenv("ROUTER_MODEL", LLM_MODEL)
-LLM_TIMEOUT  = float(os.getenv("LLM_TIMEOUT", 120))
+LLM_TIMEOUT  = env_float("LLM_TIMEOUT", 120)
 # Stop sequences sent on every LLM call. Model-specific — only the real
 # EOS matters; the third legacy token ([INST], raw instruct formatting)
 # is never emitted in chat-completions mode and was dead weight. Default
@@ -124,25 +126,34 @@ LLM_STOP_SEQUENCES = [s.strip() for s in os.getenv("LLM_STOP_SEQUENCES", "</s>,<
 # ignore the field. Disable with LLM_CACHE_PROMPT=0 if a non-llama proxy
 # rejects unknown body params.
 _LLM_CACHE_PROMPT = os.getenv("LLM_CACHE_PROMPT", "1").strip().lower() not in {"0", "false", "no", "off"}
-CONTEXT_WINDOW_TURNS = int(os.getenv("CONTEXT_WINDOW_TURNS", 8))
+CONTEXT_WINDOW_TURNS = env_int("CONTEXT_WINDOW_TURNS", 8)
 
 # Shared default recall/knowledge depth across all three chat paths
 # (localchat/webchat/agentic) — see _fetch_memory_and_knowledge below.
-MEMORY_RECALL_LIMIT = int(os.getenv("MEMORY_RECALL_LIMIT", 3))
-KNOWLEDGE_RECALL_LIMIT = int(os.getenv("KNOWLEDGE_RECALL_LIMIT", 3))
+MEMORY_RECALL_LIMIT = env_int("MEMORY_RECALL_LIMIT", 3)
+KNOWLEDGE_RECALL_LIMIT = env_int("KNOWLEDGE_RECALL_LIMIT", 3)
 # Recall hard-timeout — a slow local embed (llama.cpp) must not block the turn.
 # On expiry the memory/KB recall is skipped (empty) rather than stalling.
-MEMORY_RECALL_TIMEOUT = float(os.getenv("MEMORY_RECALL_TIMEOUT", 5.0))
+MEMORY_RECALL_TIMEOUT = env_float("MEMORY_RECALL_TIMEOUT", 5.0)
 # Minimum recall score (see _MemoryBackend._rank_and_score's final_score in
 # memory/memorize.py for the formula) a memory must clear to be included in
 # context. Same numeric scale as memorize.py's MEMORY_RECALL_SCORE_THRESHOLD
 # (~0.015) — that constant only decides quick-vs-wide search, this one
 # actually filters weak individual results out of what gets returned.
 # 0 = off (default) — no memory is ever dropped for being weak.
-MEMORY_MIN_SCORE = float(os.getenv("MEMORY_MIN_SCORE", "0.0"))
+MEMORY_MIN_SCORE = env_float("MEMORY_MIN_SCORE", 0.0)
 
-_BASE_PREDICT    = int(os.getenv("LLM_MAX_TOKENS", os.getenv("BASE_PREDICT", 280)))
-_REASONING_SCALE = int(os.getenv("REASONING_SCALE", 3))
+def _resolve_base_predict() -> int:
+    for key in ("LLM_MAX_TOKENS", "BASE_PREDICT"):
+        try:
+            return int(os.getenv(key, ""))
+        except (TypeError, ValueError):
+            continue
+    return 280
+
+
+_BASE_PREDICT    = _resolve_base_predict()
+_REASONING_SCALE = env_int("REASONING_SCALE", 3)
 _ROUTE_ENABLED = os.getenv("ROUTE_ENABLED", "1").lower() in {"1", "true", "yes", "on"}
 
 # ROUTE_MODE selects the classification METHOD only (see yaml comment for

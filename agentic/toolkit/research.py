@@ -475,7 +475,18 @@ def _crawl4ai_fetch_many(urls: list[str], max_chars: int) -> dict[str, str]:
                         out[getattr(r, "url", "")] = text[:max_chars]
             return out
 
-        return asyncio.run(_run())
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            return asyncio.run(_run())
+        # Already inside a loop (graph worker): isolate in own thread+loop.
+        import concurrent.futures
+
+        def _run_isolated() -> dict[str, str]:
+            return asyncio.run(_run())
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+            return pool.submit(_run_isolated).result(timeout=120)
     except Exception as e:
         log.info("[crawl4ai] batch fetch failed for %d url(s): %s", len(urls), e)
         return {}

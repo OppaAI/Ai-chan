@@ -233,11 +233,19 @@ def _new_state() -> str:
 
 def _consume_state(state: str | None) -> None:
     """Validate and burn a state token. Raises 400 if missing/unknown/expired."""
+    _sweep_expired_states()
     if not state or state not in oauth_states:
         raise HTTPException(status_code=400, detail="Invalid or missing OAuth state")
     expiry = oauth_states.pop(state)
     if bioclock.monotonic_now() > expiry:
         raise HTTPException(status_code=400, detail="OAuth state expired — try logging in again")
+
+
+def _sweep_expired_states() -> None:
+    now = bioclock.monotonic_now()
+    for key, exp in list(oauth_states.items()):
+        if now > exp:
+            oauth_states.pop(key, None)
 
 
 def _create_session(user_id, username: str, email: str | None, provider: str) -> str:
@@ -497,7 +505,10 @@ async def accept_terms(request: Request, session: dict = Depends(require_session
         raise HTTPException(status_code=400, detail="Must explicitly accept")
 
     cookie_value = request.cookies.get("session_id")
-    session_id = signer.loads(cookie_value, max_age=SESSION_MAX_AGE_SECONDS)
+    try:
+        session_id = signer.loads(cookie_value, max_age=SESSION_MAX_AGE_SECONDS)
+    except (BadSignature, SignatureExpired, TypeError):
+        raise HTTPException(status_code=401, detail="Invalid session")
     sessions[session_id]["accepted_terms"] = True
     _record_terms_acceptance(session["provider"], session["user_id"])
     return {"accepted": True}

@@ -191,7 +191,18 @@ def user_state_dir(user_id: str | None = None) -> Path:
 
 
 def user_state_path(filename: str, user_id: str | None = None) -> Path:
-    return user_state_dir(user_id) / filename
+    name = str(filename or "")
+    # Block absolute paths and parent escapes: Path(root/uid) / "/etc/x"
+    # discards the prefix, and "../../" escapes the user dir.
+    if Path(name).is_absolute() or ".." in Path(name).parts:
+        raise ValueError(f"unsafe user_state_path: {filename!r}")
+    base = user_state_dir(user_id)
+    resolved = (base / name).resolve()
+    try:
+        resolved.relative_to(base.resolve())
+    except ValueError:
+        raise ValueError(f"unsafe user_state_path (escape): {filename!r}")
+    return resolved
 
 
 def all_known_user_ids() -> list[str]:

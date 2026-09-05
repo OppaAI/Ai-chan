@@ -22,12 +22,25 @@ def _db_path() -> Path:
     return user_state_dir(current_user_id()) / "agentic" / "checkpoints.db"
 
 
+def _open_db(path: Path) -> sqlite3.Connection:
+    conn = sqlite3.connect(path, check_same_thread=False, timeout=10.0)
+    try:
+        conn.execute("PRAGMA busy_timeout = 5000")
+    except Exception:
+        pass
+    try:
+        conn.execute("PRAGMA journal_mode=WAL")
+    except Exception:
+        pass
+    return conn
+
+
 def _get_conn() -> sqlite3.Connection:
-    _ensure_migrated()
-    _add_state_column_if_missing()
     path = _db_path()
     path.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(path, check_same_thread=False)
+    _ensure_migrated()
+    _add_state_column_if_missing()
+    conn = _open_db(path)
     conn.execute("""
         CREATE TABLE IF NOT EXISTS node_checkpoints (
             run_id TEXT NOT NULL,
@@ -69,7 +82,16 @@ def _ensure_migrated() -> None:
 
 def _add_state_column_if_missing() -> None:
     """Idempotent migration for existing DBs that lack state_json."""
-    conn = sqlite3.connect(_db_path(), check_same_thread=False)
+    path = _db_path()
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+    except Exception:
+        pass
+    try:
+        conn = _open_db(path)
+    except Exception as exc:
+        log.warning("state_json migration skipped (open failed): %s", exc)
+        return
     try:
         cols = [r[1] for r in conn.execute("PRAGMA table_info(node_checkpoints)").fetchall()]
         if "state_json" not in cols:

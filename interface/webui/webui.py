@@ -590,24 +590,18 @@ class AikoWeb:
 
     def broadcast_audio_bytes(self, wav_bytes: bytes) -> None:
         """Broadcast TTS audio bytes to the current user's connected browsers.
-        
-        If the current user's identity is unknown (None or "guest"), broadcasts to ALL
-        connected browsers. This is intentional for single-user scenarios but creates
-        a cross-user audio leak risk in true multi-user LAN setups.
-        
-        If you have concurrent multi-user sessions on the same LAN, verify whether
-        this behavior is acceptable or gate audio to only known uid. See Concern #3
-        in GLM's review for full context.
+
+        Guests (unknown uid) get no broadcast — previously this fanned out
+        to ALL browsers, leaking audio across users on a LAN.
         """
         if self._loop is None:
             return
         uid = current_user_id()
-        target_uid = uid if uid and uid != "guest" else None
+        if not uid or uid == "guest":
+            return
+        target_uid = uid
         with self._clients_lock:
-            if target_uid:
-                has_targets = any(owner == target_uid for owner in self._client_users.values())
-            else:
-                has_targets = bool(self._clients)
+            has_targets = any(owner == target_uid for owner in self._client_users.values())
             if not has_targets:
                 return
         asyncio.run_coroutine_threadsafe(self._async_broadcast_bytes(wav_bytes, user_id=target_uid), self._loop)

@@ -17,6 +17,7 @@ from pathlib import Path
 
 from system.userspace import current_user_id, user_state_path
 from system.log import get_logger
+from system.config import env_float
 import platform
 import re
 import subprocess
@@ -25,7 +26,7 @@ import time
 log = get_logger(__name__)
 
 _DB_SIZE_CACHE: tuple[float, str] = (0.0, "? mem")
-_DB_SIZE_TTL = float(os.getenv("DB_SIZE_TTL", "1.0"))
+_DB_SIZE_TTL = env_float("DB_SIZE_TTL", 1.0)
 
 
 def _read_sys_info() -> dict:
@@ -71,7 +72,7 @@ def _read_sys_info() -> dict:
 
     # Root partition size
     try:
-        out = subprocess.check_output(["df", "-h", "/"], text=True).splitlines()[1]
+        out = subprocess.check_output(["df", "-h", "/"], text=True, timeout=5).splitlines()[1]
         info["storage"] = out.split()[1]
     except Exception:
         info["storage"] = "unknown"

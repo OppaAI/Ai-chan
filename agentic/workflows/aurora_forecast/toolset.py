@@ -317,7 +317,18 @@ async def run_aurora_check(config_path: str = "") -> AuroraReport:
 
 def check_aurora(config_path: str = "", *, state=None) -> str:
     """Graph step: fetch + score; returns JSON report."""
-    report = asyncio.run(run_aurora_check(config_path=config_path))
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        report = asyncio.run(run_aurora_check(config_path=config_path))
+    else:
+        import concurrent.futures
+
+        def _run_isolated():  # type: ignore[no-untyped-def]
+            return asyncio.run(run_aurora_check(config_path=config_path))
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+            report = pool.submit(_run_isolated).result(timeout=120)
     payload = asdict(report)
     if state is not None and hasattr(state, "data"):
         state.data["aurora_report"] = payload

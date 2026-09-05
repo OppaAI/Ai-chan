@@ -48,6 +48,7 @@ class MCPClient:
         self._loop: asyncio.AbstractEventLoop | None = None
         self._loop_thread: threading.Thread | None = None
         self._loop_ready = threading.Event()
+        self._loop_lock = threading.Lock()
 
     # ── persistent event loop ────────────────────────────────────────────
     # The client session and stdio transport spawn background tasks that must
@@ -59,6 +60,9 @@ class MCPClient:
     def _ensure_loop(self) -> None:
         if self._loop is not None:
             return
+        with self._loop_lock:
+            if self._loop is not None:
+                return
 
         def _run() -> None:
             self._loop = asyncio.new_event_loop()
@@ -187,6 +191,16 @@ class MCPClient:
             log.warning("[mcp] transport close failed")
         self._session = None
         self._transport = None
+        loop, thread = self._loop, self._loop_thread
+        self._loop, self._loop_thread = None, None
+        self._loop_ready.clear()
+        if loop is not None:
+            try:
+                loop.call_soon_threadsafe(loop.stop)
+            except Exception:
+                pass
+        if thread is not None and thread is not threading.current_thread():
+            thread.join(timeout=5)
 
 
 def get_mcp_client() -> MCPClient | None:

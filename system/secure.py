@@ -60,10 +60,19 @@ def _validate_sqlcipher_connection(conn: Any) -> None:
     conn.execute("SELECT count(*) FROM sqlite_master")
 
 
+def _apply_sqlite_pragmas(conn: Any) -> None:
+    for pragma in ("PRAGMA busy_timeout = 5000", "PRAGMA journal_mode=WAL"):
+        try:
+            conn.execute(pragma)
+        except Exception:
+            pass
+
+
 def connect_sqlite(path: str | os.PathLike[str], *, user_id: str) -> Any:
     Path(path).parent.mkdir(parents=True, exist_ok=True)
     if not sqlite_encryption_enabled():
-        conn = sqlite3.connect(path, check_same_thread=False)
+        conn = sqlite3.connect(path, check_same_thread=False, timeout=10.0)
+        _apply_sqlite_pragmas(conn)
         conn.row_factory = sqlite3.Row
         return conn
 
@@ -73,7 +82,8 @@ def connect_sqlite(path: str | os.PathLike[str], *, user_id: str) -> Any:
         raise RuntimeError("pysqlcipher3 is required when SQLITE_ENCRYPTION=1") from exc
 
     raw_key = derive_user_sqlite_key(user_id)
-    conn = sqlcipher.connect(str(path), check_same_thread=False)
+    conn = sqlcipher.connect(str(path), check_same_thread=False, timeout=10.0)
+    _apply_sqlite_pragmas(conn)
     conn.execute(f"PRAGMA key = \"x'{raw_key}'\"")
     conn.execute("PRAGMA cipher_page_size = 4096")
     conn.execute("PRAGMA cipher_compatibility = 4;")  # Lock to SQLCipher 4.x format
