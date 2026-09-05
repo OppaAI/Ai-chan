@@ -90,8 +90,10 @@ def cached_embed_query(embedder, text: str, instruct: str = "") -> np.ndarray:
 
 
 def cosine_similarity(vec_a, vec_b) -> float:
-    a = np.asarray(vec_a, dtype=float)
-    b = np.asarray(vec_b, dtype=float)
+    # float32 throughout: the old float64 default doubled temp memory per
+    # call for precision nothing downstream can use (scores gate thresholds).
+    a = np.asarray(vec_a, dtype=np.float32)
+    b = np.asarray(vec_b, dtype=np.float32)
     na, nb = np.linalg.norm(a), np.linalg.norm(b)
     if na == 0 or nb == 0:
         return 0.0

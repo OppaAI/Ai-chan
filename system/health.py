@@ -143,7 +143,7 @@ def _db_size_str() -> str:
     conn = None
     try:
         import sqlite3, sqlite_vec
-        db_path = os.path.expanduser(os.getenv("SQLITE_MEMORY_PATH")) or str(user_state_path("memory/memory.db", current_user_id()))
+        db_path = os.path.expanduser(os.getenv("SQLITE_MEMORY_PATH") or "") or str(user_state_path("memory/memory.db", current_user_id()))
         conn = sqlite3.connect(db_path)
         conn.enable_load_extension(True)
         sqlite_vec.load(conn)

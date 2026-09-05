@@ -1012,12 +1012,18 @@ def run_session(ui, args) -> None:
     _brain_trace.end_turn()
 
     # ── boot all subsystems via wakeup ────────────────────────────────────────
-
-    result = AikoWakeup().boot(
-        on_loading = ui.step_loading,
-        on_done    = ui.step_done,
-        on_skip    = ui.step_skip,
-    )
+    # The spinner is daemon, but stop it on boot failure too — otherwise it
+    # loops to process exit churning the UI while the traceback prints.
+    try:
+        result = AikoWakeup().boot(
+            on_loading = ui.step_loading,
+            on_done    = ui.step_done,
+            on_skip    = ui.step_skip,
+        )
+    except BaseException:
+        spin_stop.set()
+        spin_t.join(timeout=2.0)
+        raise
 
     think    = result.think
     memorize = result.memorize

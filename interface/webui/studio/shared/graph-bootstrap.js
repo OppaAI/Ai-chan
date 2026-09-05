@@ -142,6 +142,82 @@
     return force;
   }
 
+  /* ── auth-expiry banner ────────────────────────────────────────────
+   * Studio /api/* calls 401 when the login session is gone (server
+   * restart wipes the in-memory session table; an ephemeral SECRET_KEY
+   * does it on every restart). Frontends otherwise render silently
+   * empty, which looks like broken data. This fetch watcher shows one
+   * dismissible "log in again" banner on the first same-origin /api
+   * 401 and otherwise leaves the response untouched, so every studio
+   * that loads this file (directly or transitively) gets the hint
+   * with no per-frontend changes.
+   */
+  var _authBannerShown = false;
+
+  function showAuthBanner() {
+    if (_authBannerShown) return;
+    _authBannerShown = true;
+    try {
+      var bar = document.createElement('div');
+      bar.setAttribute('role', 'alert');
+      bar.setAttribute('id', 'aiko-auth-banner');
+      bar.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:9999;'
+        + 'background:#2a1b3d;color:#f3eaff;font:14px/1.4 system-ui,sans-serif;'
+        + 'padding:10px 16px;text-align:center;border-bottom:2px solid #967bb6;';
+      var msg = document.createElement('span');
+      msg.textContent = 'Session expired — ';
+      var link = document.createElement('a');
+      link.href = '/';
+      link.textContent = 'log in again';
+      link.style.cssText = 'color:#d9c2ff;font-weight:700;';
+      var tail = document.createElement('span');
+      tail.textContent = ' to reload studio data.';
+      var dismiss = document.createElement('button');
+      dismiss.textContent = '✕';
+      dismiss.setAttribute('aria-label', 'Dismiss');
+      dismiss.style.cssText = 'margin-left:12px;background:none;border:1px solid #967bb6;'
+        + 'color:#f3eaff;border-radius:4px;cursor:pointer;padding:0 8px;';
+      dismiss.onclick = function () { bar.remove(); };
+      bar.appendChild(msg);
+      bar.appendChild(link);
+      bar.appendChild(tail);
+      bar.appendChild(dismiss);
+      document.body.appendChild(bar);
+    } catch (e) { /* banner must never break the page */ }
+  }
+
+  function isStudioApi(url) {
+    if (typeof url !== 'string') return false;
+    if (url.indexOf('http') === 0) {
+      try {
+        if (new URL(url).origin !== global.location.origin) return false;
+      } catch (e) { return false; }
+    }
+    return url.indexOf('/api') !== -1;
+  }
+
+  function watchAuth() {
+    if (global.fetch && !global.fetch.__aikoAuthWatch) {
+      var origFetch = global.fetch;
+      var watched = function (url, opts) {
+        return origFetch.apply(this, arguments).then(function (resp) {
+          try {
+            if (resp && resp.status === 401 && isStudioApi(typeof url === 'string' ? url : (url && url.url))) {
+              showAuthBanner();
+            }
+          } catch (e) { /* observe-only */ }
+          return resp;
+        });
+      };
+      watched.__aikoAuthWatch = true;
+      global.fetch = watched;
+    }
+    return { showAuthBanner: showAuthBanner };
+  }
+
+  // Auto-install: every studio page loading this file gets the banner.
+  try { watchAuth(); } catch (e) { /* observe-only */ }
+
   /** Soft outer glow SVG filter. Returns the filter node id. */
   function addGlowFilter(defs, id, stdDeviation) {
     var d = stdDeviation == null ? 1.5 : stdDeviation;
@@ -162,6 +238,8 @@
 
   global.GraphBoot = {
     apiBase: apiBase,
+    watchAuth: watchAuth,
+    showAuthBanner: showAuthBanner,
     makeZoom: makeZoom,
     makeDrag: makeDrag,
     makeSimulation: makeSimulation,

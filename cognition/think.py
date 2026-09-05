@@ -835,7 +835,7 @@ class AikoThink:
                 f"query_vector reused from route() = {query_for_call is not None}",
             ],
         ) as ctx:
-            embedder = memorize._mem._embedder
+            embedder = getattr(getattr(memorize, "_mem", None), "_embedder", None)
             mem_future = CONTEXT_POOL.submit(memorize.search, recall_query, limit=mem_limit, query_vector=query_for_call)
             know_future = CONTEXT_POOL.submit(
                 knowledge_context_for, recall_query, limit=know_limit, max_chars=2000, embedder=embedder
@@ -958,7 +958,13 @@ class AikoThink:
                 ctx.set(outputs={"intent": label, "vector": None, "method": "llm_fallback"},
                         factors=["memory backend unavailable → fell back to LLM classifier"])
                 return label, None
-            embedder = memorize._mem._embedder
+            embedder = getattr(getattr(memorize, "_mem", None), "_embedder", None)
+            if embedder is None or not hasattr(embedder, "embed_query"):
+                log.warning("[think] Embedder unavailable — intent routing via LLM only")
+                label = self._classify_quaternary_intent_llm(user_input, allow_agentic=_AGENTIC_MODE_ON)
+                ctx.set(outputs={"intent": label, "vector": None, "method": "llm_fallback"},
+                        factors=["embedder unavailable → fell back to LLM classifier"])
+                return label, None
             query_vec = embedder.embed_query(user_input, instruct=instruct)
             labels, example_vecs = self._semantic_example_vectors(_ROUTE_QUATERNARY_EXAMPLES, instruct)
             scores = reason.label_scores_topk(query_vec, labels, example_vecs, top_k=_SEMANTIC_LABEL_TOP_K)
@@ -1054,7 +1060,10 @@ class AikoThink:
             if cached is not None:
                 return cached
 
-            embedder = self._get_memorize()._mem._embedder
+            mem = self._get_memorize()
+            embedder = getattr(getattr(mem, "_mem", None), "_embedder", None)
+            if embedder is None or not hasattr(embedder, "embed_queries"):
+                raise RuntimeError("embedder unavailable for route-vector cache")
             disk_path = self._route_vector_cache_path(examples_by_label, instruct, embedder)
             if disk_path is not None and disk_path.exists():
                 try:
@@ -1258,7 +1267,8 @@ class AikoThink:
                 log.debug("[agentic_chat] should_attempt skipped: %s", exc)
 
             memorize = self._get_memorize()
-            embedder = memorize._mem._embedder if memorize is not None else None
+            mem_inner = getattr(memorize, "_mem", None) if memorize is not None else None
+            embedder = getattr(mem_inner, "_embedder", None)
             cap_vec = embedder.embed_query(
                 user_input,
                 instruct="Which capability/tool domain applies to this task?",

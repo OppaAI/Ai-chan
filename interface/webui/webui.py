@@ -579,7 +579,11 @@ class AikoWeb:
             max_tokens=300,
             timeout=timeout,
         )
-        return (response.choices[0].message.content or "I couldn't interpret that image.").strip()
+        choices = getattr(response, "choices", None) or []
+        if not choices:
+            log.warning("webui: vision model returned no choices")
+            return "I couldn't interpret that image."
+        return (choices[0].message.content or "I couldn't interpret that image.").strip()
 
     async def _handle_image_input(self, image: str, question: str, uid: str) -> None:
         """Run vision off the socket loop and return its result to the requesting user."""

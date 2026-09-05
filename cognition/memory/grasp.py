@@ -57,6 +57,14 @@ GRASP_JOURNAL_ENABLED = env_flag("GRASP_JOURNAL_ENABLED", "1")
 GRASP_JOURNAL_DIR = env_str("GRASP_JOURNAL_DIR", str(Path.home() / ".local" / "share" / "aiko" / "journal"))
 _CHARS_PER_TOKEN = 4.0
 
+# tiktoken is not a dependency — probe once at import so estimate_tokens()
+# doesn't pay a failed import + exception on every call in the hot path.
+try:
+    import tiktoken as _tiktoken
+    _tiktoken.get_encoding("cl100k_base")
+except Exception:
+    _tiktoken = None
+
 _POS_WORDS = re.compile(r"\b(love|great|awesome|amazing|happy|glad|thanks|thank you|yay|nice|good|wonderful|excellent|perfect)\b", re.I)
 _NEG_WORDS = re.compile(r"\b(hate|awful|terrible|sad|angry|mad|upset|annoyed|frustrated|bad|worst|sucks|furious)\b", re.I)
 _IMPORTANCE_RE = re.compile(
@@ -214,11 +222,12 @@ class DailyJournal:
 def estimate_tokens(text: str) -> int:
     if not text:
         return 0
-    try:
-        import tiktoken
-        return len(tiktoken.get_encoding("cl100k_base").encode(text))
-    except Exception:
-        return max(1, int(len(text) / _CHARS_PER_TOKEN))
+    if _tiktoken is not None:
+        try:
+            return len(_tiktoken.get_encoding("cl100k_base").encode(text))
+        except Exception:
+            pass
+    return max(1, int(len(text) / _CHARS_PER_TOKEN))
 
 def _content_tokens(text: str) -> set[str]:
     return set(_TOKEN_RE.findall(text.lower()))
