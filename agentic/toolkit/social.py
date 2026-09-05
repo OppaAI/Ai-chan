@@ -274,7 +274,7 @@ def _require_approved(draft_dir: Path) -> None:
 # photo caption-selection prompt).
 LLM_MODEL = os.getenv("REFLECT_MODEL", os.getenv("LLM_MODEL", "ministral"))
 LLM_BASE_URL = os.getenv("LLM_BASE_URL", "http://localhost:8080/v1")
-_LLM_CLIENT = OpenAI(base_url=LLM_BASE_URL, api_key="not-needed")
+_LLM_CLIENT = OpenAI(base_url=LLM_BASE_URL, api_key=os.getenv("LLM_API_KEY", "") or "not-needed")
 
 
 # Lane A1 — Patreon dev-post syndication
@@ -744,7 +744,10 @@ MAX_CAPTION_CHARS = _int_env("PHOTO_SOCIAL_MAX_CHARS", 260)
 # the text-only Ministral endpoint used for selection.
 VISION_MODEL = os.getenv("VISION_MODEL", os.getenv("REFLECT_VISION_MODEL", "minicpm-v"))
 VISION_BASE_URL = os.getenv("VISION_BASE_URL", os.getenv("LLM_BASE_URL", "http://localhost:8080/v1"))
-_VISION_CLIENT = OpenAI(base_url=VISION_BASE_URL, api_key="not-needed")
+_VISION_CLIENT = OpenAI(
+    base_url=VISION_BASE_URL,
+    api_key=os.getenv("VISION_API_KEY", "") or os.getenv("LLM_API_KEY", "") or "not-needed",
+)
 
 _CAPTION_PROMPT = (
     "Describe this image in one plain, factual sentence. No hashtags, no "

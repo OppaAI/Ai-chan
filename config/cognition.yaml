@@ -8,6 +8,11 @@ LLM_BASE_URL: "http://localhost:8080/v1"  # OpenAI-compatible chat endpoint, usu
 LLM_MODEL: "ministral"  # Main chat model id/alias; must match the server model name.
 REFLECT_MODEL: "ministral"  # Model used for reflection/consolidation; often same as LLM_MODEL.
 LLM_TIMEOUT: "120"  # Seconds before chat/reflection LLM HTTP calls time out.
+# API key passed to every text LLM request. Leave blank for unauthenticated local
+# servers (Aiko supplies the harmless OpenAI-client placeholder automatically).
+# To use AISA Fable, set this to your AISA key, then set LLM_BASE_URL and
+# LLM_MODEL to the endpoint and exact model ID shown in AISA's documentation.
+LLM_API_KEY: ""
 
 # -- WebUI camera vision --
 # The camera button sends one in-memory JPEG to this OpenAI-compatible vision
@@ -15,6 +20,9 @@ LLM_TIMEOUT: "120"  # Seconds before chat/reflection LLM HTTP calls time out.
 WEBUI_VISION_MODEL: "minicpm-v"
 WEBUI_VISION_BASE_URL: ""
 WEBUI_VISION_TIMEOUT: "60"
+# Optional override for vision requests; blank falls back to LLM_API_KEY, then
+# the unauthenticated local-server placeholder.
+VISION_API_KEY: ""
 
 # -- Token budgets --
 LLM_MAX_TOKENS: "280"  # Base max tokens for normal chat replies.

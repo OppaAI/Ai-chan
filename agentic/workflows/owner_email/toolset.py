@@ -234,7 +234,7 @@ def reply_owner_email(report_json: str = "", *, state=None) -> str:
                 import os as _os
                 base = _os.getenv("LLM_BASE_URL", "http://127.0.0.1:11434/v1")
                 model = _os.getenv("LLM_MODEL", "qwen2.5:7b")
-                client = OpenAI(base_url=base, api_key="not-needed")
+                client = OpenAI(base_url=base, api_key=_os.getenv("LLM_API_KEY", "") or "not-needed")
                 resp = client.chat.completions.create(
                     model=model,
                     messages=[{"role": "user", "content": prompt}],

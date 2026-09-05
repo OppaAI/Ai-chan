@@ -180,7 +180,7 @@ def run_pipeline_steps(args) -> int:
         import os
         from openai import OpenAI
         llm_base_url = os.getenv("LLM_BASE_URL", "http://localhost:8080/v1")
-        llm_client = OpenAI(base_url=llm_base_url, api_key="not-needed")
+        llm_client = OpenAI(base_url=llm_base_url, api_key=os.getenv("LLM_API_KEY", "") or "not-needed")
         # Try to get model name from server
         try:
             models = llm_client.models.list()

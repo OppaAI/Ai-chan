@@ -32,7 +32,7 @@ _LLM_CLIENT: OpenAI | None = None
 def _get_llm_client() -> OpenAI:
     global _LLM_CLIENT
     if _LLM_CLIENT is None:
-        _LLM_CLIENT = OpenAI(base_url=LLM_BASE_URL, api_key="not-needed")
+        _LLM_CLIENT = OpenAI(base_url=LLM_BASE_URL, api_key=os.getenv("LLM_API_KEY", "") or "not-needed")
     return _LLM_CLIENT
 
 SOUL_PATH         = os.path.expanduser(os.getenv("SOUL_PATH", "persona/SOUL.md"))

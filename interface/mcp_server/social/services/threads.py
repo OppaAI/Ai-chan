@@ -217,7 +217,7 @@ def _get_llm_client() -> OpenAI:
     if _LLM_CLIENT is None:
         _LLM_CLIENT = OpenAI(
             base_url=env("LLM_BASE_URL", "http://localhost:8080/v1"),
-            api_key="not-needed",
+            api_key=env("LLM_API_KEY", "") or "not-needed",
         )
     return _LLM_CLIENT
 
@@ -227,7 +227,7 @@ def _get_vision_client() -> OpenAI:
     if _VISION_CLIENT is None:
         _VISION_CLIENT = OpenAI(
             base_url=env("VISION_BASE_URL", env("LLM_BASE_URL", "http://localhost:8080/v1")),
-            api_key="not-needed",
+            api_key=env("VISION_API_KEY", "") or env("LLM_API_KEY", "") or "not-needed",
         )
     return _VISION_CLIENT
 
