@@ -309,9 +309,10 @@ class AikoSpeak:
         self._playing   = threading.Event()
         self._stop_flag = threading.Event()
         self._silent    = silent
-        with silent_stderr():
-            import sounddevice as _sd
-            self._sd = _sd                 # eagerly loaded to avoid curses fd conflict
+        # Lazy PortAudio init via _load_sd() (text mode never pays for it).
+        # NOTE: an older revision loaded sounddevice eagerly here to dodge a
+        # curses fd conflict; current boot has no curses UI, so lazy is safe.
+        self._sd = None
         self._token_buf: list[str] = []        # accumulate feed() tokens
         self._stream_chunks: list[str] = []
         self._stream_queue = None
@@ -329,6 +330,13 @@ class AikoSpeak:
         self.karaoke_text = os.getenv("KARAOKE_TEXT", "0").lower() in {
             "1", "true", "yes", "on",
         }
+        # Owner uid captured on the caller's thread for notice-bus pushes.
+        # Worker threads don't inherit contextvars, so _synthesize failures
+        # inside _speech_stream_worker would otherwise key by guest/env.
+        self._notice_uid: str | None = None
+        # Persistent HTTP session for MioTTS (keep-alive: one TCP handshake
+        # per process instead of per 280-char chunk).
+        self._http_session = None
 
         # ── remote audio sink (WebUI) ────────────────────────────────────
         # If set, _play_wav_bytes() also hands each synthesized WAV chunk to
@@ -465,17 +473,32 @@ class AikoSpeak:
 
     # ── synthesis ─────────────────────────────────────────────────────────────
 
+    def _http(self):
+        """Lazy persistent session (HTTP keep-alive) for MioTTS calls."""
+        if self._http_session is None:
+            import requests
+            from requests.adapters import HTTPAdapter
+            session = requests.Session()
+            session.mount("http://", HTTPAdapter(pool_connections=2, pool_maxsize=4))
+            session.mount("https://", HTTPAdapter(pool_connections=2, pool_maxsize=4))
+            self._http_session = session
+        return self._http_session
+
     def _synthesize(self, text: str) -> bytes | None:
         """
         POST to MioTTS /mio/tts and return raw WAV bytes.
         Returns None on failure.
+
+        NOTE on the temp file: the server replies with a server-side
+        output_file path on the shared local disk, so the read+unlink
+        round-trip is inherent to this API (no inline-audio mode) — the
+        per-chunk saving here is TCP keep-alive via _http(), not disk I/O.
         """
         import json
-        import urllib.request
         if len(text) > 300:
             log.warning(f"[speak] truncating oversized TTS chunk: {len(text)} chars")
             text = text[:300]
-        
+
         payload_data = {
             "text": text,
             "reference_key": MIOTTS_PRESET,
@@ -491,33 +514,29 @@ class AikoSpeak:
                 payload_data["volume"] = round(self._speech_volume, 3)
             if abs(self._speech_pitch) > 0.01:
                 payload_data["pitch"] = round(self._speech_pitch, 3)
-        payload = json.dumps(payload_data).encode()
-        
-        req = urllib.request.Request(
-            f"{MIOTTS_API_URL}/mio/tts",
-            data=payload,
-            headers={"Content-Type": "application/json"},
-            method="POST",
-        )
+
         timeout = 60 if MIOTTS_BEST_OF_N_ENABLED else 30
         try:
-            with urllib.request.urlopen(req, timeout=timeout) as r:
-                body = json.loads(r.read())
-                if "output_file" not in body:
-                    log.error(f"[speak] unexpected TTS response keys: {list(body.keys())}")
-                    return None
-                # Read the WAV file that was written
-                wav_path = body["output_file"]
-                with open(wav_path, 'rb') as f:
-                    wav_bytes = f.read()
-                # Clean up temp file
-                try:
-                    os.remove(wav_path)
-                except Exception as e:
-                    log.warning(f"[speak] failed to delete temp file {wav_path}: {e}")
-                return wav_bytes
+            r = self._http().post(f"{MIOTTS_API_URL}/mio/tts", json=payload_data, timeout=timeout)
+            r.raise_for_status()
+            body = r.json()
+            if "output_file" not in body:
+                log.error(f"[speak] unexpected TTS response keys: {list(body.keys())}")
+                self._push_notice("TTS", "voice synthesis failed — continuing in text")
+                return None
+            # Read the WAV file that was written
+            wav_path = body["output_file"]
+            with open(wav_path, 'rb') as f:
+                wav_bytes = f.read()
+            # Clean up temp file
+            try:
+                os.remove(wav_path)
+            except Exception as e:
+                log.warning(f"[speak] failed to delete temp file {wav_path}: {e}")
+            return wav_bytes
         except Exception as e:
             log.error(f"[speak] synthesis error: {e}")
+            self._push_notice("TTS", "voice synthesis failed — continuing in text")
             return None
 
     @staticmethod
@@ -828,11 +847,29 @@ class AikoSpeak:
 
     # ── public api ────────────────────────────────────────────────────────────
 
+    def _capture_notice_uid(self) -> None:
+        try:
+            from system.userspace import current_user_id
+            self._notice_uid = current_user_id()
+        except Exception:
+            pass
+
+    def _push_notice(self, area: str, brief: str) -> None:
+        """Push a one-line notice; never raises (bus must not break audio)."""
+        try:
+            from system.notice import get_notice_bus
+            from system.userspace import current_user_id
+            uid = self._notice_uid or current_user_id()
+            get_notice_bus(uid).push(area, brief)
+        except Exception:
+            pass
+
     def speak(self, text: str) -> bool:
         """Synthesize a complete string, non-blocking. Caller prints to console."""
         clean = extract_dialogue_for_tts(text)
         if not clean:
             return False
+        self._capture_notice_uid()
         self.stop()
         self._first_audio_fired.clear()
         self._playing.set()
@@ -852,6 +889,7 @@ class AikoSpeak:
         clean = extract_dialogue_for_tts(text)
         if not clean:
             return False
+        self._capture_notice_uid()
         self.stop()
         self._first_audio_fired.clear()
         self._playing.set()
@@ -865,6 +903,11 @@ class AikoSpeak:
         """Accumulate a token for deferred synthesis."""
         if token:
             self._token_buf.append(token)
+            # Drop-oldest cap: a producer outpacing play_async can't grow
+            # this without bound on long sessions.
+            total = sum(len(t) for t in self._token_buf)
+            while total > 4000 and len(self._token_buf) > 1:
+                total -= len(self._token_buf.pop(0))
 
     def play_async(self) -> None:
         """Synthesize and play all buffered tokens, then clear the buffer."""
@@ -872,6 +915,7 @@ class AikoSpeak:
         self._token_buf.clear()
         if not text:
             return
+        self._capture_notice_uid()
         self.stop()
         self._first_audio_fired.clear()
         self._playing.set()
@@ -886,6 +930,7 @@ class AikoSpeak:
         text = extract_dialogue_for_tts("".join(tokens))
         if not text:
             return
+        self._capture_notice_uid()
         self.stop()
         self._first_audio_fired.clear()
         self._playing.set()
@@ -894,6 +939,7 @@ class AikoSpeak:
 
     def start_speech_stream(self, on_word=None) -> None:
         """Start sentence-level TTS playback for one streamed response."""
+        self._capture_notice_uid()
         self.stop()
         self._first_audio_fired.clear()
         with self._lock:
@@ -916,6 +962,9 @@ class AikoSpeak:
         with self._lock:
             if self._streaming_active:
                 self._stream_chunks.append(text)
+                total = sum(len(c) for c in self._stream_chunks)
+                while total > 4000 and len(self._stream_chunks) > 1:
+                    total -= len(self._stream_chunks.pop(0))
                 if self._stream_queue is not None:
                     self._stream_queue.put(text)
 
@@ -963,11 +1012,14 @@ class AikoSpeak:
         if stream_queue is not None:
             stream_queue.put(None)
 
-        try:
-            sd = self._load_sd()
-            sd.stop()
-        except Exception:
-            log.warning("speak: sd.stop() failed in stop_stream")
+        # Skip ALSA probe entirely when audio was never initialized
+        # (e.g. text-mode sessions): nothing is playing, so nothing to stop.
+        if self._sd is not None:
+            try:
+                sd = self._load_sd()
+                sd.stop()
+            except Exception:
+                log.warning("speak: sd.stop() failed in stop_stream")
 
         if self._stream_thread is not None:
             if self._stream_thread.is_alive():

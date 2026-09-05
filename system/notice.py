@@ -25,10 +25,10 @@ Rules of thumb for callers:
 - drain() is destructive by design — notices don't haunt future turns.
 
 Usage:
-    from system.notice_bus import get_notice_bus
+    from system.notice import get_notice_bus
 
     bus = get_notice_bus(session_id)
-    bus.push("TTS", f"synthesis failed: {e}")
+    bus.push("TTS", "synthesis failed (timeout)")
 
     # in orchestrate, before calling the LLM for this turn:
     notes = bus.drain()

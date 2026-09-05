@@ -142,7 +142,7 @@ EMC_CONTEXT_CHARS = max(100, env_int("EMC_CONTEXT_CHARS", 600))
 EMC_CONTEXT_EPISODE_CHARS = max(40, env_int("EMC_CONTEXT_EPISODE_CHARS", 280))
 EMC_JOINT_BUDGET = env_bool("EMC_JOINT_BUDGET", "1")
 EMC_RECALL_CACHE_SIZE = max(1, env_int("EMC_RECALL_CACHE_SIZE", 128))
-EMC_RECALL_CACHE_TTL = max(1.0, env_float("EMC_RECALL_CACHE_TTL", 20.0))
+EMC_RECALL_CACHE_TTL = max(1.0, env_float("EMC_RECALL_CACHE_TTL", 300.0))
 
 # EMC-4: dream distillation
 EMC_DREAM_ENABLED = env_bool("EMC_DREAM_ENABLED", "1")
@@ -1181,6 +1181,18 @@ class EpisodicMemory:
                 log.debug("episode store init failed: %s", e)
                 return None
             self._stores[uid] = store
+            # LRU-cap: close+evict oldest past 8 users so a multi-user LAN
+            # box can't accumulate open SQLite handles without bound.
+            # (close_all already clears on switch_user; this covers the
+            # concurrent-users case that never switches.)
+            while len(self._stores) > 8:
+                oldest = next(iter(self._stores))
+                if oldest == uid:
+                    break
+                try:
+                    self._stores.pop(oldest).close()
+                except Exception:
+                    self._stores.pop(oldest, None)
             return store
 
     def queue_episode(

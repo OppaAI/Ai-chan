@@ -33,6 +33,7 @@ from collections import OrderedDict
 import threading
 
 from system.log import get_logger
+from system.config import env_float
 from system.userspace import current_user_id, user_state_path
 from cognition.memory.vecstore import (
     HarrierEmbedder,
@@ -301,7 +302,7 @@ def _embed_and_insert(conn: sqlite3.Connection, pending: list[tuple[str,str,int,
 
 _SEARCH_CACHE: OrderedDict[tuple[str,str,int], tuple[float, list[dict]]] = OrderedDict()
 _CACHE_LOCK = threading.RLock()
-_CACHE_TTL = 20.0
+_CACHE_TTL = env_float("CODEBASE_CACHE_TTL", 300.0)
 _CACHE_MAX = 64
 
 def _knn(conn, query: str, embedder, uid: str, limit: int):

@@ -26,6 +26,7 @@ import numpy as np
 import requests
 
 from system.secure import connect_sqlite
+from system.config import env_float, env_int
 from system.userspace import current_user_id, user_state_path
 from system.log import get_logger
 
@@ -39,9 +40,9 @@ log = get_logger(__name__)
 
 _EMBED_BASE_URL   = os.getenv("EMBED_BASE_URL", "http://127.0.0.1:8080")
 _EMBED_MODEL      = os.getenv("EMBED_MODEL", "harrier")
-_EMBED_DIMS       = int(os.getenv("EMBED_DIMS", "640"))
-_BATCH_SIZE       = int(os.getenv("EMBED_BATCH_SIZE", "32"))
-_EMBED_TIMEOUT    = float(os.getenv("EMBED_TIMEOUT_S", "30"))
+_EMBED_DIMS       = env_int("EMBED_DIMS", 640)
+_BATCH_SIZE       = env_int("EMBED_BATCH_SIZE", 32)
+_EMBED_TIMEOUT    = env_float("EMBED_TIMEOUT_S", 30)
 _QUERY_INSTRUCT   = os.getenv(
     "EMBED_QUERY_INSTRUCT",
     "Retrieve relevant memories that answer the query",
@@ -49,8 +50,8 @@ _QUERY_INSTRUCT   = os.getenv(
 
 # vec0 MATCH KNN oversampling — see user_scoped_vec_knn. Defaults mirror the
 # memory-domain constants in cognition.memory.schema.
-KNN_MATCH_OVERSCAN = int(os.getenv("KNN_MATCH_OVERSCAN", "16"))
-KNN_MATCH_K_MIN = int(os.getenv("KNN_MATCH_K_MIN", "32"))
+KNN_MATCH_OVERSCAN = env_int("KNN_MATCH_OVERSCAN", 16)
+KNN_MATCH_K_MIN = env_int("KNN_MATCH_K_MIN", 32)
 
 
 class HarrierEmbedder:
@@ -71,7 +72,11 @@ class HarrierEmbedder:
     """
 
     _CACHE_MAX: int = 256
-    _CACHE_TTL: float = 30.0  # seconds
+    # Nano default 300s: same greeting/query must not re-embed after 30s.
+    # Override with EMBED_CACHE_TTL seconds when needed.
+    _CACHE_TTL: float = env_float("EMBED_CACHE_TTL", 300.0)
+    _DISK_CACHE_MAX: int = 2048  # cap on in-RAM disk-cache entries
+    _DISK_CACHE_FILE_MAX_BYTES: int = 8 * 1024 * 1024  # compact JSONL past this
 
     def __init__(
         self,
@@ -114,7 +119,12 @@ class HarrierEmbedder:
         self._session.mount("https://", adapter)
 
     def _load_disk_cache(self) -> None:
-        """Load embeddings from disk cache (JSON Lines format)."""
+        """Load embeddings from disk cache (JSON Lines format).
+
+        Keeps only the most recent _DISK_CACHE_MAX entries — the file is
+        append-ordered, so the tail wins and a stale 100k-line cache from
+        before the cap can't OOM the Nano on boot.
+        """
         if not self._disk_cache_path or not self._disk_cache_path.exists():
             return
         try:
@@ -133,6 +143,10 @@ class HarrierEmbedder:
                     except Exception:
                         continue
             log.info(f"Loaded {len(self._disk_cache)} embeddings from disk cache: {self._disk_cache_path}")
+            if len(self._disk_cache) > self._DISK_CACHE_MAX:
+                tail = list(self._disk_cache.items())[-self._DISK_CACHE_MAX:]
+                self._disk_cache = dict(tail)
+                log.info(f"Trimmed disk embedding cache to {len(self._disk_cache)} most-recent entries")
         except Exception as e:
             log.warning(f"Failed to load disk embedding cache: {e}")
 
@@ -145,8 +159,28 @@ class HarrierEmbedder:
             entry = {"texts": list(key), "vector": vec.tolist()}
             with open(self._disk_cache_path, "a", encoding="utf-8") as f:
                 f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+            self._maybe_compact_disk_cache()
         except Exception as e:
             log.debug(f"Failed to write disk embedding cache: {e}")
+
+    def _maybe_compact_disk_cache(self) -> None:
+        """Rewrite an overgrown JSONL cache from the capped in-RAM dict."""
+        try:
+            if not self._disk_cache_path or not self._disk_cache_path.exists():
+                return
+            if self._disk_cache_path.stat().st_size <= self._DISK_CACHE_FILE_MAX_BYTES:
+                return
+            import json
+            with self._disk_cache_lock:
+                entries = list(self._disk_cache.items())
+            tmp = self._disk_cache_path.with_suffix(".tmp")
+            with open(tmp, "w", encoding="utf-8") as f:
+                for key, vec in entries:
+                    f.write(json.dumps({"texts": list(key), "vector": np.asarray(vec).tolist()}, ensure_ascii=False) + "\n")
+            tmp.replace(self._disk_cache_path)
+            log.info(f"Compacted disk embedding cache to {len(entries)} entries")
+        except Exception as e:
+            log.debug(f"Disk embedding cache compaction skipped: {e}")
 
     def _embed_texts(self, texts: list[str]) -> np.ndarray:
         """
@@ -200,7 +234,9 @@ class HarrierEmbedder:
         norms = np.where(norms == 0, 1.0, norms)
         result = arr / norms
 
-        # Store in both caches
+        # Store in both caches (both capped LRU-style). The disk-cache dict
+        # mutation holds the lock; the file append below takes it again
+        # briefly inside _maybe_compact_disk_cache, so it must run outside.
         with self._cache_lock:
             self._cache[key] = (now, result)
             while len(self._cache) > self._CACHE_MAX:
@@ -208,7 +244,9 @@ class HarrierEmbedder:
 
         with self._disk_cache_lock:
             self._disk_cache[key] = result
-            self._save_to_disk_cache(key, result)
+            while len(self._disk_cache) > self._DISK_CACHE_MAX:
+                self._disk_cache.popitem(next(iter(self._disk_cache)))
+        self._save_to_disk_cache(key, result)
 
         return result
 

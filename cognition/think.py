@@ -452,6 +452,20 @@ def _extract_search_results_block(system_prompt: str) -> str:
 
 # ── think ─────────────────────────────────────────────────────────────────────
 
+def _format_system_notices(system_note: str | None) -> str:
+    """Format drained notice-bus lines as an ephemeral system-prompt block."""
+    if not system_note or not system_note.strip():
+        return ""
+    return (
+        "<system_notices>\n"
+        "Ephemeral subsystem status for this turn (already handled — "
+        "acknowledge briefly only if the user notices something wrong, "
+        "otherwise ignore):\n"
+        f"{system_note.strip()}\n"
+        "</system_notices>"
+    )
+
+
 class AikoThink:
     def __init__(self) -> None:
         self._client    = OpenAI(base_url=LLM_BASE_URL, api_key=os.getenv("LLM_API_KEY", "") or "not-needed")
@@ -617,7 +631,7 @@ class AikoThink:
 
     # ── public api ────────────────────────────────────────────────────────────
 
-    def route(self, user_input: str, token_callback=None) -> str:
+    def route(self, user_input: str, token_callback=None, system_note: str | None = None) -> str:
         """Main entry point. Quaternary routing.
 
         Intent is resolved before memory/KB recall. Greeting-only turns are
@@ -701,6 +715,7 @@ class AikoThink:
                     _skip_search=True,
                     skip_memory=True,
                     store_turn=False,
+                    system_note=system_note,
                 )
 
             # Reuse the embedding computed during intent routing as the memory
@@ -727,7 +742,7 @@ class AikoThink:
                     outputs={"handler": "agentic_chat", "vector_reused": route_vec is not None},
                     factors=["agentic_score >= 0.78 and gap >= min_gap"],
                 )
-                return self.agentic_chat(user_input, token_callback=token_callback, mem_kb_future=mem_kb_future, query_vec=query_vec, _from_route=True)
+                return self.agentic_chat(user_input, token_callback=token_callback, mem_kb_future=mem_kb_future, query_vec=query_vec, _from_route=True, system_note=system_note)
             if intent == "webchat":
                 _brain_trace.record_step(
                     "think.route",
@@ -736,7 +751,7 @@ class AikoThink:
                     outputs={"handler": "webchat", "vector_reused": route_vec is not None},
                     factors=["webchat_score >= 0.72 and gap >= min_gap"],
                 )
-                return self.webchat(user_input, token_callback=token_callback, mem_kb_future=mem_kb_future, query_vec=query_vec)
+                return self.webchat(user_input, token_callback=token_callback, mem_kb_future=mem_kb_future, query_vec=query_vec, system_note=system_note)
             _brain_trace.record_step(
                 "think.route",
                 layer="route",
@@ -744,7 +759,7 @@ class AikoThink:
                 outputs={"handler": "chat", "vector_reused": route_vec is not None, "mem_kb_future_started": mem_kb_future is not None},
                 factors=["no label cleared greeting/agentic/webchat thresholds"],
             )
-            return self.chat(user_input, token_callback=token_callback, _skip_search=True, mem_kb_future=mem_kb_future, query_vec=query_vec)
+            return self.chat(user_input, token_callback=token_callback, _skip_search=True, mem_kb_future=mem_kb_future, query_vec=query_vec, system_note=system_note)
         finally:
             try:
                 from cognition.attention import for_identity
@@ -1207,7 +1222,7 @@ class AikoThink:
             store_turn=True,
         )
 
-    def agentic_chat(self, user_input: str, token_callback=None, mem_kb_future=None, query_vec: np.ndarray | None = None, _from_route: bool = False) -> str:
+    def agentic_chat(self, user_input: str, token_callback=None, mem_kb_future=None, query_vec: np.ndarray | None = None, _from_route: bool = False, system_note: str | None = None) -> str:
         """Delegate task-mode execution to agentic.agentic.
 
         Runs a bounded self-assessment gate first (attention.should_attempt).
@@ -1248,6 +1263,11 @@ class AikoThink:
                 user_input,
                 instruct="Which capability/tool domain applies to this task?",
             ) if embedder is not None else None
+            if system_note and system_note.strip():
+                # Agentic prompt plumbing lives in run_agentic_chat; carry the
+                # notices as marked situational context so drained notes are
+                # never silently dropped on tool turns.
+                user_input = f"{user_input}\n\n[{_format_system_notices(system_note)}]"
             response = run_agentic_chat(self, user_input, token_callback=token_callback, mem_kb_future=mem_kb_future, query_vec=query_vec, cap_vec=cap_vec)
             return response
         finally:
@@ -1263,7 +1283,7 @@ class AikoThink:
                 if not self._active_user_ids:
                     self._last_chat_time = time.time()
 
-    def webchat(self, user_input: str, token_callback=None, mem_kb_future=None, query_vec: np.ndarray | None = None) -> str:
+    def webchat(self, user_input: str, token_callback=None, mem_kb_future=None, query_vec: np.ndarray | None = None, system_note: str | None = None) -> str:
         """Web-aware chat: web_search + optional webfetch fallback."""
         # Guard: experience-sharing narration must never be answered from
         # search results ("Answer ONLY using these results" would discard
@@ -1271,7 +1291,7 @@ class AikoThink:
         # memory recall and turn writeback intact.
         if _is_personal_sharing(user_input):
             log.info("[route] webchat override -> chat (personal sharing)")
-            return self.chat(user_input, token_callback=token_callback, mem_kb_future=mem_kb_future, query_vec=query_vec)
+            return self.chat(user_input, token_callback=token_callback, mem_kb_future=mem_kb_future, query_vec=query_vec, system_note=system_note)
         speak = self._get_speak()
         if speak and speak.is_playing():
             speak.stop()
@@ -1306,6 +1326,9 @@ class AikoThink:
         if metacognitive_block:
             system = f"{system}\n\n{metacognitive_block}"
         system = f"{system}\n\n{knowledge_block}"
+        notices_block = _format_system_notices(system_note)
+        if notices_block:
+            system = f"{system}\n\n{notices_block}"
 
         # Search directly with the raw user input — same approach as /web.
         # No LLM-based query condensation: it adds latency, depends on a
@@ -1514,6 +1537,7 @@ class AikoThink:
         store_turn: bool = True,
         query_vec: np.ndarray | None = None,
         websearch_net: bool = True,
+        system_note: str | None = None,
     ) -> str:
         """Standard chat: persona plus optional memory/KB context."""
         speak = self._get_speak()
@@ -1611,6 +1635,9 @@ class AikoThink:
                     pass
 
             volatile_system = f"{volatile_system}\n\n{bioclock.current_datetime_block()}".strip()
+            notices_block = _format_system_notices(system_note)
+            if notices_block:
+                volatile_system = f"{volatile_system}\n\n{notices_block}"
 
             llm_prompt = user_input
             if self._reasoning:

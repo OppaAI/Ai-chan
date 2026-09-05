@@ -526,6 +526,14 @@ class AikoWeb:
             with self._clients_lock:
                 self._clients.discard(ws)
                 self._client_users.pop(ws, None)
+            try:
+                # Ephemeral per-user notices must not leak into the next
+                # login on a shared box. Other browsers of the same user
+                # keep working — their next failure simply re-pushes.
+                from system.notice import drop_session
+                drop_session(uid)
+            except Exception:
+                pass
             log.info("[aiko-web] browser disconnected (total=%d)", len(self._clients))
             if not self._clients:
                 self._did_barge_in = False

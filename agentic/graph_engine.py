@@ -1988,13 +1988,19 @@ def _score_goal_achievement(goal: str, results: tuple[NodeResult, ...],
         reasons.append(f"failed_nodes:{len(failed)}")
         scores.append(-0.2 * len(failed))
 
-    # 4. Optional semantic check via embedder
+    # 4. Optional semantic check via embedder (one batched HTTP call for
+    # both texts, not two serial round-trips).
     if embedder is not None:
         try:
             import numpy as np
             from cognition import reason
-            gv = reason.normalize_vec(np.asarray(embedder.embed_query(goal), dtype=np.float32))
-            cv = reason.normalize_vec(np.asarray(embedder.embed_query(final_content[:500]), dtype=np.float32))
+            batch = reason.embed_batch_or_none(embedder, [goal, final_content[:500]])
+            if batch is not None and len(batch) == 2:
+                gv = reason.normalize_vec(batch[0])
+                cv = reason.normalize_vec(batch[1])
+            else:
+                gv = reason.normalize_vec(np.asarray(embedder.embed_query(goal), dtype=np.float32))
+                cv = reason.normalize_vec(np.asarray(embedder.embed_query(final_content[:500]), dtype=np.float32))
             cos = float(np.dot(gv, cv))
             if cos >= 0.6:
                 reasons.append(f"semantic:{cos:.2f}")

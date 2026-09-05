@@ -504,7 +504,22 @@ def _score_and_store_page(
     use_embedder: bool,
     store: _ScratchStore,
 ) -> None:
-    for chunk in reason.chunk_text(text, DEEP_STUDY_CHUNK_CHARS):
+    chunks = reason.chunk_text(text, DEEP_STUDY_CHUNK_CHARS)
+    if use_embedder and chunks:
+        # One batched HTTP call for all chunks (not one per chunk).
+        batch = reason.embed_batch_or_none(embedder, chunks)
+        if batch is not None and len(batch) == len(chunks):
+            for chunk, chunk_hash, vec in zip(chunks, (_hash_chunk(c) for c in chunks), batch):
+                store.save_chunk(url, chunk, chunk_hash, list(vec), query)
+            return
+        try:
+            vecs = [embedder.embed_query(c) for c in chunks]
+        except Exception:
+            vecs = [None] * len(chunks)
+        for chunk, vec in zip(chunks, vecs):
+            store.save_chunk(url, chunk, _hash_chunk(chunk), list(vec) if vec is not None else None, query)
+        return
+    for chunk in chunks:
         chunk_hash = _hash_chunk(chunk)
         embedding = None
         if use_embedder:
@@ -548,15 +563,37 @@ def _distill(
             use_embedder = False
 
     scored: list[tuple[float, str, str]] = []
-    for url, chunk, embedding in all_chunks:
-        if use_embedder and topic_vec is not None and embedding is not None:
+    if use_embedder and topic_vec is not None:
+        # One vectorized matmul for all chunks (same cosine math as _cosine
+        # below, via reason.batch_cosine_scores) instead of a Python loop.
+        idx, vecs = [], []
+        for i, (url, chunk, embedding) in enumerate(all_chunks):
+            if embedding is not None:
+                idx.append(i)
+                vecs.append(embedding)
+        batch_scores: dict[int, float] = {}
+        if vecs:
             try:
-                score = _cosine(topic_vec, embedding)
+                import numpy as np
+                mat = np.asarray(vecs, dtype=np.float32)
+                for j, s in enumerate(reason.batch_cosine_scores(np.asarray(topic_vec, dtype=np.float32), mat)):
+                    batch_scores[idx[j]] = float(s)
             except Exception:
-                score = reason.keyword_overlap_score(topic, chunk)
-        else:
-            score = reason.keyword_overlap_score(topic, chunk)
-        scored.append((score, url, chunk))
+                batch_scores = {}
+        for i, (url, chunk, embedding) in enumerate(all_chunks):
+            if i in batch_scores:
+                scored.append((batch_scores[i], url, chunk))
+            elif use_embedder and topic_vec is not None and embedding is not None:
+                try:
+                    score = _cosine(topic_vec, embedding)
+                except Exception:
+                    score = reason.keyword_overlap_score(topic, chunk)
+                scored.append((score, url, chunk))
+            else:
+                scored.append((reason.keyword_overlap_score(topic, chunk), url, chunk))
+    else:
+        for url, chunk, _embedding in all_chunks:
+            scored.append((reason.keyword_overlap_score(topic, chunk), url, chunk))
 
     ranked = sorted(
         (item for item in scored if item[0] >= min_score),

@@ -2,10 +2,10 @@
 """Practice and promote schema-driven graph workflows without booting the chat LLM.
 
 Examples:
-  uv run python practice.py --task "make a deployment checklist and save it" \
+  uv run python -m agentic.practice --task "make a deployment checklist and save it" \
     --tools create_checklist save_note --promote
 
-  uv run python practice.py --task "research X and save a note" \
+  uv run python -m agentic.practice --task "research X and save a note" \
     --steps '[{"tool":"deep_search","ok":true,"args":{"query":"$prompt"}},{"tool":"save_note","ok":true,"args":{"title":"$title","content":"$result:step_1"}}]' \
     --promote
 """
@@ -13,7 +13,13 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
+from pathlib import Path
 from typing import Any
+
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
 from system.config import load_config
 load_config()

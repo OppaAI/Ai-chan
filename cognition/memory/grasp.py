@@ -543,6 +543,13 @@ def get_live_buffer(identity: str | None = None) -> GraspBuffer:
     with _lock:
         if ident not in _buffers:
             _buffers[ident] = build_grasp(on_evict=lambda turn, _id=ident: _on_evict(_id, turn))
+            # LRU-cap past 8 identities; evicted buffers are simply dropped
+            # (their turns already published via _on_evict on overflow).
+            while len(_buffers) > 8:
+                oldest = next(iter(_buffers))
+                if oldest == ident:
+                    break
+                _buffers.pop(oldest, None)
         return _buffers[ident]
 
 

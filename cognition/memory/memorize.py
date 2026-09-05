@@ -2674,6 +2674,11 @@ class AikoMemorize:
                 ], user_id=user_id, display_name=display_name)
             except Exception as e:
                 log.error(f"Async memory write failed: {e}")
+                try:
+                    from system.notice import get_notice_bus
+                    get_notice_bus(user_id).push("memory", "background memory save failed — chat unaffected")
+                except Exception:
+                    pass
             finally:
                 self._write_queue.task_done()
 

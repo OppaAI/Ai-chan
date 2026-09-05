@@ -30,6 +30,7 @@ from typing import Protocol
 import numpy as np
 
 from system.log import get_logger
+from system.config import env_int
 
 log = get_logger(__name__)
 
@@ -55,9 +56,17 @@ class Embedder(Protocol):
     def embed_queries(self, texts: list[str], instruct: str = "") -> object: ...
 
 
-_EMBED_QUERY_CACHE_MAX = int(os.getenv("EMBED_QUERY_CACHE_MAX", "1024"))
+_EMBED_QUERY_CACHE_MAX = env_int("EMBED_QUERY_CACHE_MAX", 1024)
+# Keys are sha256(text, instruct): holding full 1500-char texts x1024 in
+# keys alone costs ~1.5MB of strings on the Nano for zero benefit.
 _embed_query_cache: "OrderedDict[tuple[str, str], np.ndarray]" = OrderedDict()
 _embed_query_cache_lock = threading.Lock()
+
+def _cache_key(text: str, instruct: str) -> tuple[str, str]:
+    return (
+        hashlib.sha256(text.encode("utf-8", errors="replace")).hexdigest(),
+        hashlib.sha256(instruct.encode("utf-8", errors="replace")).hexdigest(),
+    )
 
 def cached_embed_query(embedder, text: str, instruct: str = "") -> np.ndarray:
     """Embed one piece of text, reusing a prior vector for the exact same
@@ -65,7 +74,7 @@ def cached_embed_query(embedder, text: str, instruct: str = "") -> np.ndarray:
     for embedder.embed_query(text, instruct=instruct) at any call site that
     might see repeated text (system prompts, persona blocks, recurring
     queries) across different call sites/modules."""
-    key = (text, instruct)
+    key = _cache_key(text, instruct)
     with _embed_query_cache_lock:
         cached = _embed_query_cache.get(key)
         if cached is not None:

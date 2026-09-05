@@ -123,14 +123,9 @@ Known architectural limitation (audit item #7, not fixed here):
 """
 from __future__ import annotations
 
-import onnxruntime as _ort
-if hasattr(_ort, "set_default_logger_severity"):
-    _ort.set_default_logger_severity(3)
-
 from functools import lru_cache
-from huggingface_hub import hf_hub_download
 from system.config import env_float, env_int
-from system.userspace import user_state_path
+from system.userspace import current_user_id, user_state_path
 import json
 import logging as _logging
 import numpy as np
@@ -139,7 +134,28 @@ import re
 
 log = _logging.getLogger(__name__)
 
-import sherpa_onnx
+# Heavy voice runtime (onnxruntime CUDA libs ~160MB, sherpa_onnx, HF hub)
+# loads lazily via _ensure_runtime() on first model load — importing this
+# module (e.g. --text mode, boot labels) must stay cheap.
+_ort = None               # onnxruntime module, once loaded
+sherpa_onnx = None        # sherpa_onnx module, once loaded
+hf_hub_download = None    # huggingface_hub downloader, once loaded
+
+
+def _ensure_runtime() -> None:
+    """Import the voice runtime on first model load. Idempotent."""
+    global _ort, sherpa_onnx, hf_hub_download
+    if sherpa_onnx is not None and hf_hub_download is not None:
+        return
+    import onnxruntime as _ort_mod
+    if hasattr(_ort_mod, "set_default_logger_severity"):
+        _ort_mod.set_default_logger_severity(3)
+    from huggingface_hub import hf_hub_download as _hfd
+    import sherpa_onnx as _sh
+    _logging.getLogger("sherpa_onnx").setLevel(_logging.ERROR)
+    _ort, sherpa_onnx, hf_hub_download = _ort_mod, _sh, _hfd
+
+
 import threading
 import time
 import warnings
@@ -156,7 +172,6 @@ except ImportError:
     _WakeWordModel = None  # acoustic wake engine unavailable — falls back to fuzzy ASR-text matching
 
 warnings.filterwarnings("ignore")
-_logging.getLogger("sherpa_onnx").setLevel(_logging.ERROR)
 
 # ── boot labels ───────────────────────────────────────────────────────────────
 
@@ -356,6 +371,7 @@ def _resolve_sense_voice_files() -> tuple[str, str]:
     Set HF_HUB_OFFLINE=1 to prevent network access and serve from cache only.
     Override the repo with ASR_MODEL in .env to swap models without code changes.
     """
+    _ensure_runtime()
     model_path  = hf_hub_download(repo_id=ASR_MODEL, filename="model.int8.onnx")
     tokens_path = hf_hub_download(repo_id=ASR_MODEL, filename="tokens.txt")
     return model_path, tokens_path
@@ -371,6 +387,7 @@ def _resolve_silero_vad_file() -> str:
     file the sherpa-onnx project's own README points at via a GitHub release
     asset (github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/silero_vad.onnx).
     """
+    _ensure_runtime()
     return hf_hub_download(repo_id="csukuangfj/vad", filename="silero_vad.onnx")
 
 
@@ -392,6 +409,7 @@ def _build_vad(threshold: float) -> sherpa_onnx.VoiceActivityDetector:
     responsibility instead of layering two independent hangover mechanisms
     on top of each other.
     """
+    _ensure_runtime()
     min_dur_s = _CHUNK_MS_ACTUAL / 1000.0
     config = sherpa_onnx.VadModelConfig()
     config.silero_vad.model               = _resolve_silero_vad_file()
@@ -521,7 +539,7 @@ class AikoListen:
     Staged init:
         listen = AikoListen()    # no heavy loading
         listen.load_asr()        # loads the SenseVoice model
-        listen.load_vad()        # loads Silero VAD (x2, see _vad_model/_barge_vad_model) + kicks off warmup thread
+        listen.load_vad()        # loads Silero VAD + kicks off warmup thread (barge detector builds lazily iff enabled)
         listen.load_wakeword()   # loads acoustic wake model if configured (no-op otherwise — see module docstring)
         listen.load_speaker_id() # loads embedding model + enrolled vector (no-op if disabled)
         listen.join_warmup()     # blocks until warmup completes
@@ -619,9 +637,22 @@ class AikoListen:
 
     def load_vad(self) -> None:
         self._vad_model       = _build_vad(VAD_THRESHOLD)
-        self._barge_vad_model = _build_vad(BARGE_IN_THRESHOLD)
+        # Barge detector is built lazily by _ensure_barge_vad() on first
+        # enabled barge-in use — BARGE_IN_ENABLED=0 (default) never pays
+        # for the second 30s-buffer instance.
         self._warmup_thread = threading.Thread(target=self._warmup, daemon=True)
         self._warmup_thread.start()
+
+    def _ensure_barge_vad(self) -> bool:
+        """Build the barge-in VAD on first enabled use. False on failure."""
+        if self._barge_vad_model is not None:
+            return True
+        try:
+            self._barge_vad_model = _build_vad(BARGE_IN_THRESHOLD)
+            return True
+        except Exception as e:
+            log.warning("[listen] barge VAD build failed: %s", e)
+            return False
 
     def load_wakeword(self) -> None:
         """
@@ -679,6 +710,7 @@ class AikoListen:
                 f"is missing or invalid ({SPEAKER_MODEL_PATH!r}); verification disabled."
             )
             return
+        _ensure_runtime()
         enroll_path = self.speaker_enroll_path()
         if not os.path.isfile(enroll_path):
             log.warning(
@@ -833,6 +865,9 @@ class AikoListen:
 
         while self._barge_in_active:
             if not barge_in_enabled():
+                time.sleep(0.5)
+                continue
+            if not self._ensure_barge_vad():
                 time.sleep(0.5)
                 continue
 
@@ -1247,15 +1282,23 @@ class AikoListen:
         if self._model is None:
             log.warning("listen: _transcribe called but ASR model is not loaded — returning empty text")
             return ""
-        with self._lock:
-            stream = self._model.create_stream()
-            stream.accept_waveform(SAMPLE_RATE, audio)
-            self._model.decode_stream(stream)  # decode_stream in sherpa-onnx >= 1.13.3
-            result = stream.result
-            text   = result.text.strip()
-            # SenseVoice prepends language/emotion tags like <|en|><|NEUTRAL|><|Speech|><|withitn|>
-            # Strip them for clean output
-            text = re.sub(r'<\|[^|]+\|>', '', text).strip()
+        try:
+            with self._lock:
+                stream = self._model.create_stream()
+                stream.accept_waveform(SAMPLE_RATE, audio)
+                self._model.decode_stream(stream)  # decode_stream in sherpa-onnx >= 1.13.3
+                result = stream.result
+                text   = result.text.strip()
+                # SenseVoice prepends language/emotion tags like <|en|><|NEUTRAL|><|Speech|><|withitn|>
+                # Strip them for clean output
+                text = re.sub(r'<\|[^|]+\|>', '', text).strip()
+        except Exception:
+            try:
+                from system.notice import get_notice_bus
+                get_notice_bus(current_user_id()).push("ASR", "voice transcription failed — please repeat or type instead")
+            except Exception:
+                pass
+            raise
 
         try:
             return correct_asr_text(text)
@@ -1276,9 +1319,12 @@ class AikoListen:
 
             warm_chunk = np.zeros(_CHUNK_SAMPLES_VAD, dtype=np.float32)
             self._is_speech(self._vad_model, warm_chunk)
-            self._is_speech(self._barge_vad_model, warm_chunk)
             self._vad_model.reset()
-            self._barge_vad_model.reset()
+            # Warm the barge detector only when barge-in is enabled —
+            # otherwise it stays unbuilt (see _ensure_barge_vad).
+            if barge_in_enabled() and self._ensure_barge_vad():
+                self._is_speech(self._barge_vad_model, warm_chunk)
+                self._barge_vad_model.reset()
 
             if self._wake_model is not None:
                 self._score_wake(warm_chunk)

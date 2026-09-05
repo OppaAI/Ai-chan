@@ -520,7 +520,13 @@ async def logout(request: Request):
     if cookie_value:
         try:
             session_id = signer.loads(cookie_value, max_age=SESSION_MAX_AGE_SECONDS)
-            sessions.pop(session_id, None)
+            session = sessions.pop(session_id, None)
+            if session:
+                try:
+                    from system.notice import drop_session
+                    drop_session(session.get("user_id", ""))
+                except Exception:
+                    pass
         except (BadSignature, SignatureExpired):
             log.debug("auth: session cookie invalid/expired, nothing to clean up")
     response = RedirectResponse(url="/")

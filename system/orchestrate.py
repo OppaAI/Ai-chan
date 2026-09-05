@@ -1519,6 +1519,17 @@ def run_session(ui, args) -> None:
                 memorize.switch_user(turn_uid)
             last_bound_uid = turn_uid
 
+        # Drain per-user runtime notices (TTS/ASR/memory failures) so the
+        # LLM can acknowledge them this turn. Destructive by design — if a
+        # soft gate below answers without the LLM, the notes are dropped
+        # (the underlying failure will re-push next turn if it persists).
+        try:
+            from system.notice import get_notice_bus
+            _drained = get_notice_bus(turn_uid).drain()
+        except Exception:
+            _drained = []
+        system_note = "\n".join(f"[system notice] {n}" for n in _drained) if _drained else None
+
         current_latency = {
             "mode": "voice" if (listen and asr_enabled and voice_info) else "text",
             "submitted_at": time.monotonic(),
@@ -1555,7 +1566,7 @@ def run_session(ui, args) -> None:
             speak.reset_synth_timer()
 
         try:
-            reply_text = think.route(user_input, token_callback=token_cb)
+            reply_text = think.route(user_input, token_callback=token_cb, system_note=system_note)
             last_turn = (user_input, reply_text or "")
             current_latency["assistant_done_at"] = time.monotonic()
 
