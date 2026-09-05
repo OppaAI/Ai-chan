@@ -5,6 +5,7 @@ Best-effort: uses registered tools when present; never raises to callers.
 
 from __future__ import annotations
 
+import asyncio
 import inspect
 import json
 import logging
@@ -60,15 +61,19 @@ def notify_email(subject: str, body: str, *, to: str | None = None) -> dict[str,
 
             if inspect.iscoroutinefunction(spec.handler):
                 try:
-                    import asyncio
-                    loop = asyncio.get_running_loop()
-                    import concurrent.futures
-                    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-                        future = pool.submit(lambda: asyncio.run(spec.handler(**args)))
-                        result = future.result(timeout=60)
+                    asyncio.get_running_loop()
                 except RuntimeError:
-                    import asyncio
+                    # No running loop: safe to use asyncio.run
                     result = asyncio.run(spec.handler(**args))
+                else:
+                    # Already in a loop: isolate in a dedicated thread
+                    import concurrent.futures
+
+                    def _run_isolated():  # type: ignore[no-untyped-def]
+                        return asyncio.run(spec.handler(**args))
+
+                    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+                        result = pool.submit(_run_isolated).result(timeout=60)
             else:
                 result = spec.handler(**args)
             if isinstance(result, dict):
@@ -123,15 +128,19 @@ def maybe_post_threads(
 
             if inspect.iscoroutinefunction(spec.handler):
                 try:
-                    import asyncio
-                    loop = asyncio.get_running_loop()
-                    import concurrent.futures
-                    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-                        future = pool.submit(lambda: asyncio.run(spec.handler(**args)))
-                        result = future.result(timeout=60)
+                    asyncio.get_running_loop()
                 except RuntimeError:
-                    import asyncio
+                    # No running loop: safe to use asyncio.run
                     result = asyncio.run(spec.handler(**args))
+                else:
+                    # Already in a loop: isolate in a dedicated thread
+                    import concurrent.futures
+
+                    def _run_isolated():  # type: ignore[no-untyped-def]
+                        return asyncio.run(spec.handler(**args))
+
+                    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+                        result = pool.submit(_run_isolated).result(timeout=60)
             else:
                 result = spec.handler(**args)
             # Check if handler returned a dict with ok field (Finding 5)

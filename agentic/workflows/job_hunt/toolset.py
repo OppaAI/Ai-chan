@@ -25,6 +25,7 @@ Config: agentic/workflows/job_hunt/config.json (or per-user override / env).
 
 from __future__ import annotations
 
+import asyncio
 import concurrent.futures
 import email.utils
 import html
@@ -1258,15 +1259,19 @@ def _read_email_messages(max_results: int, folder: str = "inbox", unread: bool =
         kwargs = dict(max_results=max_results, folder=folder, unread=unread)
         if inspect.iscoroutinefunction(spec.handler):
             try:
-                import asyncio
-                loop = asyncio.get_running_loop()
-                import concurrent.futures
-                with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-                    future = pool.submit(lambda: asyncio.run(spec.handler(**kwargs)))
-                    result = future.result(timeout=60)
+                asyncio.get_running_loop()
             except RuntimeError:
-                import asyncio
+                # No running loop: safe to use asyncio.run
                 result = asyncio.run(spec.handler(**kwargs))
+            else:
+                # Already in a loop: isolate in a dedicated thread
+                import concurrent.futures
+
+                def _run_isolated():  # type: ignore[no-untyped-def]
+                    return asyncio.run(spec.handler(**kwargs))
+
+                with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+                    result = pool.submit(_run_isolated).result(timeout=60)
         else:
             result = spec.handler(**kwargs)
 

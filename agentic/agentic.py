@@ -521,9 +521,17 @@ def _context_embedder(owner_or_ctx):
 AGENT_TRACE_MAX_BYTES = int(os.getenv("AGENT_TRACE_MAX_BYTES", "1048576"))
 AGENT_TRACE_MAX_FILES = int(os.getenv("AGENT_TRACE_MAX_FILES", "50"))
 
+import threading
+import time
+
+# Buffer for batched agentic trace writes
+_trace_buffer: list[dict] = []
+_trace_buffer_lock = threading.RLock()  # Use RLock to allow reentrant flush from same thread
+_TRACE_FLUSH_INTERVAL = 5.0  # flush every 5 seconds
+_trace_last_flush = time.time()
+
 
 def _trim_trace_dir(trace_dir: Path) -> None:
-    files = sorted(trace_dir.glob("*.jsonl*"), key=lambda path: path.stat().st_mtime, reverse=True)
     for old in files[AGENT_TRACE_MAX_FILES:]:
         try:
             old.unlink()
@@ -531,18 +539,47 @@ def _trim_trace_dir(trace_dir: Path) -> None:
             log.debug("agentic: failed to unlink old trace file")
 
 
+def _flush_trace_buffer() -> None:
+    """Flush the trace buffer to disk."""
+    global _trace_last_flush
+    with _trace_buffer_lock:
+        if not _trace_buffer:
+            return
+        # Group by (user_id, run_id) to write to correct files
+        by_path: dict[Path, list[dict]] = {}
+        for rec in _trace_buffer:
+            uid = rec.get("user_id")
+            run_id = rec.get("run_id", "default")
+            trace_dir = user_state_dir(uid) / "agentic" / "traces"
+            trace_dir.mkdir(parents=True, exist_ok=True)
+            path = trace_dir / f"{run_id}.jsonl"
+            by_path.setdefault(path, []).append(rec)
+
+        for path, records in by_path.items():
+            try:
+                if path.exists() and path.stat().st_size >= AGENT_TRACE_MAX_BYTES:
+                    path.rename(path.parent / f"{path.stem}.{int(time.time())}.jsonl")
+                with path.open("a", encoding="utf-8") as f:
+                    for rec in records:
+                        f.write(json.dumps(rec, ensure_ascii=False, default=str) + "\n")
+            except Exception as exc:
+                log.debug("failed to flush agentic trace batch: %s", exc)
+
+        _trace_buffer.clear()
+        _trace_last_flush = time.time()
+
+
 def _append_step_trace(ctx: AgentContext | None, event: str, payload: dict[str, Any]) -> None:
     try:
-        trace_dir = user_state_dir(ctx.user_id if ctx else None) / "agentic" / "traces"
-        trace_dir.mkdir(parents=True, exist_ok=True)
-        run_id = (ctx.run_id if ctx and ctx.run_id else "default")
-        trace_path = trace_dir / f"{run_id}.jsonl"
-        if trace_path.exists() and trace_path.stat().st_size >= AGENT_TRACE_MAX_BYTES:
-            trace_path.rename(trace_dir / f"{run_id}.{int(time.time())}.jsonl")
-        _trim_trace_dir(trace_dir)
-        record = {"ts": time.time(), "event": event, "run_id": run_id, **payload}
-        with trace_path.open("a", encoding="utf-8") as f:
-            f.write(json.dumps(record, ensure_ascii=False, default=str) + "\n")
+        record = {"ts": time.time(), "event": event, "run_id": ctx.run_id if ctx and ctx.run_id else "default", **payload}
+        if ctx and ctx.user_id:
+            record["user_id"] = ctx.user_id
+        flush_immediately = event in ("approval", "approval_resume", "approval_wait", "checkpoint")
+        with _trace_buffer_lock:
+            _trace_buffer.append(record)
+            # Flush if interval exceeded or for critical events (approval, checkpoint)
+            if flush_immediately or time.time() - _trace_last_flush >= _TRACE_FLUSH_INTERVAL:
+                _flush_trace_buffer()
     except Exception as exc:  # pragma: no cover - tracing must never break tools
         log.debug("failed to append agentic trace: %s", exc)
 
@@ -2095,4 +2132,7 @@ def run_agentic_chat(owner, user_input: str, token_callback=None, mem_kb_future=
             owner._history = owner._history[-(AGENT_HISTORY_TURNS * 10):]
 
     owner._store_async(user_input, final_text)
+    _flush_trace_buffer()
+    from cognition.attention import flush_all_persist
+    flush_all_persist()
     return final_text

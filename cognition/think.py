@@ -1497,9 +1497,11 @@ class AikoThink:
             return response
         finally:
             with self._active_users_lock:
-                self._active_user_ids.discard(_SENTINEL)
+                self._active_user_ids.discard(user_id)
                 if not self._active_user_ids:
                     self._last_chat_time = time.time()
+        from cognition.attention import flush_all_persist
+        flush_all_persist()
 
     # ── proactive idle check-in loop ──────────────────────────────────────────
 

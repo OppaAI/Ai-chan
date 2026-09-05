@@ -2681,6 +2681,12 @@ class AikoMemorize:
                     pass
             finally:
                 self._write_queue.task_done()
+                # Periodic WAL checkpoint to prevent unbounded WAL growth
+                try:
+                    if self._conn:
+                        self._conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+                except Exception:
+                    pass
 
     def _wait_for_write_window(self, is_active_turn, idle_since) -> None:
         """Wait until the caller reports idle before running an extraction

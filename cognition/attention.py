@@ -48,6 +48,23 @@ EDGE_COGNITION_MAX_TURNS = max(1, env_int("EDGE_COGNITION_MAX_TURNS", 7))
 EDGE_COGNITION_MAX_CHARS = max(240, env_int("EDGE_COGNITION_MAX_CHARS", 1200))
 EDGE_COGNITION_MAX_OPEN_LOOPS = max(1, env_int("EDGE_COGNITION_MAX_OPEN_LOOPS", 3))
 EDGE_COGNITION_MAX_GOALS = max(1, env_int("EDGE_COGNITION_MAX_GOALS", 5))
+
+# Debounced persist: buffer state changes and flush at run-end or after idle period
+_persist_timer: threading.Timer | None = None
+_persist_pending: set[str] = set()  # identities that need persisting
+_persist_lock = threading.Lock()
+
+
+def _flush_persist_pending() -> None:
+    """Flush all pending identity persists."""
+    global _persist_timer
+    with _persist_lock:
+        _persist_timer = None
+        pending = list(_persist_pending)
+        _persist_pending.clear()
+    for ident in pending:
+        state = for_identity(ident)
+        state._do_persist()
 EDGE_COGNITION_MAX_IDENTITIES = max(1, env_int("EDGE_COGNITION_MAX_IDENTITIES", 16))
 EDGE_COGNITION_MAX_LESSON_EVIDENCE = 64
 
@@ -1281,7 +1298,23 @@ class EdgeCognitiveState:
             self._persistent_loaded = True
 
     def persist(self) -> None:
-        """Save bounded state to SQLite. Engram backup."""
+        """Queue bounded state for debounced SQLite save. Engram backup.
+
+        Writes are debounced and batched at run-end or after a short idle
+        period to avoid per-tool-call disk I/O on the hot path.
+        """
+        if not EDGE_COGNITION_PERSIST or not self._identity or self._identity == "default":
+            return
+        with _persist_lock:
+            _persist_pending.add(self._identity)
+            if _persist_timer is not None:
+                _persist_timer.cancel()
+            _persist_timer = threading.Timer(2.0, _flush_persist_pending)
+            _persist_timer.daemon = True
+            _persist_timer.start()
+
+    def _do_persist(self) -> None:
+        """Actual persistence write (called by timer flush)."""
         if not EDGE_COGNITION_PERSIST or not self._identity or self._identity == "default":
             return
         try:
@@ -1762,6 +1795,11 @@ class EdgeCognitiveState:
 
 _states: OrderedDict[str, EdgeCognitiveState] = OrderedDict()
 _states_lock = threading.Lock()
+
+
+def flush_all_persist() -> None:
+    """Explicitly flush all pending persists (call at run-end)."""
+    _flush_persist_pending()
 
 
 def for_identity(identity: str) -> EdgeCognitiveState:

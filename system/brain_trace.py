@@ -91,6 +91,7 @@ _SENTINEL = "🧠"  # visible marker for the trace header line
 
 _lock = threading.Lock()
 _steps: deque[dict] = deque(maxlen=2000)   # in-memory ring buffer for the session
+_pending_file_steps: list[dict] = []        # buffered steps for batched file writes
 _ui_sink = None                # injected by main.py → ui.add_message("sys", ...)
 _file_handle = None            # opened lazily on first record
 _session_id: str = ""           # YYYYMMDD-HHMMSS for the report file name
@@ -210,9 +211,13 @@ def end_turn() -> None:
     if not TRACE_ENABLED or _turn_started_at is None:
         return
     elapsed_ms = int((time.monotonic() - _turn_started_at) * 1000)
-    _emit(f"{_SENTINEL}  ── turn #{_turn_counter} done in {elapsed_ms} ms ──", _HEADER)
-    _file_handle and _file_handle.write("\n")
+    banner = (
+        f"{_SENTINEL}  ── turn #{_turn_counter} done in {elapsed_ms} ms ──"
+    )
+    _emit(banner, _HEADER)
+    _emit("")  # blank line separator
     _turn_started_at = None
+    flush()
 
 
 def record_step(
@@ -325,15 +330,15 @@ class _StepCtx:
 # ── internal rendering ───────────────────────────────────────────────────────
 
 def _emit(text: str, color: str = "") -> None:
-    """Push a line to the file (always) and the UI sink (if configured)."""
-    fh = _ensure_file()
-    if fh:
-        fh.write(text + "\n")
+    """Push a line to the UI sink (if configured) and buffer for file."""
     if TRACE_UI_ENABLED and _ui_sink is not None:
         try:
             _ui_sink.add_message("sys", _c(color, text) if color else text)
         except Exception:
             pass
+    # Buffer for batched file write
+    with _lock:
+        _pending_file_steps.append(text)
 
 
 def _format_kv(label: str, value: Any, color: str) -> str:
@@ -386,8 +391,23 @@ def reset() -> None:
         _steps.clear()
 
 
+def flush() -> None:
+    """Flush buffered trace lines to the trace file."""
+    if not TRACE_ENABLED:
+        return
+    fh = _ensure_file()
+    if not fh:
+        return
+    with _lock:
+        for line in _pending_file_steps:
+            fh.write(line + "\n")
+        _pending_file_steps.clear()
+    fh.flush()
+
+
 def shutdown() -> None:
     global _file_handle
+    flush()
     if _file_handle is not None:
         try:
             _file_handle.write(f"\n=== trace closed {datetime.now().isoformat()} ===\n")
