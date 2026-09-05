@@ -129,6 +129,7 @@ if hasattr(_ort, "set_default_logger_severity"):
 
 from functools import lru_cache
 from huggingface_hub import hf_hub_download
+from system.config import env_float, env_int
 from system.userspace import user_state_path
 import json
 import logging as _logging
@@ -173,8 +174,8 @@ BOOT_LABELS = {
 
 ASR_DEVICE      = os.getenv("ASR_DEVICE", "cpu")       # resolved from config/sensory.yaml via load_config()
 ASR_LANGUAGE    = os.getenv("ASR_LANGUAGE", "auto")    # auto, zh, en, ja, ko, yue, nospeech
-ASR_NUM_THREADS = int(os.getenv("ASR_NUM_THREADS", "4"))
-LISTEN_DEVICE   = int(os.getenv("LISTEN_DEVICE", "-1"))  # sounddevice input index; -1 = default
+ASR_NUM_THREADS = env_int("ASR_NUM_THREADS", 4)
+LISTEN_DEVICE   = env_int("LISTEN_DEVICE", -1)  # sounddevice input index; -1 = default
 
 # HuggingFace repo — model.int8.onnx + tokens.txt downloaded on first use
 ASR_MODEL = os.getenv(
@@ -197,15 +198,15 @@ ASR_MODEL = os.getenv(
 
 SAMPLE_RATE         = 16000                                          # ASR + Silero target
 
-CHUNK_DURATION_MS   = int(os.getenv("LISTEN_CHUNK_MS",         30))  # Silero minimum
-VAD_THRESHOLD       = float(os.getenv("LISTEN_VAD_THRESHOLD", 0.5))  # Silero speech prob cutoff
-SILENCE_CHUNKS      = int(os.getenv("LISTEN_SILENCE_CHUNKS",   66))  # matches config/sensory.yaml default
-MIN_SPEECH_CHUNKS   = int(os.getenv("LISTEN_MIN_CHUNKS",       10))
-MAX_RECORD_SECONDS  = int(os.getenv("LISTEN_MAX_SECONDS",      30))
+CHUNK_DURATION_MS   = env_int("LISTEN_CHUNK_MS",         30)  # Silero minimum
+VAD_THRESHOLD       = env_float("LISTEN_VAD_THRESHOLD", 0.5)  # Silero speech prob cutoff
+SILENCE_CHUNKS      = env_int("LISTEN_SILENCE_CHUNKS",   66)  # matches config/sensory.yaml default
+MIN_SPEECH_CHUNKS   = env_int("LISTEN_MIN_CHUNKS",       10)
+MAX_RECORD_SECONDS  = env_int("LISTEN_MAX_SECONDS",      30)
 
-BARGE_IN_THRESHOLD     = float(os.getenv("BARGE_IN_THRESHOLD",     "0.95"))  # matches config/sensory.yaml default
-BARGE_IN_CONFIRM       = int(os.getenv("BARGE_IN_CONFIRM_CHUNKS",  "4"))     # matches config/sensory.yaml default
-BARGE_IN_COOLDOWN_MS   = int(os.getenv("BARGE_IN_COOLDOWN_MS",     "800"))
+BARGE_IN_THRESHOLD     = env_float("BARGE_IN_THRESHOLD",     0.95)  # matches config/sensory.yaml default
+BARGE_IN_CONFIRM       = env_int("BARGE_IN_CONFIRM_CHUNKS",  4)     # matches config/sensory.yaml default
+BARGE_IN_COOLDOWN_MS   = env_int("BARGE_IN_COOLDOWN_MS",     800)
 # BARGE_IN_ALWAYS_ON is intentionally NOT cached here — see barge_in_always_on()
 # below. It must be read live, like BARGE_IN_ENABLED and SPEAKER_VERIFY_GATE,
 # so it can be toggled at runtime without a process restart.
@@ -216,8 +217,8 @@ BARGE_IN_COOLDOWN_MS   = int(os.getenv("BARGE_IN_COOLDOWN_MS",     "800"))
 
 SPEAKER_VERIFY_ENABLED   = os.getenv("SPEAKER_VERIFY_ENABLED", "0").lower() in {"1", "true", "yes", "on"}
 SPEAKER_MODEL_PATH       = os.path.expanduser(os.getenv("SPEAKER_MODEL_PATH", ""))            # path to embedding .onnx
-SPEAKER_VERIFY_THRESHOLD = float(os.getenv("SPEAKER_VERIFY_THRESHOLD", "0.5"))  # cosine sim cutoff
-SPEAKER_NUM_THREADS      = int(os.getenv("SPEAKER_NUM_THREADS", "1"))
+SPEAKER_VERIFY_THRESHOLD = env_float("SPEAKER_VERIFY_THRESHOLD", 0.5)  # cosine sim cutoff
+SPEAKER_NUM_THREADS      = env_int("SPEAKER_NUM_THREADS", 1)
 
 # ── wake word / trigger phrase config ────────────────────────────────────────
 # WAKE_WORD: "" disables wake-word gating entirely (Aiko responds to every
@@ -225,7 +226,7 @@ SPEAKER_NUM_THREADS      = int(os.getenv("SPEAKER_NUM_THREADS", "1"))
 #   normal English word) so matching is fuzzy, not exact-substring.
 WAKE_WORD             = os.getenv("WAKE_WORD", "").strip().lower()
 WAKE_WORD_ALIASES     = [w.strip().lower() for w in os.getenv("WAKE_WORD_ALIASES", "").split("|") if w.strip()]
-WAKE_FUZZY_THRESHOLD  = float(os.getenv("WAKE_FUZZY_THRESHOLD", "70"))
+WAKE_FUZZY_THRESHOLD  = env_float("WAKE_FUZZY_THRESHOLD", 70)
 
 # Acoustic wake engine (livekit-wakeword) — used instead of the fuzzy
 # ASR-text engine above when a trained model is configured and available.

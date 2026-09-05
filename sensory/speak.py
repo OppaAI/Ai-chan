@@ -33,6 +33,7 @@ import threading
 import argparse
 import unicodedata
 import queue
+from system.config import env_float, env_int
 from system.log import get_logger, silent_stderr
 
 log = get_logger(__name__)
@@ -49,16 +50,16 @@ BOOT_LABELS = {
 
 MIOTTS_API_URL = os.getenv("MIOTTS_API_URL",  "http://localhost:8001")
 MIOTTS_PRESET  = os.getenv("MIOTTS_PRESET",   "jp_female")
-MIOTTS_DEVICE  = int(os.getenv("MIOTTS_DEVICE", "-1"))
+MIOTTS_DEVICE  = env_int("MIOTTS_DEVICE", -1)
 
-MIOTTS_MAX_TOKENS         = int(os.getenv("MIOTTS_MAX_TOKENS", "300"))
-MIOTTS_TEMPERATURE        = float(os.getenv("MIOTTS_TEMPERATURE", "0.8"))
-MIOTTS_TOP_P              = float(os.getenv("MIOTTS_TOP_P", "1.0"))
-MIOTTS_REPETITION_PENALTY = float(os.getenv("MIOTTS_REPETITION_PENALTY", "1.15"))
-MIOTTS_PRESENCE_PENALTY   = float(os.getenv("MIOTTS_PRESENCE_PENALTY", "0.0"))
-MIOTTS_FREQUENCY_PENALTY  = float(os.getenv("MIOTTS_FREQUENCY_PENALTY", "0.0"))
+MIOTTS_MAX_TOKENS         = env_int("MIOTTS_MAX_TOKENS", 300)
+MIOTTS_TEMPERATURE        = env_float("MIOTTS_TEMPERATURE", 0.8)
+MIOTTS_TOP_P              = env_float("MIOTTS_TOP_P", 1.0)
+MIOTTS_REPETITION_PENALTY = env_float("MIOTTS_REPETITION_PENALTY", 1.15)
+MIOTTS_PRESENCE_PENALTY   = env_float("MIOTTS_PRESENCE_PENALTY", 0.0)
+MIOTTS_FREQUENCY_PENALTY  = env_float("MIOTTS_FREQUENCY_PENALTY", 0.0)
 MIOTTS_BEST_OF_N_ENABLED  = os.getenv("MIOTTS_BEST_OF_N_ENABLED", "false").lower() in {"1", "true", "yes", "on"}
-MIOTTS_BEST_OF_N          = int(os.getenv("MIOTTS_BEST_OF_N", "2"))
+MIOTTS_BEST_OF_N          = env_int("MIOTTS_BEST_OF_N", 2)
 
 # ── text sanitization ─────────────────────────────────────────────────────────
 
@@ -345,6 +346,10 @@ class AikoSpeak:
 
         if not silent:
             log.info(f"[speak] MioTTS ready | url: {MIOTTS_API_URL} | preset: {MIOTTS_PRESET}")
+
+    def set_karaoke_enabled(self, enabled: bool) -> None:
+        """Runtime toggle for karaoke text pacing (e.g. /karaoke command)."""
+        self.karaoke_text = bool(enabled)
 
     def set_speech_rate(self, rate: float) -> None:
         """Set a bounded optional synthesis speed for the next utterances."""
@@ -709,11 +714,25 @@ class AikoSpeak:
         if not words:
             return
         if duration <= 0:
-            # couldn't determine audio length — just emit immediately
+            # TTS failed or WAV unreadable — fall back to estimated pacing
+            # (instead of instant burst) so karaoke text still types at a
+            # readable rate while silent. Keeps UI usable during MioTTS OOM.
+            try:
+                fallback_wps = float(os.getenv("KARAOKE_FALLBACK_WPS", "2.6"))
+            except (TypeError, ValueError):
+                fallback_wps = 2.6
+            fallback_wps = max(0.5, min(10.0, fallback_wps))
+            log.warning("[speak] karaoke duration=0, fallback pacing %.1f wps for %d words",
+                        fallback_wps, len(words))
+            start = time.monotonic()
             for i, word in enumerate(words):
+                if self._stop_flag.is_set():
+                    break
                 self._emit_viseme(self._viseme_for_word(word), 0.85)
                 if on_word:
                     on_word(word if i == 0 else " " + word)
+                if i + 1 < len(words):
+                    time.sleep(1.0 / fallback_wps)
             self._emit_viseme("A", 0.0)
             return
 
@@ -955,7 +974,8 @@ class AikoSpeak:
                 self._stream_thread.join(timeout=2.0)
             self._stream_thread = None
 
-        while self.is_playing():
+        deadline = time.monotonic() + 2.0
+        while self.is_playing() and time.monotonic() < deadline:
             time.sleep(0.02)
 
 

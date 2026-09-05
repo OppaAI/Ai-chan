@@ -91,6 +91,7 @@ from typing import Any, Callable
 import fcntl
 
 from system import bioclock
+from system.config import env_int
 from system.log import get_logger
 from system.turngate import AIKO_BUSY_LOCK
 from system.userspace import (
@@ -173,15 +174,15 @@ def schedule_graphs_path(user_id: str | None = None) -> Path:
     return user_state_path("tasks/schedule_graphs.json", user_id=user_id).resolve()
 
 # System job timing — env overridable, not user-modifiable via schedule.json
-DAILY_JOB_HOUR   = int(os.getenv("DAILY_JOB_HOUR",   "0"))
-DAILY_JOB_MINUTE = int(os.getenv("DAILY_JOB_MINUTE", "0"))
-MONTHLY_JOB_HOUR   = int(os.getenv("MONTHLY_JOB_HOUR",   "0"))
-MONTHLY_JOB_MINUTE = int(os.getenv("MONTHLY_JOB_MINUTE", "5"))
+DAILY_JOB_HOUR   = env_int("DAILY_JOB_HOUR",   0)
+DAILY_JOB_MINUTE = env_int("DAILY_JOB_MINUTE", 0)
+MONTHLY_JOB_HOUR   = env_int("MONTHLY_JOB_HOUR",   0)
+MONTHLY_JOB_MINUTE = env_int("MONTHLY_JOB_MINUTE", 5)
 
 # How many days back to scan for missed daily_reflect_and_dream runs on
 # scheduler startup. Bounded so a long outage doesn't trigger an unbounded
 # GitHub API scan or an unbounded backfill run.
-CATCHUP_MAX_LOOKBACK_DAYS = int(os.getenv("CATCHUP_MAX_LOOKBACK_DAYS", "7"))
+CATCHUP_MAX_LOOKBACK_DAYS = env_int("CATCHUP_MAX_LOOKBACK_DAYS", 7)
 
 # Filename for the small local state file tracking the last month
 # monthly_consolidate actually completed. It belongs with the user memory DB.

@@ -47,12 +47,14 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from system.config import env_int
+
 # ── configuration ────────────────────────────────────────────────────────────
 
 TRACE_ENABLED = os.getenv("AIKO_TRACE_BRAIN", "0").lower() in {"1", "true", "yes", "on"}
 TRACE_FILE_PATH = os.getenv("AIKO_TRACE_FILE", "")  # default: /tmp/aiko_trace_<ts>.txt
 TRACE_UI_ENABLED = os.getenv("AIKO_TRACE_UI", "1").lower() in {"1", "true", "yes", "on"}
-TRACE_MAX_VALUE_CHARS = int(os.getenv("AIKO_TRACE_MAX_VALUE_CHARS", "400"))
+TRACE_MAX_VALUE_CHARS = env_int("AIKO_TRACE_MAX_VALUE_CHARS", 400)
 
 # ── ANSI colours ──────────────────────────────────────────────────────────────
 # Distinct color per layer so the eye can group steps in the live stream.

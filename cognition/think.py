@@ -390,8 +390,12 @@ def _play_beep() -> None:
 _EXAMPLES_PATH = Path(__file__).resolve().parent.parent / "agentic" / "router" / "intent_prompts.json"
 
 def _load_route_examples(*, include_greeting: bool = True) -> dict:
-    with open(_EXAMPLES_PATH, encoding="utf-8") as f:
-        data = json.load(f)
+    try:
+        with open(_EXAMPLES_PATH, encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, ValueError) as e:
+        log.warning("[route] examples missing/unreadable at %s: %s", _EXAMPLES_PATH, e)
+        return {}
     raw = dict(data.get("quaternary") or data.get("ternary") or {})
     if not include_greeting:
         raw.pop("greeting", None)
@@ -1983,8 +1987,17 @@ class AikoThink:
                 if emit and speak and token:
                     sentence_buffer += token
                     sentences, sentence_buffer = split_stream_sentences(sentence_buffer)
-                    # Buffer TTS sentences for feeding only after stream success
-                    tts_sentence_buffer.extend(sentences)
+                    if karaoke_text:
+                        # Karaoke: feed sentences to TTS immediately so voice
+                        # starts while the LLM is still streaming (overlap
+                        # hides TTS synth latency). Worker paces on_word
+                        # callbacks to real audio duration.
+                        for sentence in sentences:
+                            speak.feed_speech_stream(sentence)
+                    else:
+                        # Non-karaoke: buffer TTS sentences for feeding only
+                        # after stream success (avoid partial audio on failure).
+                        tts_sentence_buffer.extend(sentences)
 
             text = "".join(full_response).strip()
             if text:
@@ -2039,7 +2052,11 @@ class AikoThink:
                         if emit and speak and token:
                             sentence_buffer += token
                             sentences, sentence_buffer = split_stream_sentences(sentence_buffer)
-                            tts_sentence_buffer.extend(sentences)
+                            if karaoke_text:
+                                for sentence in sentences:
+                                    speak.feed_speech_stream(sentence)
+                            else:
+                                tts_sentence_buffer.extend(sentences)
                     text2 = "".join(full_response).strip()
                     if text2:
                         self.last_usage["completion_text"] = text2
