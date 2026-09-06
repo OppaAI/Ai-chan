@@ -84,5 +84,5 @@ SOCIAL_MCP_DB_PATH: ""
 AIKO_MESSENGER_ADAPTERS: "discord,telegram"
 
 # -- Vision model (photo captioning) --
-VISION_MODEL: "minicpm-v"
+VISION_MODEL: "ministral"
 VISION_BASE_URL: ""

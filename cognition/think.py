@@ -1497,11 +1497,14 @@ class AikoThink:
             return response
         finally:
             with self._active_users_lock:
-                self._active_user_ids.discard(user_id)
+                self._active_user_ids.discard(_SENTINEL)
                 if not self._active_user_ids:
                     self._last_chat_time = time.time()
-        from cognition.attention import flush_all_persist
-        flush_all_persist()
+            try:
+                from cognition.attention import flush_all_persist
+                flush_all_persist()
+            except Exception:
+                log.debug("proactive_checkin: flush_all_persist failed", exc_info=True)
 
     # ── proactive idle check-in loop ──────────────────────────────────────────
 

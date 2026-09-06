@@ -47,10 +47,13 @@ _MONTHLY_FACTS_SYSTEM = textwrap.dedent("""
     - Each fact must be self-contained and short, third person, about {USER_ID}.
 
     Return ONLY a JSON array. Prefer objects with provenance:
-      [{"fact": "...", "source_ids": ["id1", "id2"]}, ...]
+      [{{"fact": "...", "source_ids": ["id1", "id2"]}}, ...]
     source_ids must be ids from the input lines (id=...). Many sources may map
     to one fact. Plain string arrays are accepted only as a degraded fallback.
     No markdown, no explanation.
+    (Note: doubled braces above are str.format escaping for the literal JSON
+    example — without them .format() raises KeyError: '"fact"'. See Sep-2026
+    monthly_consolidate outage.)
 """).strip()
 
 _MONTHLY_FACTS_USER = textwrap.dedent("""

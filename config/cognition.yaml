@@ -17,7 +17,7 @@ LLM_API_KEY: ""
 # -- WebUI camera vision --
 # The camera button sends one in-memory JPEG to this OpenAI-compatible vision
 # endpoint. Leave the URL blank to use VISION_BASE_URL, then LLM_BASE_URL.
-WEBUI_VISION_MODEL: "minicpm-v"
+WEBUI_VISION_MODEL: "ministral"
 WEBUI_VISION_BASE_URL: ""
 WEBUI_VISION_TIMEOUT: "60"
 # Optional override for vision requests; blank falls back to LLM_API_KEY, then

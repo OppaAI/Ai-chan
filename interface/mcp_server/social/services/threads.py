@@ -1,4 +1,5 @@
 import base64
+import logging
 import mimetypes
 import json
 import os
@@ -39,6 +40,8 @@ except ModuleNotFoundError:
 
 _LLM_CLIENT: OpenAI | None = None
 _VISION_CLIENT: OpenAI | None = None
+
+log = logging.getLogger(__name__)
 
 _SECRET_ASSIGNMENT_RE = re.compile(
     r"(?i)\b(?:api[_ -]?key|access[_ -]?token|refresh[_ -]?token|password|passwd|secret|client[_ -]?secret)\b\s*[:=]\s*[^\s,;]+"
@@ -266,7 +269,7 @@ def _describe_image_url(url: str) -> str:
     if not data_uri:
         return ""
     try:
-        model = env("VISION_MODEL", env("REFLECT_VISION_MODEL", "minicpm-v"))
+        model = env("VISION_MODEL", env("REFLECT_VISION_MODEL", "ministral"))
         resp = _get_vision_client().chat.completions.create(
             model=model,
             messages=[{
@@ -458,6 +461,65 @@ def _threads_memory_context(text: str, memorize) -> str:
         return ""
 
 
+def _is_system_role_error(exc: Exception) -> bool:
+    """True when llama-server rejects the `system` role (Jinja chat-template 500).
+
+    Mirrors AikoThink._is_system_role_error: the chat template raises
+    "Only user, assistant and tool roles are supported, got system", which
+    surfaces as a 500 through the OpenAI-compatible endpoint.
+    """
+    msg = str(exc)
+    return (
+        "got system" in msg
+        or "Only user, assistant and tool roles ar" in msg
+        or ("raise_exception" in msg and "system" in msg)
+    )
+
+
+def _messages_without_system(messages: list[dict]) -> list[dict]:
+    """Merge system messages into the following user turn (multimodal-aware).
+
+    Same fallback as AikoThink._messages_without_system, extended for OpenAI
+    list content (text + image_url blocks): system text is prepended to the
+    first text block of the next user message so no prompt content is lost.
+    """
+    out: list[dict] = []
+    pending: list[str] = []
+    for m in messages:
+        role = m.get("role")
+        content = m.get("content")
+        if role == "system":
+            text = content if isinstance(content, str) else ""
+            if text.strip():
+                pending.append(text)
+            continue
+        if pending:
+            prefix = "\n\n".join(pending)
+            pending = []
+            if role == "user":
+                if isinstance(content, str):
+                    m = {"role": "user", "content": prefix + "\n\n" + content}
+                elif isinstance(content, list):
+                    content = [dict(b) for b in content]
+                    for b in content:
+                        if b.get("type") == "text":
+                            b["text"] = prefix + "\n\n" + (b.get("text") or "")
+                            break
+                    else:
+                        content.insert(0, {"type": "text", "text": prefix})
+                    m = {"role": "user", "content": content}
+                else:
+                    out.append({"role": "user", "content": prefix})
+            else:
+                out.append({"role": "user", "content": prefix})
+        out.append(m)
+    if pending:
+        out.append({"role": "user", "content": "\n\n".join(pending)})
+    if not out:
+        out = [{"role": "user", "content": "\n\n".join(pending)}]
+    return out
+
+
 def _infer_reply(reply: dict, conversation: list[dict], memory_saved: bool = False, memory_kind: str = "memory", research_context: str = "", image_prompt: str = "", memory_context: str = "") -> str:
     social = _redact_sensitive_text(_load_text(env("SOCIAL_PERSONA_PATH", "persona/SOCIAL.md")))
     language = _reply_language(reply.get("text") or "")
@@ -542,25 +604,37 @@ for example "*{_ai} considers the question.*". Do not use XML or colon labels.""
                 user_content.append({"type": "image_url", "image_url": {"url": data_uri}})
             multimodal_messages = [system_msg, {"role": "user", "content": user_content}]
     standard_messages = [system_msg, {"role": "user", "content": prompt}]
-    try:
-        if multimodal_messages:
-            response = _get_llm_client().chat.completions.create(
-                model=env("LLM_MODEL", "ministral"),
-                messages=multimodal_messages,
-                temperature=0.7,
-                max_tokens=180,
-                timeout=float(env("LLM_TIMEOUT", "30")),
-            )
-        else:
-            raise ValueError("No multimodal images")
-    except Exception:
-        response = _get_llm_client().chat.completions.create(
+    def _create(messages: list[dict]):
+        return _get_llm_client().chat.completions.create(
             model=env("LLM_MODEL", "ministral"),
-            messages=standard_messages,
+            messages=messages,
             temperature=0.7,
             max_tokens=180,
             timeout=float(env("LLM_TIMEOUT", "30")),
         )
+
+    def _create_without_system_on_role_error(messages: list[dict], label: str):
+        try:
+            return _create(messages)
+        except Exception as e:
+            if _is_system_role_error(e):
+                log.info("[threads] LLM rejects system role; retrying %s without it", label)
+                return _create(_messages_without_system(messages))
+            raise
+
+    try:
+        if not multimodal_messages:
+            raise ValueError("No multimodal images")
+        try:
+            response = _create(multimodal_messages)
+        except Exception as e:
+            if _is_system_role_error(e):
+                log.info("[threads] LLM rejects system role; retrying multimodal without it")
+                response = _create(_messages_without_system(multimodal_messages))
+            else:
+                raise
+    except Exception:
+        response = _create_without_system_on_role_error(standard_messages, "text-only")
     text = _normalize_public_reply(response.choices[0].message.content or "")
     if not text:
         raise RuntimeError("LLM returned an empty Threads reply")

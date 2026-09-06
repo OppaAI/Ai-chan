@@ -739,10 +739,10 @@ PHOTO_SOCIAL_INBOX = os.getenv("PHOTO_SOCIAL_INBOX", "photos/inbox")
 PHOTO_SOCIAL_MAX_ITEMS = _int_env("PHOTO_SOCIAL_MAX_ITEMS", 3)
 MAX_CAPTION_CHARS = _int_env("PHOTO_SOCIAL_MAX_CHARS", 260)
 
-# Vision model (captioning) — separate client/model from the text LLM above,
-# since captioning needs actual image understanding (e.g. MiniCPM-V), not
-# the text-only Ministral endpoint used for selection.
-VISION_MODEL = os.getenv("VISION_MODEL", os.getenv("REFLECT_VISION_MODEL", "minicpm-v"))
+# Vision model (captioning) — separate client/model from the text LLM above.
+# Defaults to the main ministral endpoint (Ministral 3 is multimodal), since
+# no dedicated vision model (e.g. MiniCPM-V) is currently deployed.
+VISION_MODEL = os.getenv("VISION_MODEL", os.getenv("REFLECT_VISION_MODEL", "ministral"))
 VISION_BASE_URL = os.getenv("VISION_BASE_URL", os.getenv("LLM_BASE_URL", "http://localhost:8080/v1"))
 _VISION_CLIENT = OpenAI(
     base_url=VISION_BASE_URL,

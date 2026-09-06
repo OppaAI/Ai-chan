@@ -566,7 +566,7 @@ class AikoWeb:
         """Ask the configured OpenAI-compatible vision model about a camera frame."""
         from openai import OpenAI
 
-        model = os.getenv("WEBUI_VISION_MODEL", os.getenv("VISION_MODEL", "minicpm-v"))
+        model = os.getenv("WEBUI_VISION_MODEL", os.getenv("VISION_MODEL", "ministral"))
         base_url = _vision_base_url()
         timeout = float(os.getenv("WEBUI_VISION_TIMEOUT", "60"))
         instruction = question or "Describe what you see in this camera image clearly and helpfully."

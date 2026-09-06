@@ -2361,6 +2361,14 @@ class AikoMemorize:
         """Proxy so direct AikoMemorize._search_top calls don't crash (owner is _MemoryBackend)."""
         return self._mem._search_top(*args, **kwargs)
 
+    def _insert_row(self, *args, **kwargs):  # type: ignore[override]
+        """Proxy so AikoMemorize._dream_schema's schema-gist insert doesn't crash (owner is _MemoryBackend)."""
+        return self._mem._insert_row(*args, **kwargs)
+
+    def _embed(self, *args, **kwargs):  # type: ignore[override]
+        """Proxy so AikoMemorize._dream_schema's gist embedding doesn't crash (owner is _MemoryBackend)."""
+        return self._mem._embed(*args, **kwargs)
+
     @property
     def _conn(self) -> sqlite3.Connection:
         """Single reach-through point into the backend's connection.
