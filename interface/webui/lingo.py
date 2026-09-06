@@ -255,15 +255,36 @@ async def conversation_respond(request: RespondRequest, session: dict = Depends(
             "Output ONLY valid JSON with keys: 'isCorrect', 'feedback', 'suggestion', 'japanese', 'english', 'finished'."
         )
 
-        # Build message list from history
+        # Build message list from history, ensuring roles alternate strictly (User -> Assistant -> User)
+        # and merging consecutive same-role messages to avoid LLM backend errors.
         messages = [{"role": "system", "content": system_prompt}]
+
+        pending_history = []
         if request.history:
             for entry in request.history:
                 role = "assistant" if entry.speaker == "aiko" else "user"
-                messages.append({"role": role, "content": entry.text})
+                if not pending_history:
+                    # First message after system SHOULD be User
+                    if role == "user":
+                        pending_history.append({"role": role, "content": entry.text})
+                    else:
+                        # If Aiko started, skip her first message or it would follow system directly
+                        continue
+                else:
+                    last = pending_history[-1]
+                    if last["role"] == role:
+                        # Merge consecutive same-role messages
+                        last["content"] += "\n" + entry.text
+                    else:
+                        pending_history.append({"role": role, "content": entry.text})
 
         # Add current user input
-        messages.append({"role": "user", "content": request.text})
+        if pending_history and pending_history[-1]["role"] == "user":
+            pending_history[-1]["content"] += "\n" + request.text
+        else:
+            pending_history.append({"role": "user", "content": request.text})
+
+        messages.extend(pending_history)
 
         response = think._client.chat.completions.create(
             model=think._llm_model,
