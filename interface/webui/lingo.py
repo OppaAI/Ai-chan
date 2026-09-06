@@ -134,16 +134,32 @@ def parse_lingo_json(content: str):
     # Post-process to ensure we don't have dicts where strings should be
     # (handles cases like {"japanese": {"message": "..."}} or {"japanese": {"greeting": "..."}})
     if isinstance(data, dict):
+        # Specific fix for 'translations' key in translate endpoint
+        if 'translations' in data and isinstance(data['translations'], list):
+            for i, item in enumerate(data['translations']):
+                if isinstance(item, dict):
+                    for k, v in item.items():
+                        if isinstance(v, dict):
+                            data['translations'][i][k] = str(list(v.values())[0]) if v else ""
+
         for key in list(data.keys()):
             val = data[key]
             if isinstance(val, dict):
                 # If it's a dict, try to find the first string value inside it
                 # This covers 'message', 'text', 'greeting', 'content', etc.
                 found_string = None
-                for sub_val in val.values():
-                    if isinstance(sub_val, str) and sub_val.strip():
-                        found_string = sub_val
+                # Priority keys
+                for p_key in ['text', 'message', 'japanese', 'english', 'feedback', 'suggestion']:
+                    if p_key in val and isinstance(val[p_key], str):
+                        found_string = val[p_key]
                         break
+
+                if not found_string:
+                    for sub_val in val.values():
+                        if isinstance(sub_val, str) and sub_val.strip():
+                            found_string = sub_val
+                            break
+
                 if found_string:
                     data[key] = found_string
                 elif len(val) == 1:
@@ -208,22 +224,39 @@ async def conversation_start(request: StartRequest, session: dict = Depends(get_
     try:
         system_prompt = (
             "You are Aiko, teaching Japanese through conversation. "
-            "Output ONLY valid JSON. Your response must be a JSON object with 'japanese' and 'english' keys."
+            "Output ONLY valid JSON. Your response must be a JSON object with 'japanese' and 'english' keys. "
+            "DO NOT include any text before or after the JSON block."
         )
-        user_prompt = f"Start a Japanese conversation at {request.level} level. Speak 1-3 sentences in Japanese."
-
-        response = think._client.chat.completions.create(
-            model=think._llm_model,
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt}
-            ],
-            response_format={"type": "json_object"},
-            timeout=120.0
+        user_prompt = (
+            f"Start a Japanese conversation at {request.level} level. Speak 1-3 sentences in Japanese. "
+            "Example response format: {\"japanese\": \"こんにちは、お元気ですか？\", \"english\": \"Hello, how are you?\"}"
         )
 
-        content = response.choices[0].message.content
-        log.debug(f"Lingo conversation start response: {content}")
+        # Retry logic for conversation start
+        max_retries = 2
+        content = ""
+        for attempt in range(max_retries + 1):
+            response = think._client.chat.completions.create(
+                model=think._llm_model,
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt}
+                ],
+                response_format={"type": "json_object"},
+                timeout=120.0
+            )
+
+            content = response.choices[0].message.content
+            log.info(f"Lingo conversation start response (attempt {attempt}): {content}")
+
+            try:
+                data = parse_lingo_json(content)
+                if data.get("japanese") or data.get("japaneseText"):
+                    break
+            except Exception as e:
+                if attempt == max_retries:
+                    raise
+                log.warning(f"Lingo JSON parse failed on attempt {attempt}: {e}")
 
         data = parse_lingo_json(content)
         japanese_text = data.get("japanese") or data.get("japaneseText") or ""
