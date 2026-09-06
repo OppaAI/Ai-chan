@@ -82,6 +82,25 @@ async def get_lingo_session(request: Request):
         owner = os.getenv("AIKO_USER_ID", "OppaAI")
         return {"user_id": owner, "username": owner}
 
+def parse_lingo_json(content: str):
+    """Robustly parse JSON from LLM response."""
+    if not content:
+        raise ValueError("Empty response from LLM")
+
+    try:
+        return json.loads(content)
+    except json.JSONDecodeError:
+        import re
+        # Try to find JSON block in markdown
+        match = re.search(r"```(?:json)?\s*(.*?)\s*```", content, re.DOTALL)
+        if match:
+            return json.loads(match.group(1))
+        # Last ditch: try to find anything between { and }
+        match = re.search(r"(\{.*\})", content, re.DOTALL)
+        if match:
+            return json.loads(match.group(1))
+        raise
+
 @router.post("/translate", response_model=TranslateResponse)
 async def translate(request: TranslateRequest, session: dict = Depends(get_lingo_session)):
     from interface.webui import auth
@@ -94,7 +113,8 @@ async def translate(request: TranslateRequest, session: dict = Depends(get_lingo
     try:
         system_prompt = (
             "You are a Japanese translation expert. "
-            "Output ONLY valid JSON with a 'translations' key containing an array of objects with 'register' and 'text' keys."
+            "Output ONLY valid JSON. Your response must be a JSON object with a single 'translations' key. "
+            "That key must contain an array of objects, each with 'register' and 'text' keys."
         )
         user_prompt = f"Translate the following English text to Japanese in 3-5 different registers (e.g., Casual, Polite, Respective, etc.): {request.text}"
 
@@ -106,7 +126,11 @@ async def translate(request: TranslateRequest, session: dict = Depends(get_lingo
             ],
             response_format={"type": "json_object"}
         )
-        data = json.loads(response.choices[0].message.content)
+
+        content = response.choices[0].message.content
+        log.debug(f"Lingo translate response: {content}")
+
+        data = parse_lingo_json(content)
         translations_raw = data.get("translations", [])
 
         results = []
@@ -120,7 +144,7 @@ async def translate(request: TranslateRequest, session: dict = Depends(get_lingo
         return TranslateResponse(translations=results)
     except Exception as e:
         log.exception("Lingo translation failed")
-        raise HTTPException(status_code=500, detail="Translation failed")
+        raise HTTPException(status_code=500, detail=str(e))
     finally:
         reset_current_user_id(token)
 
@@ -142,7 +166,11 @@ async def conversation_start(request: StartRequest, session: dict = Depends(get_
             ],
             response_format={"type": "json_object"}
         )
-        data = json.loads(response.choices[0].message.content)
+
+        content = response.choices[0].message.content
+        log.debug(f"Lingo conversation start response: {content}")
+
+        data = parse_lingo_json(content)
         japanese_text = data.get("japanese", "")
         english_text = data.get("english", "")
         return ConversationResponse(
@@ -153,7 +181,7 @@ async def conversation_start(request: StartRequest, session: dict = Depends(get_
         )
     except Exception as e:
         log.exception("Lingo conversation start failed")
-        raise HTTPException(status_code=500, detail="Failed to start conversation")
+        raise HTTPException(status_code=500, detail=str(e))
     finally:
         reset_current_user_id(token)
 
@@ -174,7 +202,11 @@ async def conversation_respond(request: RespondRequest, session: dict = Depends(
             ],
             response_format={"type": "json_object"}
         )
-        data = json.loads(response.choices[0].message.content)
+
+        content = response.choices[0].message.content
+        log.debug(f"Lingo conversation respond response: {content}")
+
+        data = parse_lingo_json(content)
         japanese_text = data.get("japanese", "")
         english_text = data.get("english", "")
         return ConversationResponse(
@@ -185,7 +217,7 @@ async def conversation_respond(request: RespondRequest, session: dict = Depends(
         )
     except Exception as e:
         log.exception("Lingo conversation response failed")
-        raise HTTPException(status_code=500, detail="Failed to generate response")
+        raise HTTPException(status_code=500, detail=str(e))
     finally:
         reset_current_user_id(token)
 
@@ -211,7 +243,11 @@ async def conversation_hint(session: dict = Depends(get_lingo_session)):
             ],
             response_format={"type": "json_object"}
         )
-        data = json.loads(response.choices[0].message.content)
+
+        content = response.choices[0].message.content
+        log.debug(f"Lingo conversation hint response: {content}")
+
+        data = parse_lingo_json(content)
         japanese_text = data.get("japanese", "")
         english_text = data.get("english", "")
         return ConversationResponse(
@@ -221,7 +257,7 @@ async def conversation_hint(session: dict = Depends(get_lingo_session)):
         )
     except Exception as e:
         log.exception("Lingo conversation hint failed")
-        raise HTTPException(status_code=500, detail="Failed to generate hint")
+        raise HTTPException(status_code=500, detail=str(e))
     finally:
         reset_current_user_id(token)
 
