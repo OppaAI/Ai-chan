@@ -43,10 +43,18 @@ class ConversationResponse(BaseModel):
     englishTranslation: str
     audioUrl: Optional[str] = None
     isFinished: bool = False
+    isCorrect: bool = True
+    feedback: Optional[str] = None
+    suggestion: Optional[str] = None
 
 def generate_lingo_audio(text: str) -> Optional[str]:
     """Synthesize Japanese text using AikoSpeak and return a public URL."""
     from interface.webui import auth
+
+    if not text or not text.strip():
+        log.warning("Audio generation skipped: empty text")
+        return None
+
     if not auth.aiko_web_instance or not auth.aiko_web_instance._speak:
         log.warning("Audio generation failed: AikoSpeak instance not available")
         return None
@@ -119,20 +127,22 @@ def parse_lingo_json(content: str):
     data = _extract(content)
 
     # Post-process to ensure we don't have dicts where strings should be
-    # (handles cases like {"japanese": {"message": "..."}})
+    # (handles cases like {"japanese": {"message": "..."}} or {"japanese": {"greeting": "..."}})
     if isinstance(data, dict):
         for key in list(data.keys()):
             val = data[key]
             if isinstance(val, dict):
-                # If it's a dict with a single key like 'message' or 'text', flatten it
-                if len(val) == 1:
-                    data[key] = list(val.values())[0]
-                elif 'text' in val:
-                    data[key] = val['text']
-                elif 'message' in val:
-                    data[key] = val['message']
-                elif 'japanese' in val:
-                    data[key] = val['japanese']
+                # If it's a dict, try to find the first string value inside it
+                # This covers 'message', 'text', 'greeting', 'content', etc.
+                found_string = None
+                for sub_val in val.values():
+                    if isinstance(sub_val, str) and sub_val.strip():
+                        found_string = sub_val
+                        break
+                if found_string:
+                    data[key] = found_string
+                elif len(val) == 1:
+                    data[key] = str(list(val.values())[0])
 
     return data
 
@@ -211,13 +221,13 @@ async def conversation_start(request: StartRequest, session: dict = Depends(get_
         log.debug(f"Lingo conversation start response: {content}")
 
         data = parse_lingo_json(content)
-        japanese_text = data.get("japanese", "")
-        english_text = data.get("english", "")
+        japanese_text = data.get("japanese") or data.get("japaneseText") or ""
+        english_text = data.get("english") or data.get("englishTranslation") or ""
         return ConversationResponse(
-            japaneseText=japanese_text,
-            englishTranslation=english_text,
-            audioUrl=generate_lingo_audio(japanese_text),
-            isFinished=data.get("finished", False)
+            japaneseText=str(japanese_text),
+            englishTranslation=str(english_text),
+            audioUrl=generate_lingo_audio(str(japanese_text)),
+            isFinished=data.get("finished", data.get("isFinished", False))
         )
     except Exception as e:
         log.exception("Lingo conversation start failed")
@@ -233,8 +243,10 @@ async def conversation_respond(request: RespondRequest, session: dict = Depends(
     token = set_current_user_id(uid)
     try:
         system_prompt = (
-            "You are Aiko, teaching Japanese through conversation. "
-            "Output ONLY valid JSON. Your response must be a JSON object with 'japanese' and 'english' keys."
+            "You are Aiko, a Japanese teacher. When the student responds, check their Japanese for grammar, spelling, or unnatural usage. "
+            "1. If there is a mistake: set 'isCorrect' to false. Provide feedback in 'feedback' (explaining the error in English) and the corrected version in 'suggestion'. Set 'japanese' to the feedback text. "
+            "2. If it is correct and natural: set 'isCorrect' to true. Provide the NEXT conversation turn in 'japanese' and 'english'. "
+            "Output ONLY valid JSON with keys: 'isCorrect', 'feedback', 'suggestion', 'japanese', 'english', 'finished'."
         )
 
         response = think._client.chat.completions.create(
@@ -251,13 +263,32 @@ async def conversation_respond(request: RespondRequest, session: dict = Depends(
         log.debug(f"Lingo conversation respond response: {content}")
 
         data = parse_lingo_json(content)
-        japanese_text = data.get("japanese", "")
-        english_text = data.get("english", "")
+        is_correct = data.get("isCorrect", True)
+
+        if not is_correct:
+            # Mistake mode: Speak the feedback or suggestion
+            feedback = data.get("feedback", "")
+            suggestion = data.get("suggestion", "")
+            japanese_text = f"Mistake: {feedback}\nSuggestion: {suggestion}"
+            return ConversationResponse(
+                japaneseText=japanese_text,
+                englishTranslation="Please correct your response ♡",
+                audioUrl=generate_lingo_audio(suggestion), # Speak the correct version
+                isFinished=False,
+                isCorrect=False,
+                feedback=feedback,
+                suggestion=suggestion
+            )
+
+        # Success mode: Continue conversation
+        japanese_text = data.get("japanese") or data.get("japaneseText") or ""
+        english_text = data.get("english") or data.get("englishTranslation") or ""
         return ConversationResponse(
-            japaneseText=japanese_text,
-            englishTranslation=english_text,
-            audioUrl=generate_lingo_audio(japanese_text),
-            isFinished=data.get("finished", False)
+            japaneseText=str(japanese_text),
+            englishTranslation=str(english_text),
+            audioUrl=generate_lingo_audio(str(japanese_text)),
+            isFinished=data.get("finished", data.get("isFinished", False)),
+            isCorrect=True
         )
     except Exception as e:
         log.exception("Lingo conversation response failed")
@@ -293,12 +324,12 @@ async def conversation_hint(session: dict = Depends(get_lingo_session)):
         log.debug(f"Lingo conversation hint response: {content}")
 
         data = parse_lingo_json(content)
-        japanese_text = data.get("japanese", "")
-        english_text = data.get("english", "")
+        japanese_text = data.get("japanese") or data.get("japaneseText") or ""
+        english_text = data.get("english") or data.get("englishTranslation") or ""
         return ConversationResponse(
-            japaneseText=japanese_text,
-            englishTranslation=english_text,
-            audioUrl=generate_lingo_audio(japanese_text)
+            japaneseText=str(japanese_text),
+            englishTranslation=str(english_text),
+            audioUrl=generate_lingo_audio(str(japanese_text))
         )
     except Exception as e:
         log.exception("Lingo conversation hint failed")
