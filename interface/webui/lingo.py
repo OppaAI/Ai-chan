@@ -60,6 +60,16 @@ def generate_lingo_audio(text: str) -> Optional[str]:
         log.warning("Audio generation skipped: empty text")
         return None
 
+    # Filter out English characters to ensure she only speaks Japanese
+    import re
+    # Keep Japanese characters, punctuation, and digits. Remove latin letters.
+    # [a-zA-Z] matches basic English letters.
+    clean_text = re.sub(r'[a-zA-Z]', '', text).strip()
+
+    if not clean_text:
+        log.warning(f"Audio generation skipped: no Japanese text found in '{text}'")
+        return None
+
     if not auth.aiko_web_instance or not auth.aiko_web_instance._speak:
         log.warning("Audio generation failed: AikoSpeak instance not available")
         return None
@@ -225,6 +235,7 @@ async def conversation_start(request: StartRequest, session: dict = Depends(get_
         system_prompt = (
             "You are Aiko, teaching Japanese through conversation. "
             "Output ONLY valid JSON. Your response must be a JSON object with 'japanese' and 'english' keys. "
+            "The 'japanese' value must be in Japanese ONLY (no English). "
             "DO NOT include any text before or after the JSON block."
         )
         user_prompt = (
@@ -263,7 +274,7 @@ async def conversation_start(request: StartRequest, session: dict = Depends(get_
         english_text = data.get("english") or data.get("englishTranslation") or ""
         return ConversationResponse(
             japaneseText=str(japanese_text),
-            englishTranslation=str(english_text),
+            englishTranslation=str(english_text) or "Translation unavailable",
             audioUrl=generate_lingo_audio(str(japanese_text)),
             isFinished=data.get("finished", data.get("isFinished", False))
         )
@@ -283,8 +294,8 @@ async def conversation_respond(request: RespondRequest, session: dict = Depends(
         system_prompt = (
             "You are Aiko, a Japanese teacher. Maintain a natural roleplay conversation with the student. "
             "When the student responds, check their Japanese for grammar, spelling, or unnatural usage. "
-            "1. If there is a mistake: set 'isCorrect' to false. Provide feedback in 'feedback' (explaining the error in English) and the corrected version in 'suggestion'. Set 'japanese' to the feedback text. "
-            "2. If it is correct and natural: set 'isCorrect' to true. Provide the NEXT conversation turn in 'japanese' and 'english' that naturally continues the roleplay. "
+            "1. If there is a mistake: set 'isCorrect' to false. Provide feedback in 'feedback' (explaining the error in English) and the corrected version in 'suggestion' (Japanese ONLY). Set 'japanese' to the feedback text. "
+            "2. If it is correct and natural: set 'isCorrect' to true. Provide the NEXT conversation turn in 'japanese' (Japanese ONLY) and 'english' (English translation) that naturally continues the roleplay. "
             "Output ONLY valid JSON with keys: 'isCorrect', 'feedback', 'suggestion', 'japanese', 'english', 'finished'."
         )
 
@@ -319,15 +330,29 @@ async def conversation_respond(request: RespondRequest, session: dict = Depends(
 
         messages.extend(pending_history)
 
-        response = think._client.chat.completions.create(
-            model=think._llm_model,
-            messages=messages,
-            response_format={"type": "json_object"},
-            timeout=120.0
-        )
+        # Retry logic for conversation respond
+        max_retries = 2
+        content = ""
+        for attempt in range(max_retries + 1):
+            response = think._client.chat.completions.create(
+                model=think._llm_model,
+                messages=messages,
+                response_format={"type": "json_object"},
+                timeout=120.0
+            )
 
-        content = response.choices[0].message.content
-        log.debug(f"Lingo conversation respond response: {content}")
+            content = response.choices[0].message.content
+            log.info(f"Lingo conversation respond response (attempt {attempt}): {content}")
+
+            try:
+                data = parse_lingo_json(content)
+                # Success if we have either a correction flow or a continuation flow
+                if data.get("isCorrect") is not None or data.get("japanese") or data.get("japaneseText"):
+                    break
+            except Exception as e:
+                if attempt == max_retries:
+                    raise
+                log.warning(f"Lingo JSON parse failed on attempt {attempt}: {e}")
 
         data = parse_lingo_json(content)
         is_correct = data.get("isCorrect", True)
@@ -352,7 +377,7 @@ async def conversation_respond(request: RespondRequest, session: dict = Depends(
         english_text = data.get("english") or data.get("englishTranslation") or ""
         return ConversationResponse(
             japaneseText=str(japanese_text),
-            englishTranslation=str(english_text),
+            englishTranslation=str(english_text) or "Translation unavailable",
             audioUrl=generate_lingo_audio(str(japanese_text)),
             isFinished=data.get("finished", data.get("isFinished", False)),
             isCorrect=True
@@ -374,29 +399,43 @@ async def conversation_hint(session: dict = Depends(get_lingo_session)):
             "You are Aiko, teaching Japanese through conversation. "
             "Suggest a concise response for the student to say in Japanese and provide an English translation. "
             "Keep the Japanese response under 30 words so it doesn't get cut off. "
+            "The 'japanese' value must be in Japanese ONLY (no English). "
             "Output ONLY valid JSON. Your response must be a JSON object with 'japanese' and 'english' keys."
         )
         user_prompt = "Give me a hint for what I should say next in Japanese."
 
-        response = think._client.chat.completions.create(
-            model=think._llm_model,
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt}
-            ],
-            response_format={"type": "json_object"},
-            timeout=120.0
-        )
+        # Retry logic for conversation hint
+        max_retries = 2
+        content = ""
+        for attempt in range(max_retries + 1):
+            response = think._client.chat.completions.create(
+                model=think._llm_model,
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt}
+                ],
+                response_format={"type": "json_object"},
+                timeout=120.0
+            )
 
-        content = response.choices[0].message.content
-        log.debug(f"Lingo conversation hint response: {content}")
+            content = response.choices[0].message.content
+            log.info(f"Lingo conversation hint response (attempt {attempt}): {content}")
+
+            try:
+                data = parse_lingo_json(content)
+                if data.get("japanese") or data.get("japaneseText"):
+                    break
+            except Exception as e:
+                if attempt == max_retries:
+                    raise
+                log.warning(f"Lingo JSON parse failed on attempt {attempt}: {e}")
 
         data = parse_lingo_json(content)
         japanese_text = data.get("japanese") or data.get("japaneseText") or ""
         english_text = data.get("english") or data.get("englishTranslation") or ""
         return ConversationResponse(
             japaneseText=str(japanese_text),
-            englishTranslation=str(english_text),
+            englishTranslation=str(english_text) or "Translation unavailable",
             audioUrl=generate_lingo_audio(str(japanese_text))
         )
     except Exception as e:
