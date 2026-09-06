@@ -963,6 +963,8 @@ def _monitor_threads_replies_locked(memorize=None) -> dict:
             if result.get("ok"):
                 response_id = str(result.get("response_id") or "")
                 db.mark_processed_threads_reply(reply_id, post_id, response_id)
+                if response_id:
+                    db.mark_processed_threads_reply(response_id, post_id)
                 interaction_saved = _save_interaction_memory(reply, reply_text, memorize)
                 log_event = {"kind": "aiko_reply", "post_id": post_id, "reply_id": response_id, "in_reply_to": reply_id, "text": reply_text}
                 if image_prompt:
