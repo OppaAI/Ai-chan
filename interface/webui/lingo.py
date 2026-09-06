@@ -83,39 +83,58 @@ async def get_lingo_session(request: Request):
         return {"user_id": owner, "username": owner}
 
 def parse_lingo_json(content: str):
-    """Robustly parse JSON from LLM response."""
+    """Robustly parse JSON from LLM response and handle common nesting issues."""
     if not content:
         raise ValueError("Empty response from LLM")
 
-    # Clean up common LLM artifacts that break JSON
     content = content.strip()
 
-    try:
-        return json.loads(content)
-    except json.JSONDecodeError:
-        import re
-        # Try to find JSON block in markdown
-        match = re.search(r"```(?:json)?\s*(.*?)\s*```", content, re.DOTALL)
-        if match:
-            try:
-                return json.loads(match.group(1))
-            except json.JSONDecodeError:
-                pass
-
-        # Last ditch: try to find anything between { and }
-        # This handles cases where there's text before or after the JSON
-        match = re.search(r"(\{.*\})", content, re.DOTALL)
-        if match:
-            try:
-                return json.loads(match.group(1))
-            except json.JSONDecodeError:
-                # If still failing, try to fix common errors like missing commas before closing brace
-                fixed = re.sub(r'("\s*\n\s*")', '",\n"', match.group(1))
+    def _extract(text):
+        try:
+            return json.loads(text)
+        except json.JSONDecodeError:
+            import re
+            # Try to find JSON block in markdown
+            match = re.search(r"```(?:json)?\s*(.*?)\s*```", text, re.DOTALL)
+            if match:
                 try:
-                    return json.loads(fixed)
-                except Exception:
+                    return json.loads(match.group(1))
+                except json.JSONDecodeError:
                     pass
-        raise
+
+            # Last ditch: try to find anything between { and }
+            match = re.search(r"(\{.*\})", text, re.DOTALL)
+            if match:
+                try:
+                    return json.loads(match.group(1))
+                except json.JSONDecodeError:
+                    # If still failing, try to fix common errors
+                    fixed = re.sub(r'("\s*\n\s*")', '",\n"', match.group(1))
+                    try:
+                        return json.loads(fixed)
+                    except Exception:
+                        pass
+            raise
+
+    data = _extract(content)
+
+    # Post-process to ensure we don't have dicts where strings should be
+    # (handles cases like {"japanese": {"message": "..."}})
+    if isinstance(data, dict):
+        for key in list(data.keys()):
+            val = data[key]
+            if isinstance(val, dict):
+                # If it's a dict with a single key like 'message' or 'text', flatten it
+                if len(val) == 1:
+                    data[key] = list(val.values())[0]
+                elif 'text' in val:
+                    data[key] = val['text']
+                elif 'message' in val:
+                    data[key] = val['message']
+                elif 'japanese' in val:
+                    data[key] = val['japanese']
+
+    return data
 
 @router.post("/translate", response_model=TranslateResponse)
 async def translate(request: TranslateRequest, session: dict = Depends(get_lingo_session)):
