@@ -644,10 +644,11 @@ for example "*{_ai} considers the question.*". Do not use XML or colon labels.""
 
 
 def _is_trigger(text: str) -> bool:
+    mention = mention_trigger("THREADS_USERNAME") or "@oppa.ai.bot"
     return _identity_is_trigger(
         text,
         phrase=reply_trigger_phrase("threads"),
-        mention=mention_trigger("THREADS_USERNAME"),
+        mention=mention,
     )
 
 
