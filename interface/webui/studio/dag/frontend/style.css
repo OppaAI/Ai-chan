@@ -202,6 +202,35 @@
             pointer-events: none;
         }
 
+        /* Run/validate panel (bottom-left, n8n-style execution readout) */
+        .run-panel {
+            position: absolute;
+            left: 16px;
+            bottom: 44px;
+            width: 380px;
+            max-height: 45%;
+            overflow-y: auto;
+            background: var(--glass-bg);
+            backdrop-filter: blur(16px);
+            -webkit-backdrop-filter: blur(16px);
+            border: 1px solid var(--glass-border);
+            border-radius: 8px;
+            padding: 14px 16px;
+            font-size: 12px;
+            box-shadow: 0 8px 32px rgba(0,0,0,0.4);
+        }
+        .run-panel h3 {
+            font-size: 11px;
+            letter-spacing: 0.15em;
+            color: var(--cyan);
+            text-transform: uppercase;
+        }
+        #tool-palette {
+            max-height: 45vh;
+            overflow-y: auto;
+        }
+        #tool-palette .playbook-item { margin-bottom: 4px; padding: 7px 10px; }
+
         /* Details panel */
         .details-panel {
             position: absolute;

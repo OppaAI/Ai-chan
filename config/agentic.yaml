@@ -49,7 +49,7 @@ JOB_HUNT_MAX_EMAIL_POSTS: "10"  # Max job posts drafted from email alerts per ru
 AGENT_EXECUTOR_MODE: "hybrid"  # react = old ReAct loop only; graph = playbook DAG only; hybrid = graph first, ReAct fallback once for novel workflows.
 GRAPH_AGENT_ENABLED: "1"  # Enable deterministic graph/playbook executor for known workflows.
 GRAPH_AGENT_PLAYBOOK: "agentic/playbook.json"  # Per-user JSON file for practiced/promoted graph workflows.
-GRAPH_MAX_WORKERS: "4"  # Max parallel tool nodes for graph execution.
+GRAPH_MAX_WORKERS: "2"  # Max parallel tool nodes for graph execution. 2 on Jetson Orin Nano 8GB (4+ risks LLM/RAM contention).
 AGENT_INCLUDE_EXPERIENCE_CONTEXT: "0"  # Experience is now used for offline playbook promotion, not prompt context, by default.
 
 # -- Optional Needle 2 ReAct backend --
@@ -63,10 +63,21 @@ AGENT_REACT_BACKEND: "openai"  # openai | needle | needle_multi. Flip to needle 
 NEEDLE_BASE_URL: "http://127.0.0.1:8082"  # Single-worker Needle 2 POST /complete server.
 NEEDLE_CONFIDENCE_THRESHOLD: "0.85"  # Below this, escalate the ReAct turn to the main LLM. Range 0.0-1.0.
 NEEDLE_TIMEOUT: "15"  # Seconds before a Needle /complete request is treated as unavailable.
-NEEDLE_MAX_WORKERS: "4"  # Cap on NEEDLE_WORKERS length for needle_multi.
+NEEDLE_MAX_WORKERS: "4"  # Cap on NEEDLE_WORKERS length for needle_multi. On Jetson 8GB keep <=2 workers.
 # Each worker needs id, role, base_url, and a non-empty allowed_tools list.
 # Example: [{"id":"research","role":"researcher","base_url":"http://127.0.0.1:8082","allowed_tools":["adaptive_search","deep_read"]}]
+# Jetson example (2 workers max): [{"id":"research","role":"researcher","base_url":"http://127.0.0.1:8082","allowed_tools":["adaptive_search","deep_read"]},
+#  {"id":"coder","role":"code reviewer","base_url":"http://127.0.0.1:8083","allowed_tools":["codebase_search","repo_read_file","repo_search_text"]}]
 NEEDLE_WORKERS: ""  # JSON array of NeedleWorkerSpec objects. Empty disables multi-worker.
+
+# -- Coding-agent + IT/DAG studio budgets (Jetson Orin Nano 8GB) --
+# Ministral-3-3B CAN self-improve on small scoped tasks (single file, <200
+# lines, clear goal) via code_plan -> code_diff_preview -> code_apply_patch
+# (approval) -> code_lint -> code_run_tests. It canNOT do large multi-file
+# refactors in one shot — keep patches <50k chars and verify each step.
+# New IT/everyday/coding/needle tools live in agentic/toolkit/it_ops.py,
+# agentic/toolkit/coding.py, agentic/toolkit/needle_team.py and are all
+# graph+react enabled so the DAG studio palette picks them up.
 
 # -- Agent loop limits --
 MAX_AGENT_ITER: "6"  # Maximum tool/planning iterations per task; raise for complex tasks, lower for safety.

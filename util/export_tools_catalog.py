@@ -86,6 +86,8 @@ def _spec_to_entry(name: str, spec: object, fallback_handler: str | None) -> dic
     entry["graph"] = bool(getattr(spec, "graph", False))
     entry["wiki"] = bool(getattr(spec, "wiki", False))
     entry["skill"] = bool(getattr(spec, "skill", False))
+    if getattr(spec, "needs_approval", False):
+        entry["needs_approval"] = True
     return entry
 
 

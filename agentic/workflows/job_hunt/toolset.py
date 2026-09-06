@@ -325,9 +325,8 @@ def _passes_location_filter(posting: dict[str, Any], lf: dict[str, Any]) -> bool
       - If filter is disabled, every posting passes.
       - Otherwise the posting's concatenated location text must hit at least one
         entry in `include` (Vancouver / Toronto / Canada-region names) OR be
-        remote in one of the `remote_in_countries` (default: Canada, US).
-      - US-remote is allowed so the user can still see big-tech postings that
-        don't pin a Canadian office.
+        remote in one of the `remote_in_countries` (user config: Canada only —
+        US locations are excluded everywhere, including remote).
     """
     if not lf or not lf.get("enabled"):
         return True

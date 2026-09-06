@@ -12,6 +12,7 @@ const SIDE = 60;
         let selectedEdgeId = null;
         let transform = d3.zoomIdentity;
         let currentZoom = null;
+        let draggingEdge = null;
 
         // Detect base path for API calls via the shared studio bootstrap
         const API_BASE = GraphBoot.apiBase();
@@ -428,6 +429,7 @@ const SIDE = 60;
                     .attr('cx', 0).attr('cy', NODE_H / 2)
                     .attr('r', PORT_HIT_R)
                     .attr('fill', 'transparent')
+                    .attr('data-target-id', node.id)
                     .style('cursor', 'crosshair');
 
                 // Ports — output (right)
@@ -439,7 +441,77 @@ const SIDE = 60;
                     .attr('cx', NODE_W).attr('cy', NODE_H / 2)
                     .attr('r', PORT_HIT_R)
                     .attr('fill', 'transparent')
-                    .style('cursor', 'crosshair');
+                    .attr('data-source-id', node.id)
+                    .style('cursor', 'crosshair')
+                    .call(d3.drag()
+                        .on("start", function(event) {
+                            const srcId = d3.select(this).attr("data-source-id");
+                            const srcNode = nodes.find(n => n.id === srcId);
+                            const sPos = srcNode._layout;
+                            draggingEdge = {
+                                srcId: srcId,
+                                startX: sPos.x + NODE_W,
+                                startY: sPos.y + NODE_H / 2
+                            };
+                        })
+                        .on("drag", function(event) {
+                            if (!draggingEdge) return;
+                            let tempPath = svg.select("#temp-drag-edge");
+                            if (tempPath.empty()) {
+                                tempPath = edgeGroup.append("path")
+                                    .attr("id", "temp-drag-edge")
+                                    .attr("class", "edge-depends")
+                                    .style("pointer-events", "none");
+                            }
+                            const pt = d3.pointer(event, g.node());
+                            const x1 = draggingEdge.startX;
+                            const y1 = draggingEdge.startY;
+                            const x2 = pt[0];
+                            const y2 = pt[1];
+                            const dx = x2 - x1;
+                            const dy = y2 - y1;
+                            const dist = Math.sqrt(dx * dx + dy * dy);
+                            const curvature = Math.min(dist * 0.15, 40);
+                            tempPath.attr("d", `M ${x1} ${y1} C ${x1 + curvature} ${y1}, ${x2 - curvature} ${y2}, ${x2} ${y2}`);
+                        })
+                        .on("end", function(event) {
+                            svg.select("#temp-drag-edge").remove();
+                            if (!draggingEdge) return;
+                            const mousePt = d3.pointer(event, g.node());
+                            let bestTarget = null;
+                            let bestDist = 20;
+                            svg.selectAll('.port-input + circle').each(function() {
+                                const tgtId = d3.select(this).attr('data-target-id');
+                                const tgtNode = nodes.find(n => n.id === tgtId);
+                                if (tgtNode) {
+                                    const tPos = tgtNode._layout;
+                                    const tx = tPos.x;
+                                    const ty = tPos.y + NODE_H / 2;
+                                    const d = Math.hypot(mousePt[0] - tx, mousePt[1] - ty);
+                                    if (d < bestDist && tgtId !== draggingEdge.srcId) {
+                                        bestDist = d;
+                                        bestTarget = tgtId;
+                                    }
+                                }
+                            });
+                            if (bestTarget) {
+                                if (!selectedPlaybook.edges) selectedPlaybook.edges = [];
+                                const exists = selectedPlaybook.edges.find(e => 
+                                    (typeof e.source === 'string' ? e.source : e.source?.id) === draggingEdge.srcId && 
+                                    (typeof e.target === 'string' ? e.target : e.target?.id) === bestTarget
+                                );
+                                if (!exists) {
+                                    selectedPlaybook.edges.push({
+                                        source: draggingEdge.srcId,
+                                        target: bestTarget,
+                                        type: "depends_on"
+                                    });
+                                    renderGraph(selectedPlaybook);
+                                }
+                            }
+                            draggingEdge = null;
+                        })
+                    );
             });
 
             document.getElementById('graph-info').textContent =
@@ -535,18 +607,45 @@ const SIDE = 60;
 
             const type = edge.type || 'depends_on';
             const typeColor = type === 'fallback_to' ? '#e8843a' : type === 'loop_to' ? 'var(--pink)' : 'var(--dim)';
+            const srcId = typeof edge.source === 'string' ? edge.source : edge.source?.id;
+            const tgtId = typeof edge.target === 'string' ? edge.target : edge.target?.id;
 
             content.innerHTML = `
                 <div class="details-panel-header">
                     <h3>Edge Details</h3>
                     <button class="details-close" onclick="document.getElementById('details-panel').style.display='none'">×</button>
                 </div>
-                <div class="detail-row"><div class="detail-label">Type</div><div class="detail-value" style="color:${typeColor}">${type}</div></div>
+                <div class="detail-row"><div class="detail-label">Type</div>
+                    <select class="detail-input" id="edit-edge-type">
+                        <option value="depends_on"${type === 'depends_on' ? ' selected' : ''}>depends_on (normal)</option>
+                        <option value="loop_to"${type === 'loop_to' ? ' selected' : ''}>loop_to (bounded loop)</option>
+                        <option value="fallback_to"${type === 'fallback_to' ? ' selected' : ''}>fallback_to (on failure)</option>
+                    </select></div>
                 <div class="detail-row"><div class="detail-label">From</div><div class="detail-value"><code>${escapeHTML(src?.id || '?')}</code></div></div>
                 <div class="detail-row"><div class="detail-label">To</div><div class="detail-value"><code>${escapeHTML(tgt?.id || '?')}</code></div></div>
-                ${edge.tool_call ? `<div class="detail-row"><div class="detail-label">Tool Call</div><div class="detail-value"><pre class="text-xs" style="max-height:80px;overflow:auto;background:rgba(255,255,255,0.03);padding:4px;border-radius:3px">${escapeHTML(JSON.stringify(edge.tool_call, null, 2))}</pre></div></div>` : ''}
-                ${edge.skill ? `<div class="detail-row"><div class="detail-label">Skill</div><div class="detail-value"><code>${escapeHTML(edge.skill)}</code></div></div>` : ''}
+                <div style="display:flex;gap:6px;margin-top:10px">
+                    <button class="btn btn-primary" id="edge-apply-btn">Apply</button>
+                    <button class="btn" id="edge-delete-btn" style="color:var(--pink)">Delete edge</button>
+                </div>
+                ${edge.tool_call ? `<div class="detail-row" style="margin-top:8px"><div class="detail-label">Tool Call</div><div class="detail-value"><pre class="text-xs" style="max-height:80px;overflow:auto;background:rgba(255,255,255,0.03);padding:4px;border-radius:3px">${escapeHTML(JSON.stringify(edge.tool_call, null, 2))}</pre></div></div>` : ''}
             `;
+            document.getElementById('edge-apply-btn').onclick = () => {
+                const nt = document.getElementById('edit-edge-type').value;
+                edge.type = nt;
+                syncEdgesToNodes();
+                renderGraph(selectedPlaybook);
+                showEdgeDetails(edge, src, tgt);
+            };
+            document.getElementById('edge-delete-btn').onclick = () => {
+                selectedPlaybook.edges = (selectedPlaybook.edges || []).filter(e => {
+                    const s = typeof e.source === 'string' ? e.source : e.source?.id;
+                    const t = typeof e.target === 'string' ? e.target : e.target?.id;
+                    return !(s === srcId && t === tgtId && (e.type || 'depends_on') === type);
+                });
+                selectedEdgeId = null;
+                hideDetails();
+                renderGraph(selectedPlaybook);
+            };
         }
 
         function hideDetails() {
@@ -629,5 +728,211 @@ const SIDE = 60;
             );
         });
 
+        // ── n8n-style: tool palette ──────────────────────────────────
+        let toolGroups = {};
+        let selectedTool = null;
+
+        async function fetchTools() {
+            try {
+                const resp = await fetch(`${API_BASE}/tools`);
+                const data = await resp.json();
+                toolGroups = data.groups || {};
+                renderPalette('');
+            } catch (err) {
+                console.error('Failed to fetch tools:', err);
+            }
+        }
+
+        function renderPalette(filter) {
+            const container = document.getElementById('tool-palette');
+            if (!container) return;
+            container.innerHTML = '';
+            const q = (filter || '').toLowerCase();
+            Object.entries(toolGroups).forEach(([domain, tools]) => {
+                const shown = tools.filter(t => !q || t.name.toLowerCase().includes(q) || (t.description || '').toLowerCase().includes(q));
+                if (!shown.length) return;
+                const h = document.createElement('div');
+                h.style.cssText = 'font-size:10px;color:var(--pink);letter-spacing:0.12em;text-transform:uppercase;margin:8px 0 4px';
+                h.textContent = domain;
+                container.appendChild(h);
+                shown.slice(0, 30).forEach(t => {
+                    const b = document.createElement('button');
+                    b.className = 'playbook-item' + (selectedTool === t.name ? ' active' : '');
+                    b.innerHTML = `<div class="pb-name" style="font-size:12px">${escapeHTML(t.name)}${t.needs_approval ? ' 🔒' : ''}</div><div class="pb-id">${escapeHTML((t.description || '').slice(0, 90))}</div>`;
+                    b.title = t.description || t.name;
+                    b.onclick = () => { selectedTool = t.name; renderPalette(document.getElementById('palette-search')?.value || ''); };
+                    b.ondblclick = () => { selectedTool = t.name; addNodeFromPalette(); };
+                    container.appendChild(b);
+                });
+            });
+        }
+
+        const paletteSearch = document.getElementById('palette-search');
+        if (paletteSearch) paletteSearch.addEventListener('input', (e) => renderPalette(e.target.value));
+
+        function defaultArgsFor(toolName) {
+            // Sensible n8n-style defaults so a fresh node is runnable.
+            if (toolName === 'make_plan') return { goal: '$prompt', max_steps: 5 };
+            if (toolName === 'synthesize_report') return { evidence: '', prompt: '$prompt', style: 'plain' };
+            if (toolName === 'write_report') return { title: '$title', content: '', report_dir: 'reports' };
+            if (toolName === 'save_note') return { title: '$title', content: '$prompt', folder: 'notes' };
+            if (toolName === 'combine_evidence') return { parts: [] };
+            if (toolName === 'log_triage') return { log_file: 'logs/aiko.log', lines: 150 };
+            if (toolName === 'sys_health') return {};
+            if (toolName === 'text_summarize') return { text: '$prompt', max_sentences: 5 };
+            if (toolName === 'text_translate') return { text: '$prompt', target: 'Japanese' };
+            if (toolName === 'code_plan') return { goal: '$prompt' };
+            if (toolName === 'needle_team_run') return { task: '$prompt' };
+            return {};
+        }
+
+        function addNodeFromPalette() {
+            if (!selectedPlaybook) return alert('Select a workflow first');
+            if (!selectedPlaybook.nodes) selectedPlaybook.nodes = [];
+            const tool = selectedTool || 'synthesize_report';
+            const base = tool.split('.').pop().replace(/[^A-Za-z0-9]+/g, '_').toLowerCase().slice(0, 24) || 'node';
+            let nid = base, k = 1;
+            const ids = new Set(selectedPlaybook.nodes.map(n => n.id));
+            while (ids.has(nid)) nid = `${base}_${++k}`;
+            const newNode = { id: nid, tool, args: defaultArgsFor(tool) };
+            selectedPlaybook.nodes.push(newNode);
+            selectedNodeId = nid; selectedEdgeId = null;
+            renderGraph(selectedPlaybook);
+            showNodeDetails(newNode);
+        }
+
+        document.getElementById('add-node-btn').addEventListener('click', addNodeFromPalette);
+
+        document.getElementById('delete-selected-btn').addEventListener('click', () => {
+            if (!selectedPlaybook) return;
+            if (selectedNodeId) {
+                if (confirm(`Delete node ${selectedNodeId}?`)) {
+                    selectedPlaybook.nodes = selectedPlaybook.nodes.filter(n => n.id !== selectedNodeId);
+                    if (selectedPlaybook.edges) {
+                        selectedPlaybook.edges = selectedPlaybook.edges.filter(e => {
+                            const sid = typeof e.source === 'string' ? e.source : e.source?.id;
+                            const tid = typeof e.target === 'string' ? e.target : e.target?.id;
+                            return sid !== selectedNodeId && tid !== selectedNodeId;
+                        });
+                    }
+                    selectedNodeId = null;
+                    hideDetails();
+                    renderGraph(selectedPlaybook);
+                }
+            } else if (selectedEdgeId) {
+                if (confirm(`Delete edge ${selectedEdgeId}?`)) {
+                    const [sId, tId] = selectedEdgeId.split('->');
+                    if (selectedPlaybook.edges) {
+                        selectedPlaybook.edges = selectedPlaybook.edges.filter(e => {
+                            const sid = typeof e.source === 'string' ? e.source : e.source?.id;
+                            const tid = typeof e.target === 'string' ? e.target : e.target?.id;
+                            return !(sid === sId && tid === tId);
+                        });
+                    }
+                    selectedEdgeId = null;
+                    hideDetails();
+                    renderGraph(selectedPlaybook);
+                }
+            } else {
+                alert("Select a node or edge to delete");
+            }
+        });
+
         fetchPlaybooks();
+        fetchTools();
         setInterval(fetchPlaybooks, 30000);
+
+        // ── n8n-style: graph CRUD + validate + run + import ──────────
+        function showRunPanel(html) {
+            const p = document.getElementById('run-panel');
+            document.getElementById('run-content').innerHTML = html;
+            p.style.display = 'block';
+        }
+
+        document.getElementById('new-graph-btn')?.addEventListener('click', async () => {
+            const id = prompt('New workflow id (letters, numbers, _ -):', 'my_workflow');
+            if (!id) return;
+            const name = prompt('Display name:', id) || id;
+            try {
+                const resp = await fetch(`${API_BASE}/playbooks`, { method: 'POST', headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ id: id.trim(), name, goal: name, triggers: [], nodes: [{ id: 'start', tool: 'make_plan', args: { goal: '$prompt', max_steps: 5 } }] }) });
+                const data = await resp.json();
+                if (!resp.ok) throw new Error(data.detail || resp.statusText);
+                await fetchPlaybooks();
+                const found = currentPlaybooks.find(p => p.id === data.playbook.id);
+                if (found) selectPlaybook(found);
+            } catch (err) { alert(`Could not create graph: ${err.message || err}`); }
+        });
+
+        document.getElementById('duplicate-graph-btn')?.addEventListener('click', async () => {
+            if (!selectedPlaybook) return alert('Select a workflow first');
+            const nid = prompt('New id for the copy:', `${selectedPlaybook.id}_copy`);
+            if (!nid) return;
+            try {
+                const resp = await fetch(`${API_BASE}/playbooks/${encodeURIComponent(selectedPlaybook.id)}/duplicate`, { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ new_id: nid.trim() }) });
+                const data = await resp.json();
+                if (!resp.ok) throw new Error(data.detail || resp.statusText);
+                await fetchPlaybooks();
+                const found = currentPlaybooks.find(p => p.id === data.playbook.id);
+                if (found) selectPlaybook(found);
+            } catch (err) { alert(`Could not duplicate: ${err.message || err}`); }
+        });
+
+        document.getElementById('delete-graph-btn')?.addEventListener('click', async () => {
+            if (!selectedPlaybook) return;
+            if (!confirm(`Delete workflow ${selectedPlaybook.id}? Built-ins are protected.`)) return;
+            try {
+                const resp = await fetch(`${API_BASE}/playbooks/${encodeURIComponent(selectedPlaybook.id)}`, { method: 'DELETE' });
+                const data = await resp.json();
+                if (!resp.ok) throw new Error(data.detail || resp.statusText);
+                selectedPlaybook = null; selectedNodeId = null; selectedEdgeId = null;
+                hideDetails();
+                await fetchPlaybooks();
+                d3.select('#canvas').selectAll('*').remove();
+            } catch (err) { alert(`Could not delete: ${err.message || err}`); }
+        });
+
+        document.getElementById('validate-btn')?.addEventListener('click', async () => {
+            if (!selectedPlaybook) return;
+            try {
+                const resp = await fetch(`${API_BASE}/playbooks/${encodeURIComponent(selectedPlaybook.id)}/validate`, { method: 'POST' });
+                const data = await resp.json();
+                const cls = data.ok ? 'color:var(--cyan)' : 'color:var(--pink)';
+                showRunPanel(`<div style="${cls};font-size:12px">${data.ok ? '✓ Valid' : '✗ ' + escapeHTML((data.errors || []).join('; '))}</div>
+                    ${(data.warnings || []).map(w => `<div style="color:var(--dim);font-size:11px">⚠ ${escapeHTML(w)}</div>`).join('')}
+                    <div style="color:var(--dim);font-size:11px;margin-top:6px">${data.nodes} nodes · entries: ${escapeHTML((data.entry_points || []).join(', ') || '—')}</div>`);
+                document.getElementById('header-status').textContent = data.ok ? 'Valid' : 'Invalid';
+            } catch (err) { alert(`Validate failed: ${err.message || err}`); }
+        });
+
+        document.getElementById('run-btn')?.addEventListener('click', async () => {
+            if (!selectedPlaybook) return;
+            const prompt = prompt('Dry-run prompt ($prompt):', 'Studio dry-run: describe what to check');
+            if (prompt === null) return;
+            showRunPanel('<div style="color:var(--dim);font-size:12px">Running… (bounded 60s, 2 workers)</div>');
+            try {
+                const resp = await fetch(`${API_BASE}/playbooks/${encodeURIComponent(selectedPlaybook.id)}/run`, { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ prompt, timeout_s: 60 }) });
+                const data = await resp.json();
+                if (!resp.ok) throw new Error(data.detail || resp.statusText);
+                showRunPanel(`<div style="color:var(--cyan);font-size:12px">✓ Done · score ${data.goal_score ?? '—'}</div>
+                    <div style="font-size:11px;margin:6px 0;white-space:pre-wrap;max-height:120px;overflow:auto">${escapeHTML((data.final_answer || '').slice(0, 1200))}</div>
+                    ${(data.nodes || []).map(n => `<div style="font-size:11px;color:${n.ok ? 'var(--text)' : 'var(--pink)'}">${n.ok ? '✓' : '✗'} <code>${escapeHTML(n.id)}</code> ${escapeHTML(n.tool)} — ${escapeHTML((n.content || n.error || '').slice(0, 160))}</div>`).join('')}`);
+            } catch (err) { showRunPanel(`<div style="color:var(--pink);font-size:12px">Run failed: ${escapeHTML(err.message || err)}</div>`); }
+        });
+
+        document.getElementById('import-btn')?.addEventListener('click', () => document.getElementById('import-file')?.click());
+        document.getElementById('import-file')?.addEventListener('change', async (e) => {
+            const f = e.target.files?.[0];
+            if (!f) return;
+            try {
+                const text = await f.text();
+                const obj = JSON.parse(text);
+                const payload = Array.isArray(obj) ? obj[0] : (obj.playbook || obj);
+                if (!payload || !payload.id) throw new Error('JSON must contain a playbook object with an id');
+                const resp = await fetch(`${API_BASE}/playbooks`, { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(payload) });
+                const data = await resp.json();
+                if (!resp.ok) throw new Error(data.detail || resp.statusText);
+                await fetchPlaybooks();
+            } catch (err) { alert(`Import failed: ${err.message || err}`); }
+            e.target.value = '';
+        });

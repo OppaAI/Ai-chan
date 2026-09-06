@@ -25,6 +25,10 @@ from system.config import load_yaml
 log = logging.getLogger(__name__)
 
 APPROVAL_REQUIRED_TOOLS = ("post_job_post_social", "post_photo_social", "post_video_social", "post_to_social")
+# Code-writing tools always require human approval, even if tools.yaml drifts.
+# (The @tool() decorator ignores needs_approval kwargs when a catalog entry
+# already exists, so this post-hoc enforcement is the durable gate.)
+CODE_WRITE_APPROVAL_TOOLS = ("repo_write_file", "repo_replace_text", "code_apply_patch")
 
 
 @dataclass
@@ -151,6 +155,9 @@ def _attach_builtin_arg_models() -> None:
 
 _attach_builtin_arg_models()
 for _approval_tool in APPROVAL_REQUIRED_TOOLS:
+    if _approval_tool in TOOLS:
+        TOOLS[_approval_tool].needs_approval = True
+for _approval_tool in CODE_WRITE_APPROVAL_TOOLS:
     if _approval_tool in TOOLS:
         TOOLS[_approval_tool].needs_approval = True
 

@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Aiko Graph Studio</title>
+    <title>Aiko Graph Studio — n8n-style</title>
     <link rel="stylesheet" href="shared/css/tokens.css">
     <link rel="stylesheet" href="shared/css/base.css">
     <link rel="stylesheet" href="static/style.css">
@@ -15,22 +15,36 @@
             <h1>Aiko Graph Studio</h1>
         </div>
         <div class="header-actions">
+            <button id="new-graph-btn" class="btn" title="Create a new empty graph">+ New</button>
+            <button id="duplicate-graph-btn" class="btn" title="Clone selected graph">Duplicate</button>
+            <button id="delete-graph-btn" class="btn" style="color: var(--pink)" title="Delete selected user graph">Delete graph</button>
+            <span style="width:1px;height:18px;background:var(--dim);display:inline-block"></span>
+            <button id="add-node-btn" class="btn" title="Add node from palette selection (or default)">Add Node</button>
+            <button id="delete-selected-btn" class="btn" style="color: var(--pink)" title="Delete selected node or edge">Delete</button>
+            <button id="validate-btn" class="btn" title="Check cycles, deps, unknown tools">Validate</button>
+            <button id="run-btn" class="btn" title="Bounded dry-run (60s, 2 workers)">▶ Run</button>
             <span class="header-status" id="header-status"></span>
             <button id="save-btn" class="btn btn-primary">Save</button>
+            <button id="import-btn" class="btn" title="Import graph JSON">Import</button>
             <button id="export-btn" class="btn btn-primary">Export</button>
             <button id="refresh-btn" class="btn">Refresh</button>
+            <input type="file" id="import-file" accept="application/json" style="display:none">
         </div>
     </header>
 
     <div class="studio-body">
         <aside class="sidebar">
-            <h2>Playbooks</h2>
+            <h2>Workflows</h2>
             <div id="playbooks-list"></div>
+            <h2 style="margin-top:16px">Node palette</h2>
+            <input id="palette-search" class="detail-input" placeholder="Search tools…" style="margin-bottom:8px">
+            <div id="palette-hint" style="font-size:10px;color:var(--dim);margin-bottom:8px">Click a tool, then “Add Node”. Drag from a node's right port to another node's left port to connect.</div>
+            <div id="tool-palette"></div>
         </aside>
 
         <div class="canvas-area" id="canvas-area">
             <svg id="canvas"></svg>
-            <div class="canvas-info" id="graph-info">Select a playbook</div>
+            <div class="canvas-info" id="graph-info">Select a workflow</div>
             <div class="legend" id="legend">
                 <div class="legend-item"><span class="legend-line solid"></span> depends_on</div>
                 <div class="legend-item"><span class="legend-line dashed"></span> loop_to</div>
@@ -44,6 +58,10 @@
             <div class="details-panel" id="details-panel" style="display:none">
                 <h3>Node Details</h3>
                 <div id="details-content"></div>
+            </div>
+            <div class="run-panel" id="run-panel" style="display:none">
+                <div class="details-panel-header"><h3>Validate / Run</h3><button class="details-close" onclick="document.getElementById('run-panel').style.display='none'">×</button></div>
+                <div id="run-content"></div>
             </div>
             <div class="tooltip" id="tooltip"></div>
         </div>

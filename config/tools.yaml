@@ -219,6 +219,73 @@
       "skill": false
     },
     {
+      "handler": "agentic.workflows.common.nodes:check_system_health",
+      "name": "check_system_health",
+      "description": "Check Jetson system health (CPU, RAM, Disk). Compat shim — prefer it_ops:sys_health.",
+      "props": {},
+      "domain": "it_ops",
+      "react": true,
+      "graph": true,
+      "wiki": false,
+      "skill": false
+    },
+    {
+      "handler": "agentic.toolkit.coding:code_apply_patch",
+      "name": "code_apply_patch",
+      "description": "Apply old->new replacement with backup (APPROVAL REQUIRED).",
+      "props": {},
+      "domain": "coding",
+      "react": true,
+      "graph": true,
+      "wiki": false,
+      "skill": false,
+      "needs_approval": true
+    },
+    {
+      "handler": "agentic.toolkit.coding:code_diff_preview",
+      "name": "code_diff_preview",
+      "description": "Preview unified diff for old->new text (no write).",
+      "props": {},
+      "domain": "coding",
+      "react": true,
+      "graph": true,
+      "wiki": false,
+      "skill": false
+    },
+    {
+      "handler": "agentic.toolkit.coding:code_lint",
+      "name": "code_lint",
+      "description": "Syntax-check a Python file (py_compile, read-only).",
+      "props": {},
+      "domain": "coding",
+      "react": true,
+      "graph": true,
+      "wiki": false,
+      "skill": false
+    },
+    {
+      "handler": "agentic.toolkit.coding:code_plan",
+      "name": "code_plan",
+      "description": "Break a coding task into small reviewable steps (heuristic + optional LLM).",
+      "props": {},
+      "domain": "coding",
+      "react": true,
+      "graph": true,
+      "wiki": false,
+      "skill": false
+    },
+    {
+      "handler": "agentic.toolkit.coding:code_run_tests",
+      "name": "code_run_tests",
+      "description": "Run bounded pytest (90s timeout, tail output).",
+      "props": {},
+      "domain": "coding",
+      "react": true,
+      "graph": true,
+      "wiki": false,
+      "skill": false
+    },
+    {
       "handler": "agentic.toolkit.codebase:codebase_context",
       "name": "codebase_context",
       "description": "Retrieve formatted <codebase_context> block for a codebase question (RAG). For prompt injection.",
@@ -371,6 +438,39 @@
       "skill": false
     },
     {
+      "handler": "agentic.toolkit.it_ops:disk_large_files",
+      "name": "disk_large_files",
+      "description": "Preview largest files under a directory (read-only, never deletes).",
+      "props": {},
+      "domain": "it_ops",
+      "react": true,
+      "graph": true,
+      "wiki": false,
+      "skill": false
+    },
+    {
+      "handler": "agentic.toolkit.it_ops:dns_lookup",
+      "name": "dns_lookup",
+      "description": "Resolve hostname to IP addresses (read-only).",
+      "props": {},
+      "domain": "it_ops",
+      "react": true,
+      "graph": true,
+      "wiki": false,
+      "skill": false
+    },
+    {
+      "handler": "agentic.toolkit.it_ops:docker_ps",
+      "name": "docker_ps",
+      "description": "Preview running docker containers (read-only, 5s timeout).",
+      "props": {},
+      "domain": "it_ops",
+      "react": true,
+      "graph": true,
+      "wiki": false,
+      "skill": false
+    },
+    {
       "handler": "agentic.toolkit.social:draft_job_post_social",
       "name": "draft_job_post_social",
       "description": "Create a Vancouver-area daily job-post draft for Meta Threads review. Does NOT post anything.",
@@ -488,6 +588,17 @@
       "skill": false
     },
     {
+      "handler": "agentic.toolkit.it_ops:file_find",
+      "name": "file_find",
+      "description": "Bounded filename search under repo/workspace (glob, max 50).",
+      "props": {},
+      "domain": "it_ops",
+      "react": true,
+      "graph": true,
+      "wiki": false,
+      "skill": false
+    },
+    {
       "handler": "agentic.agentic:final_answer",
       "name": "final_answer",
       "description": "Final answer.",
@@ -518,6 +629,17 @@
       },
       "domain": "jobs",
       "react": false,
+      "graph": true,
+      "wiki": false,
+      "skill": false
+    },
+    {
+      "handler": "agentic.toolkit.it_ops:http_check",
+      "name": "http_check",
+      "description": "Lightweight HTTP status check (no JS, 8s timeout).",
+      "props": {},
+      "domain": "it_ops",
+      "react": true,
       "graph": true,
       "wiki": false,
       "skill": false
@@ -711,6 +833,17 @@
       "skill": false
     },
     {
+      "handler": "agentic.toolkit.it_ops:log_triage",
+      "name": "log_triage",
+      "description": "Tail a log file and extract ERROR/WARNING lines (bounded).",
+      "props": {},
+      "domain": "it_ops",
+      "react": true,
+      "graph": true,
+      "wiki": false,
+      "skill": false
+    },
+    {
       "handler": "agentic.toolkit.plan:make_plan",
       "name": "make_plan",
       "description": "Make plan.",
@@ -730,6 +863,50 @@
       ],
       "domain": "planning",
       "always_on": true,
+      "react": true,
+      "graph": true,
+      "wiki": false,
+      "skill": false
+    },
+    {
+      "handler": "agentic.workflows.common.nodes:needle_multi_agent_delegate",
+      "name": "needle_multi_agent_delegate",
+      "description": "Delegate subtasks to Needle2 workers. Compat shim — prefer needle_team:needle_team_run.",
+      "props": {},
+      "domain": "multi_agent",
+      "react": true,
+      "graph": true,
+      "wiki": false,
+      "skill": false
+    },
+    {
+      "handler": "agentic.toolkit.needle_team:needle_team_run",
+      "name": "needle_team_run",
+      "description": "Fan out a task to Needle2 workers and merge proposals.",
+      "props": {},
+      "domain": "multi_agent",
+      "react": true,
+      "graph": true,
+      "wiki": false,
+      "skill": false
+    },
+    {
+      "handler": "agentic.toolkit.needle_team:needle_team_status",
+      "name": "needle_team_status",
+      "description": "Show Needle2 worker config (roles/tools, no secrets).",
+      "props": {},
+      "domain": "multi_agent",
+      "react": true,
+      "graph": true,
+      "wiki": false,
+      "skill": false
+    },
+    {
+      "handler": "agentic.toolkit.it_ops:net_info",
+      "name": "net_info",
+      "description": "Hostname + local IPs summary (read-only).",
+      "props": {},
+      "domain": "it_ops",
       "react": true,
       "graph": true,
       "wiki": false,
@@ -760,6 +937,28 @@
       "skill": false
     },
     {
+      "handler": "agentic.workflows.common.nodes:parse_logs",
+      "name": "parse_logs",
+      "description": "Extract recent errors/warnings from a log file. Compat shim — prefer it_ops:log_triage.",
+      "props": {},
+      "domain": "it_ops",
+      "react": true,
+      "graph": true,
+      "wiki": false,
+      "skill": false
+    },
+    {
+      "handler": "agentic.toolkit.it_ops:pass_gen",
+      "name": "pass_gen",
+      "description": "Generate a random password (secrets, never logged).",
+      "props": {},
+      "domain": "everyday",
+      "react": true,
+      "graph": true,
+      "wiki": false,
+      "skill": false
+    },
+    {
       "handler": "agentic.toolkit.synthesize:polish_text",
       "name": "polish_text",
       "description": "Rewrite an already-synthesized draft in the requested style.",
@@ -781,6 +980,17 @@
       "skill": false
     },
     {
+      "handler": "agentic.toolkit.it_ops:port_check",
+      "name": "port_check",
+      "description": "TCP port check with 2s timeout (read-only).",
+      "props": {},
+      "domain": "it_ops",
+      "react": true,
+      "graph": true,
+      "wiki": false,
+      "skill": false
+    },
+    {
       "handler": "agentic.toolkit.social:post_job_post_social",
       "name": "post_job_post_social",
       "description": "Post an ALREADY HUMAN-APPROVED daily job-post draft to Meta Threads only. Will refuse unless a person has approved this exact draft outside this conversation. When the user asks to post the daily job post without giving a path, call this with NO draft_dir — it posts the most recently approved job-post draft automatically. Do NOT re-draft when an approved draft already exists.",
@@ -794,7 +1004,8 @@
       "react": true,
       "graph": true,
       "wiki": true,
-      "skill": false
+      "skill": false,
+      "needs_approval": true
     },
     {
       "handler": "agentic.toolkit.social:post_photo_social",
@@ -819,7 +1030,8 @@
       "react": true,
       "graph": true,
       "wiki": true,
-      "skill": false
+      "skill": false,
+      "needs_approval": true
     },
     {
       "handler": "agentic.toolkit.social:post_to_social",
@@ -847,7 +1059,8 @@
       "react": true,
       "graph": true,
       "wiki": true,
-      "skill": false
+      "skill": false,
+      "needs_approval": true
     },
     {
       "handler": "agentic.toolkit.social:post_video_social",
@@ -872,6 +1085,18 @@
       "react": true,
       "graph": true,
       "wiki": true,
+      "skill": false,
+      "needs_approval": true
+    },
+    {
+      "handler": "agentic.toolkit.it_ops:process_top",
+      "name": "process_top",
+      "description": "List top processes by CPU/RAM (read-only, no kill).",
+      "props": {},
+      "domain": "it_ops",
+      "react": true,
+      "graph": true,
+      "wiki": false,
       "skill": false
     },
     {
@@ -976,6 +1201,18 @@
       "skill": false
     },
     {
+      "handler": "agentic.toolkit.self_improve_write:repo_replace_text",
+      "name": "repo_replace_text",
+      "description": "Replace specific text in a repository file. APPROVAL REQUIRED — prefer code_diff_preview + code_apply_patch.",
+      "props": {},
+      "domain": "self_improve",
+      "react": true,
+      "graph": true,
+      "wiki": false,
+      "skill": false,
+      "needs_approval": true
+    },
+    {
       "handler": "agentic.toolkit.self_improve:repo_search_text",
       "name": "repo_search_text",
       "description": "Search repository text files with simple substring matching.",
@@ -998,6 +1235,18 @@
       "graph": true,
       "wiki": false,
       "skill": false
+    },
+    {
+      "handler": "agentic.toolkit.self_improve_write:repo_write_file",
+      "name": "repo_write_file",
+      "description": "Write content to a file in the repository. Restricted to safe text formats. APPROVAL REQUIRED — prefer code_diff_preview + code_apply_patch.",
+      "props": {},
+      "domain": "self_improve",
+      "react": true,
+      "graph": true,
+      "wiki": false,
+      "skill": false,
+      "needs_approval": true
     },
     {
       "handler": "agentic.workflows.job_hunt.graph:report_job_run",
@@ -1286,6 +1535,28 @@
       "skill": false
     },
     {
+      "handler": "agentic.toolkit.it_ops:service_status",
+      "name": "service_status",
+      "description": "Check systemd service state (read-only systemctl is-active).",
+      "props": {},
+      "domain": "it_ops",
+      "react": true,
+      "graph": true,
+      "wiki": false,
+      "skill": false
+    },
+    {
+      "handler": "agentic.toolkit.it_ops:ssl_expiry",
+      "name": "ssl_expiry",
+      "description": "Days until TLS cert expires for host:port (read-only).",
+      "props": {},
+      "domain": "it_ops",
+      "react": true,
+      "graph": true,
+      "wiki": false,
+      "skill": false
+    },
+    {
       "handler": "agentic.workflows.common.nodes:store_data",
       "name": "store_data",
       "description": "Layer-1 shared node: persist items to TTL JSONL store and prune by retain_days.",
@@ -1308,6 +1579,17 @@
       },
       "domain": "workflow",
       "react": false,
+      "graph": true,
+      "wiki": false,
+      "skill": false
+    },
+    {
+      "handler": "agentic.workflows.common.nodes:summarize_emails",
+      "name": "summarize_emails",
+      "description": "Summarize recent emails (requires email MCP/adapter; no mock data).",
+      "props": {},
+      "domain": "email",
+      "react": true,
       "graph": true,
       "wiki": false,
       "skill": false
@@ -1387,6 +1669,50 @@
       },
       "domain": "reports",
       "react": false,
+      "graph": true,
+      "wiki": false,
+      "skill": false
+    },
+    {
+      "handler": "agentic.toolkit.it_ops:sys_health",
+      "name": "sys_health",
+      "description": "Check CPU/RAM/disk health (Jetson-safe, 1s sample).",
+      "props": {},
+      "domain": "it_ops",
+      "react": true,
+      "graph": true,
+      "wiki": false,
+      "skill": false
+    },
+    {
+      "handler": "agentic.toolkit.it_ops:text_summarize",
+      "name": "text_summarize",
+      "description": "Condense long text via LLM (heuristic fallback, Jetson-light).",
+      "props": {},
+      "domain": "everyday",
+      "react": true,
+      "graph": true,
+      "wiki": false,
+      "skill": false
+    },
+    {
+      "handler": "agentic.toolkit.it_ops:text_translate",
+      "name": "text_translate",
+      "description": "Translate short text via LLM (passthrough fallback).",
+      "props": {},
+      "domain": "everyday",
+      "react": true,
+      "graph": true,
+      "wiki": false,
+      "skill": false
+    },
+    {
+      "handler": "agentic.toolkit.it_ops:unit_convert",
+      "name": "unit_convert",
+      "description": "Offline unit conversion (length/mass/temp/data).",
+      "props": {},
+      "domain": "everyday",
+      "react": true,
       "graph": true,
       "wiki": false,
       "skill": false

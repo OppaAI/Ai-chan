@@ -417,10 +417,117 @@ def output_user_results(
     )
 
 
+@tool(
+    _spec("check_system_health", "Check Jetson system health (CPU, RAM, Disk)"),
+    description="Check Jetson system health (CPU, RAM, Disk). Compat shim — prefer it_ops:sys_health.",
+    graph=True,
+    react=True,
+    domain="it_ops",
+)
+def check_system_health(
+    config_json: str = "{}",
+    *,
+    state=None,
+) -> str:
+    """Compat shim kept for older playbooks; delegates to it_ops.sys_health."""
+    try:
+        from agentic.toolkit.it_ops import sys_health as _sys_health
+
+        return _sys_health()
+    except Exception:
+        import psutil
+        import shutil
+        cpu = psutil.cpu_percent(interval=1)
+        ram = psutil.virtual_memory()
+        disk = shutil.disk_usage("/")
+        res = {
+            "cpu_percent": cpu,
+            "ram_percent": ram.percent,
+            "ram_total_gb": round(ram.total / (1024**3), 2),
+            "disk_percent": round((disk.used / disk.total) * 100, 2),
+            "disk_total_gb": round(disk.total / (1024**3), 2),
+            "status": "healthy" if cpu < 90 and ram.percent < 90 and disk.used / disk.total < 0.9 else "warning"
+        }
+        return json.dumps(res, ensure_ascii=False)
+
+
+@tool(
+    _spec("parse_logs", "Extract recent errors/warnings from a log file"),
+    description="Extract recent errors/warnings from a log file. Compat shim — prefer it_ops:log_triage.",
+    graph=True,
+    react=True,
+    domain="it_ops",
+)
+def parse_logs(
+    log_file: str = "logs/aiko.log",
+    lines: str = "100",
+    *,
+    state=None,
+) -> str:
+    """Compat shim; defaults fixed to repo-relative logs/aiko.log."""
+    try:
+        from agentic.toolkit.it_ops import log_triage as _triage
+
+        try:
+            n = int(lines)
+        except (TypeError, ValueError):
+            n = 100
+        return _triage(log_file=log_file or "logs/aiko.log", lines=n)
+    except Exception as e:
+        return json.dumps({"error": str(e)})
+
+
+@tool(
+    _spec("summarize_emails", "Summarize recent emails (requires email MCP/adapter; no mock data)."),
+    description="Summarize recent emails (requires email MCP/adapter; no mock data).",
+    graph=True,
+    react=True,
+    domain="email",
+)
+def summarize_emails(
+    config_json: str = "{}",
+    *,
+    state=None,
+) -> str:
+    # No mock data: returning fake email counts would hallucinate.
+    # Direct users to the real ProtonMail MCP tools / owner_email workflow.
+    return json.dumps({
+        "ok": False,
+        "error": "no email adapter configured for this stub",
+        "hint": "Use check_owner_email/reply_owner_email (owner_email workflow) or the ProtonMail MCP tools (read_protonmail/search_protonmail).",
+    }, ensure_ascii=False)
+
+
+@tool(
+    _spec("needle_multi_agent_delegate", "Delegate subtasks to Needle2 workers"),
+    description="Delegate subtasks to Needle2 workers. Compat shim — prefer needle_team:needle_team_run.",
+    graph=True,
+    react=True,
+    domain="multi_agent",
+)
+def needle_multi_agent_delegate(
+    task: str = "",
+    config_json: str = "{}",
+    *,
+    state=None,
+) -> str:
+    """Compat shim delegating to needle_team.needle_team_run (validated schemas)."""
+    try:
+        from agentic.toolkit.needle_team import needle_team_run as _run
+
+        return _run(task=task or "")
+    except Exception as e:
+        return json.dumps({"error": str(e)})
+
+
 __all__ = [
     "ingest_data",
     "store_data",
     "synthesis_data",
     "verify_results",
     "output_user_results",
+    "check_system_health",
+    "parse_logs",
+    "summarize_emails",
+    "needle_multi_agent_delegate",
 ]
