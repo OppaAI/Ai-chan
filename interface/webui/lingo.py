@@ -87,6 +87,9 @@ def parse_lingo_json(content: str):
     if not content:
         raise ValueError("Empty response from LLM")
 
+    # Clean up common LLM artifacts that break JSON
+    content = content.strip()
+
     try:
         return json.loads(content)
     except json.JSONDecodeError:
@@ -94,11 +97,24 @@ def parse_lingo_json(content: str):
         # Try to find JSON block in markdown
         match = re.search(r"```(?:json)?\s*(.*?)\s*```", content, re.DOTALL)
         if match:
-            return json.loads(match.group(1))
+            try:
+                return json.loads(match.group(1))
+            except json.JSONDecodeError:
+                pass
+
         # Last ditch: try to find anything between { and }
+        # This handles cases where there's text before or after the JSON
         match = re.search(r"(\{.*\})", content, re.DOTALL)
         if match:
-            return json.loads(match.group(1))
+            try:
+                return json.loads(match.group(1))
+            except json.JSONDecodeError:
+                # If still failing, try to fix common errors like missing commas before closing brace
+                fixed = re.sub(r'("\s*\n\s*")', '",\n"', match.group(1))
+                try:
+                    return json.loads(fixed)
+                except Exception:
+                    pass
         raise
 
 @router.post("/translate", response_model=TranslateResponse)
@@ -156,8 +172,11 @@ async def conversation_start(request: StartRequest, session: dict = Depends(get_
     uid = session.get("user_id")
     token = set_current_user_id(uid)
     try:
-        system_prompt = "You are Aiko, teaching Japanese through conversation. Output ONLY JSON with 'japanese' and 'english' keys."
-        user_prompt = f"Start a Japanese conversation at {request.level} level."
+        system_prompt = (
+            "You are Aiko, teaching Japanese through conversation. "
+            "Output ONLY valid JSON. Your response must be a JSON object with 'japanese' and 'english' keys."
+        )
+        user_prompt = f"Start a Japanese conversation at {request.level} level. Speak 1-3 sentences in Japanese."
 
         response = think._client.chat.completions.create(
             model=think._llm_model,
@@ -194,7 +213,10 @@ async def conversation_respond(request: RespondRequest, session: dict = Depends(
     uid = session.get("user_id")
     token = set_current_user_id(uid)
     try:
-        system_prompt = "You are Aiko, teaching Japanese through conversation. Output ONLY JSON with 'japanese' and 'english' keys."
+        system_prompt = (
+            "You are Aiko, teaching Japanese through conversation. "
+            "Output ONLY valid JSON. Your response must be a JSON object with 'japanese' and 'english' keys."
+        )
 
         response = think._client.chat.completions.create(
             model=think._llm_model,
@@ -234,7 +256,7 @@ async def conversation_hint(session: dict = Depends(get_lingo_session)):
         system_prompt = (
             "You are Aiko, teaching Japanese through conversation. "
             "Suggest a response for the student to say in Japanese and provide an English translation. "
-            "Output ONLY JSON with 'japanese' and 'english' keys."
+            "Output ONLY valid JSON. Your response must be a JSON object with 'japanese' and 'english' keys."
         )
         user_prompt = "Give me a hint for what I should say next in Japanese."
 
