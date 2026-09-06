@@ -495,9 +495,10 @@ class AikoSpeak:
         per-chunk saving here is TCP keep-alive via _http(), not disk I/O.
         """
         import json
-        if len(text) > 300:
+        # Increased limit from 300 to 600 for Lingo support
+        if len(text) > 600:
             log.warning(f"[speak] truncating oversized TTS chunk: {len(text)} chars")
-            text = text[:300]
+            text = text[:600]
 
         payload_data = {
             "text": text,

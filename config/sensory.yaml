@@ -97,7 +97,7 @@ MIOTTS_MODEL: "MioTTS-0.4B-Q4_K_M"  # Display/model label for the TTS model serv
 MIOTTS_PRESET: "normaldere"  # Voice reference_key name registered in MioTTS; examples: jp_female, deredere, kuudere, normaldere, tsundere, custom cloned voice.
 MIOTTS_DEVICE: "1"  # sounddevice output index; -1 means system default.
 LISTEN_DEVICE: "-1"  # sounddevice input index; -1 means system default.
-MIOTTS_MAX_TOKENS: 300  # Max audio-codec tokens per synthesis call; caps how long a chunk (and any trailing artifact) can run.
+MIOTTS_MAX_TOKENS: 600  # Max audio-codec tokens per synthesis call; caps how long a chunk (and any trailing artifact) can run.
 MIOTTS_TEMPERATURE: 0.8  # Sampling temperature for the TTS LLM; lower = more deterministic/stable delivery.
 MIOTTS_TOP_P: 1.0  # Nucleus sampling threshold; 1.0 = no truncation of the token distribution.
 MIOTTS_REPETITION_PENALTY: 1.15  # Penalizes repeated/held audio tokens; higher discourages drawn-out trailing vowels.

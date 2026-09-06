@@ -27,8 +27,13 @@ class TranslateRequest(BaseModel):
 class StartRequest(BaseModel):
     level: str
 
+class DialogueHistoryEntry(BaseModel):
+    speaker: str
+    text: str
+
 class RespondRequest(BaseModel):
     text: str
+    history: Optional[List[DialogueHistoryEntry]] = []
 
 class TranslationResult(BaseModel):
     register: str
@@ -243,18 +248,26 @@ async def conversation_respond(request: RespondRequest, session: dict = Depends(
     token = set_current_user_id(uid)
     try:
         system_prompt = (
-            "You are Aiko, a Japanese teacher. When the student responds, check their Japanese for grammar, spelling, or unnatural usage. "
+            "You are Aiko, a Japanese teacher. Maintain a natural roleplay conversation with the student. "
+            "When the student responds, check their Japanese for grammar, spelling, or unnatural usage. "
             "1. If there is a mistake: set 'isCorrect' to false. Provide feedback in 'feedback' (explaining the error in English) and the corrected version in 'suggestion'. Set 'japanese' to the feedback text. "
-            "2. If it is correct and natural: set 'isCorrect' to true. Provide the NEXT conversation turn in 'japanese' and 'english'. "
+            "2. If it is correct and natural: set 'isCorrect' to true. Provide the NEXT conversation turn in 'japanese' and 'english' that naturally continues the roleplay. "
             "Output ONLY valid JSON with keys: 'isCorrect', 'feedback', 'suggestion', 'japanese', 'english', 'finished'."
         )
 
+        # Build message list from history
+        messages = [{"role": "system", "content": system_prompt}]
+        if request.history:
+            for entry in request.history:
+                role = "assistant" if entry.speaker == "aiko" else "user"
+                messages.append({"role": role, "content": entry.text})
+
+        # Add current user input
+        messages.append({"role": "user", "content": request.text})
+
         response = think._client.chat.completions.create(
             model=think._llm_model,
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": request.text}
-            ],
+            messages=messages,
             response_format={"type": "json_object"},
             timeout=120.0
         )
@@ -305,7 +318,8 @@ async def conversation_hint(session: dict = Depends(get_lingo_session)):
     try:
         system_prompt = (
             "You are Aiko, teaching Japanese through conversation. "
-            "Suggest a response for the student to say in Japanese and provide an English translation. "
+            "Suggest a concise response for the student to say in Japanese and provide an English translation. "
+            "Keep the Japanese response under 30 words so it doesn't get cut off. "
             "Output ONLY valid JSON. Your response must be a JSON object with 'japanese' and 'english' keys."
         )
         user_prompt = "Give me a hint for what I should say next in Japanese."
