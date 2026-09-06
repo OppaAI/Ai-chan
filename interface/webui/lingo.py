@@ -124,7 +124,8 @@ async def translate(request: TranslateRequest, session: dict = Depends(get_lingo
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt}
             ],
-            response_format={"type": "json_object"}
+            response_format={"type": "json_object"},
+            timeout=120.0
         )
 
         content = response.choices[0].message.content
@@ -164,7 +165,8 @@ async def conversation_start(request: StartRequest, session: dict = Depends(get_
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt}
             ],
-            response_format={"type": "json_object"}
+            response_format={"type": "json_object"},
+            timeout=120.0
         )
 
         content = response.choices[0].message.content
@@ -200,7 +202,8 @@ async def conversation_respond(request: RespondRequest, session: dict = Depends(
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": request.text}
             ],
-            response_format={"type": "json_object"}
+            response_format={"type": "json_object"},
+            timeout=120.0
         )
 
         content = response.choices[0].message.content
@@ -241,7 +244,8 @@ async def conversation_hint(session: dict = Depends(get_lingo_session)):
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt}
             ],
-            response_format={"type": "json_object"}
+            response_format={"type": "json_object"},
+            timeout=120.0
         )
 
         content = response.choices[0].message.content
