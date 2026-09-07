@@ -58,26 +58,20 @@ def generate_lingo_audio(text: str) -> Optional[str]:
     from interface.webui import auth
 
     if not text or not text.strip():
-        log.warning("Audio generation skipped: empty text")
         return None
 
     # Filter out English characters to ensure she only speaks Japanese
     import re
-    # Keep Japanese characters, punctuation, and digits. Remove latin letters.
-    # [a-zA-Z] matches basic English letters.
     clean_text = re.sub(r'[a-zA-Z]', '', text).strip()
 
     if not clean_text:
-        log.warning(f"Audio generation skipped: no Japanese text found in '{text}'")
         return None
 
     if not auth.aiko_web_instance or not auth.aiko_web_instance._speak:
-        log.warning("Audio generation failed: AikoSpeak instance not available")
         return None
 
     try:
-        # AikoSpeak._synthesize returns WAV bytes
-        wav_bytes = auth.aiko_web_instance._speak._synthesize(text)
+        wav_bytes = auth.aiko_web_instance._speak._synthesize(clean_text)
         if not wav_bytes:
             return None
 
@@ -86,7 +80,6 @@ def generate_lingo_audio(text: str) -> Optional[str]:
         filepath = AUDIO_DIR / filename
         filepath.write_bytes(wav_bytes)
 
-        # Try to use REDIRECT_BASE from auth if available
         base_url = getattr(auth, "REDIRECT_BASE", "https://aiko.ide-chroma.ts.net").rstrip("/")
         return f"{base_url}/lingo_audio/{filename}"
     except Exception as e:
@@ -97,12 +90,9 @@ async def get_lingo_session(request: Request):
     """Helper to get session from cookie or fallback to owner for the app."""
     from interface.webui import auth
     try:
-        # require_session and require_accepted_session are dependencies
         session = await auth.require_session(request)
         return await auth.require_accepted_session(session)
     except Exception:
-        # Fallback for the Android app which doesn't have OAuth cookies yet
-        # Default to OppaAI or the configured owner
         owner = os.getenv("AIKO_USER_ID", "OppaAI")
         return {"user_id": owner, "username": owner}
 
@@ -118,7 +108,6 @@ def parse_lingo_json(content: str):
             return json.loads(text)
         except json.JSONDecodeError:
             import re
-            # Try to find JSON block in markdown
             match = re.search(r"```(?:json)?\s*(.*?)\s*```", text, re.DOTALL)
             if match:
                 try:
@@ -126,13 +115,11 @@ def parse_lingo_json(content: str):
                 except json.JSONDecodeError:
                     pass
 
-            # Last ditch: try to find anything between { and }
             match = re.search(r"(\{.*\})", text, re.DOTALL)
             if match:
                 try:
                     return json.loads(match.group(1))
                 except json.JSONDecodeError:
-                    # If still failing, try to fix common errors
                     fixed = re.sub(r'("\s*\n\s*")', '",\n"', match.group(1))
                     try:
                         return json.loads(fixed)
@@ -142,10 +129,7 @@ def parse_lingo_json(content: str):
 
     data = _extract(content)
 
-    # Post-process to ensure we don't have dicts where strings should be
-    # (handles cases like {"japanese": {"message": "..."}} or {"japanese": {"greeting": "..."}})
     if isinstance(data, dict):
-        # Specific fix for 'translations' key in translate endpoint
         if 'translations' in data and isinstance(data['translations'], list):
             for i, item in enumerate(data['translations']):
                 if isinstance(item, dict):
@@ -156,10 +140,7 @@ def parse_lingo_json(content: str):
         for key in list(data.keys()):
             val = data[key]
             if isinstance(val, dict):
-                # If it's a dict, try to find the first string value inside it
-                # This covers 'message', 'text', 'greeting', 'content', etc.
                 found_string = None
-                # Priority keys
                 for p_key in ['text', 'message', 'japanese', 'english', 'feedback', 'suggestion']:
                     if p_key in val and isinstance(val[p_key], str):
                         found_string = val[p_key]
@@ -193,7 +174,7 @@ async def translate(request: TranslateRequest, session: dict = Depends(get_lingo
             "Output ONLY valid JSON. Your response must be a JSON object with a single 'translations' key. "
             "That key must contain an array of objects, each with 'register' and 'text' keys."
         )
-        user_prompt = f"Translate the following English text to Japanese in 3-5 different registers (e.g., Casual, Polite, Respective, etc.): {request.text}"
+        user_prompt = f"Translate the following English text to Japanese in 3-5 different registers: {request.text}"
 
         response = think._client.chat.completions.create(
             model=think._llm_model,
@@ -206,8 +187,6 @@ async def translate(request: TranslateRequest, session: dict = Depends(get_lingo
         )
 
         content = response.choices[0].message.content
-        log.debug(f"Lingo translate response: {content}")
-
         data = parse_lingo_json(content)
         translations_raw = data.get("translations", [])
 
@@ -217,7 +196,7 @@ async def translate(request: TranslateRequest, session: dict = Depends(get_lingo
             results.append(TranslationResult(
                 register=item.get("register", "Normal"),
                 text=text_jp,
-                audioUrl=None # We'll generate this on demand in the app
+                audioUrl=None
             ))
         return TranslateResponse(translations=results)
     except Exception as e:
@@ -229,11 +208,14 @@ async def translate(request: TranslateRequest, session: dict = Depends(get_lingo
 @router.post("/conversation/start")
 async def conversation_start(request: StartRequest, session: dict = Depends(get_lingo_session)):
     from interface.webui import auth
+    if not auth.aiko_web_instance or not auth.aiko_web_instance._think:
+        raise HTTPException(status_code=503, detail="Aiko's brain is not ready")
+
     think = auth.aiko_web_instance._think
     uid = session.get("user_id")
-    token = set_current_user_id(uid)
 
     async def event_generator():
+        token = set_current_user_id(uid)
         try:
             system_prompt = (
                 "You are Aiko, teaching Japanese through conversation. "
@@ -255,20 +237,55 @@ async def conversation_start(request: StartRequest, session: dict = Depends(get_
             )
 
             full_content = ""
+            is_streaming_jp = False
             for chunk in response:
                 delta = chunk.choices[0].delta.content
                 if delta:
                     full_content += delta
-                    yield json.dumps({"type": "delta", "text": delta}) + "\n"
 
-            # Parse and send final
+                    # Search for content between REPLY_JP: and the next tag
+                    if "REPLY_JP:" in full_content:
+                        if not is_streaming_jp:
+                            is_streaming_jp = True
+                            # Find exactly where REPLY_JP starts in the accumulated buffer
+                            # and start streaming from there.
+                            start_idx = full_content.find("REPLY_JP:") + 9
+                            # Send whatever of the current delta is after that tag
+                            if "REPLY_JP:" in delta:
+                                delta_part = delta.split("REPLY_JP:", 1)[1]
+                                if delta_part:
+                                    # Check if the delta ALSO contains the stop tag
+                                    stop_tags = ["REPLY_EN:", "FINISHED:", "MISTAKE:", "FEEDBACK:", "SUGGESTION:"]
+                                    for tag in stop_tags:
+                                        if tag in delta_part:
+                                            delta_part = delta_part.split(tag, 1)[0]
+                                            is_streaming_jp = False
+                                    if delta_part:
+                                        yield json.dumps({"type": "delta", "text": delta_part}) + "\n"
+                            continue
+
+                        if is_streaming_jp:
+                            # Check for any of the follow-up tags to stop streaming
+                            stop_tags = ["REPLY_EN:", "FINISHED:", "MISTAKE:", "FEEDBACK:", "SUGGESTION:"]
+                            found_stop = False
+                            for tag in stop_tags:
+                                if tag in delta:
+                                    # Yield only the part BEFORE the tag
+                                    clean_part = delta.split(tag, 1)[0]
+                                    if clean_part:
+                                        yield json.dumps({"type": "delta", "text": clean_part}) + "\n"
+                                    is_streaming_jp = False
+                                    found_stop = True
+                                    break
+
+                            if not found_stop:
+                                yield json.dumps({"type": "delta", "text": delta}) + "\n"
+
             data = {"isCorrect": True}
-            lines = full_content.split("\n")
-            for line in lines:
+            for line in full_content.split("\n"):
                 if ":" in line:
                     k, v = line.split(":", 1)
-                    k = k.strip().upper()
-                    v = v.strip()
+                    k, v = k.strip().upper(), v.strip()
                     if k == "REPLY_JP": data["japanese"] = v
                     if k == "REPLY_EN": data["english"] = v
                     if k == "FINISHED": data["isFinished"] = v.lower() == "true"
@@ -277,12 +294,11 @@ async def conversation_start(request: StartRequest, session: dict = Depends(get_
             yield json.dumps({
                 "type": "final",
                 "isCorrect": True,
-                "japanese": data.get("japanese"),
-                "english": data.get("english"),
+                "japanese": data.get("japanese", ""),
+                "english": data.get("english", "Translation unavailable"),
                 "isFinished": data.get("isFinished", False),
                 "audioUrl": audio_url
             }) + "\n"
-
         except Exception as e:
             log.exception("Lingo start stream failed")
             yield json.dumps({"type": "error", "message": str(e)}) + "\n"
@@ -291,120 +307,18 @@ async def conversation_start(request: StartRequest, session: dict = Depends(get_
 
     return StreamingResponse(event_generator(), media_type="text/event-stream")
 
-@router.post("/conversation/respond", response_model=ConversationResponse)
-async def conversation_respond(request: RespondRequest, session: dict = Depends(get_lingo_session)):
-    from interface.webui import auth
-    think = auth.aiko_web_instance._think
-    uid = session.get("user_id")
-    token = set_current_user_id(uid)
-    try:
-        system_prompt = (
-            "You are Aiko, a Japanese teacher. Maintain a natural roleplay conversation with the student. "
-            "When the student responds, check their Japanese for grammar, spelling, or unnatural usage. "
-            "1. If there is a mistake: set 'isCorrect' to false. Provide feedback in 'feedback' (explaining the error in English) and the corrected version in 'suggestion' (Japanese ONLY). Set 'japanese' to the feedback text. "
-            "2. If it is correct and natural: set 'isCorrect' to true. Provide the NEXT conversation turn in 'japanese' (Japanese ONLY) and 'english' (English translation) that naturally continues the roleplay. "
-            "Output ONLY valid JSON with keys: 'isCorrect', 'feedback', 'suggestion', 'japanese', 'english', 'finished'."
-        )
-
-        # Build message list from history, ensuring roles alternate strictly (User -> Assistant -> User)
-        # and merging consecutive same-role messages to avoid LLM backend errors.
-        messages = [{"role": "system", "content": system_prompt}]
-
-        pending_history = []
-        if request.history:
-            for entry in request.history:
-                role = "assistant" if entry.speaker == "aiko" else "user"
-                if not pending_history:
-                    # First message after system SHOULD be User
-                    if role == "user":
-                        pending_history.append({"role": role, "content": entry.text})
-                    else:
-                        # If Aiko started, skip her first message or it would follow system directly
-                        continue
-                else:
-                    last = pending_history[-1]
-                    if last["role"] == role:
-                        # Merge consecutive same-role messages
-                        last["content"] += "\n" + entry.text
-                    else:
-                        pending_history.append({"role": role, "content": entry.text})
-
-        # Add current user input
-        if pending_history and pending_history[-1]["role"] == "user":
-            pending_history[-1]["content"] += "\n" + request.text
-        else:
-            pending_history.append({"role": "user", "content": request.text})
-
-        messages.extend(pending_history)
-
-        # Retry logic for conversation respond
-        max_retries = 2
-        content = ""
-        for attempt in range(max_retries + 1):
-            response = think._client.chat.completions.create(
-                model=think._llm_model,
-                messages=messages,
-                response_format={"type": "json_object"},
-                timeout=120.0
-            )
-
-            content = response.choices[0].message.content
-            log.info(f"Lingo conversation respond response (attempt {attempt}): {content}")
-
-            try:
-                data = parse_lingo_json(content)
-                # Success if we have either a correction flow or a continuation flow
-                if data.get("isCorrect") is not None or data.get("japanese") or data.get("japaneseText"):
-                    break
-            except Exception as e:
-                if attempt == max_retries:
-                    raise
-                log.warning(f"Lingo JSON parse failed on attempt {attempt}: {e}")
-
-        data = parse_lingo_json(content)
-        is_correct = data.get("isCorrect", True)
-
-        if not is_correct:
-            # Mistake mode: Speak the feedback or suggestion
-            feedback = data.get("feedback", "")
-            suggestion = data.get("suggestion", "")
-            japanese_text = f"Mistake: {feedback}\nSuggestion: {suggestion}"
-            return ConversationResponse(
-                japaneseText=japanese_text,
-                englishTranslation="Please correct your response ♡",
-                audioUrl=generate_lingo_audio(suggestion), # Speak the correct version
-                isFinished=False,
-                isCorrect=False,
-                feedback=feedback,
-                suggestion=suggestion
-            )
-
-        # Success mode: Continue conversation
-        japanese_text = data.get("japanese") or data.get("japaneseText") or ""
-        english_text = data.get("english") or data.get("englishTranslation") or ""
-        return ConversationResponse(
-            japaneseText=str(japanese_text),
-            englishTranslation=str(english_text) or "Translation unavailable",
-            audioUrl=generate_lingo_audio(str(japanese_text)),
-            isFinished=data.get("finished", data.get("isFinished", False)),
-            isCorrect=True
-        )
-    except Exception as e:
-        log.exception("Lingo conversation response failed")
-        raise HTTPException(status_code=500, detail=str(e))
-    finally:
-        reset_current_user_id(token)
-
 @router.post("/conversation/respond_stream")
 async def conversation_respond_stream(request: RespondRequest, session: dict = Depends(get_lingo_session)):
     from interface.webui import auth
+    if not auth.aiko_web_instance or not auth.aiko_web_instance._think:
+        raise HTTPException(status_code=503, detail="Aiko's brain is not ready")
+
     think = auth.aiko_web_instance._think
     uid = session.get("user_id")
-    token = set_current_user_id(uid)
 
     async def event_generator():
+        token = set_current_user_id(uid)
         try:
-            # We use a slightly different prompt to get a parsable stream
             system_prompt = (
                 "You are Aiko, a Japanese teacher. Maintain a natural roleplay conversation. "
                 "Check the student's input for mistakes FIRST. "
@@ -421,8 +335,13 @@ async def conversation_respond_stream(request: RespondRequest, session: dict = D
             if request.history:
                 for entry in request.history:
                     role = "assistant" if entry.speaker == "aiko" else "user"
-                    messages.append({"role": role, "content": entry.text})
-            messages.append({"role": "user", "content": request.text})
+                    if messages[-1]["role"] != role:
+                        messages.append({"role": role, "content": entry.text})
+
+            if messages[-1]["role"] == "user":
+                messages[-1]["content"] += "\n" + request.text
+            else:
+                messages.append({"role": "user", "content": request.text})
 
             response = think._client.chat.completions.create(
                 model=think._llm_model,
@@ -432,26 +351,56 @@ async def conversation_respond_stream(request: RespondRequest, session: dict = D
             )
 
             full_content = ""
+            is_streaming_jp = False
             for chunk in response:
                 delta = chunk.choices[0].delta.content
                 if delta:
                     full_content += delta
-                    # Send raw delta for real-time typewriter
-                    yield json.dumps({"type": "delta", "text": delta}) + "\n"
 
-            # After streaming finishes, we provide the final structured data
-            # This helps the app finalize the UI (e.g. generate audio)
-            # We'll parse the full_content to extract fields
-            log.info(f"Lingo stream finished. Parsing: {full_content}")
+                    # Search for content between REPLY_JP: (or SUGGESTION:) and the next tag
+                    target_tag = "SUGGESTION:" if "MISTAKE: True" in full_content else "REPLY_JP:"
 
-            # Simple line-based parser
+                    if target_tag in full_content:
+                        if not is_streaming_jp:
+                            is_streaming_jp = True
+                            # Find start pos
+                            if target_tag in delta:
+                                delta_part = delta.split(target_tag, 1)[1]
+                                # Check if stop tag is in same delta
+                                stop_tags = ["REPLY_EN:", "FINISHED:", "MISTAKE:", "FEEDBACK:", "REPLY_JP:"]
+                                # Remove current tag from stop checks to avoid self-stop
+                                if target_tag in stop_tags: stop_tags.remove(target_tag)
+
+                                for tag in stop_tags:
+                                    if tag in delta_part:
+                                        delta_part = delta_part.split(tag, 1)[0]
+                                        is_streaming_jp = False
+                                if delta_part:
+                                    yield json.dumps({"type": "delta", "text": delta_part}) + "\n"
+                            continue
+
+                        if is_streaming_jp:
+                            stop_tags = ["REPLY_EN:", "FINISHED:", "MISTAKE:", "FEEDBACK:", "REPLY_JP:", "SUGGESTION:"]
+                            if target_tag in stop_tags: stop_tags.remove(target_tag)
+
+                            found_stop = False
+                            for tag in stop_tags:
+                                if tag in delta:
+                                    clean_part = delta.split(tag, 1)[0]
+                                    if clean_part:
+                                        yield json.dumps({"type": "delta", "text": clean_part}) + "\n"
+                                    is_streaming_jp = False
+                                    found_stop = True
+                                    break
+
+                            if not found_stop:
+                                yield json.dumps({"type": "delta", "text": delta}) + "\n"
+
             data = {"isCorrect": True}
-            lines = full_content.split("\n")
-            for line in lines:
+            for line in full_content.split("\n"):
                 if ":" in line:
                     k, v = line.split(":", 1)
-                    k = k.strip().upper()
-                    v = v.strip()
+                    k, v = k.strip().upper(), v.strip()
                     if k == "MISTAKE": data["isCorrect"] = v.lower() != "true"
                     if k == "FEEDBACK": data["feedback"] = v
                     if k == "SUGGESTION": data["suggestion"] = v
@@ -459,8 +408,6 @@ async def conversation_respond_stream(request: RespondRequest, session: dict = D
                     if k == "REPLY_EN": data["english"] = v
                     if k == "FINISHED": data["isFinished"] = v.lower() == "true"
 
-            # Special case for mistakes: generate audio for suggestion
-            # Otherwise generate audio for REPLY_JP
             audio_text = data.get("suggestion") if not data.get("isCorrect") else data.get("japanese")
             audio_url = generate_lingo_audio(audio_text) if audio_text else None
 
@@ -469,12 +416,11 @@ async def conversation_respond_stream(request: RespondRequest, session: dict = D
                 "isCorrect": data.get("isCorrect", True),
                 "feedback": data.get("feedback"),
                 "suggestion": data.get("suggestion"),
-                "japanese": data.get("japanese"),
-                "english": data.get("english"),
+                "japanese": data.get("japanese", ""),
+                "english": data.get("english", "Translation unavailable"),
                 "isFinished": data.get("isFinished", False),
                 "audioUrl": audio_url
             }) + "\n"
-
         except Exception as e:
             log.exception("Lingo streaming failed")
             yield json.dumps({"type": "error", "message": str(e)}) + "\n"
@@ -486,6 +432,9 @@ async def conversation_respond_stream(request: RespondRequest, session: dict = D
 @router.post("/conversation/hint", response_model=ConversationResponse)
 async def conversation_hint(session: dict = Depends(get_lingo_session)):
     from interface.webui import auth
+    if not auth.aiko_web_instance or not auth.aiko_web_instance._think:
+        raise HTTPException(status_code=503, detail="Aiko's brain is not ready")
+
     think = auth.aiko_web_instance._think
     uid = session.get("user_id")
     token = set_current_user_id(uid)
@@ -493,45 +442,23 @@ async def conversation_hint(session: dict = Depends(get_lingo_session)):
         system_prompt = (
             "You are Aiko, teaching Japanese through conversation. "
             "Suggest a concise response for the student to say in Japanese and provide an English translation. "
-            "Keep the Japanese response under 30 words so it doesn't get cut off. "
-            "The 'japanese' value must be in Japanese ONLY (no English). "
-            "Output ONLY valid JSON. Your response must be a JSON object with 'japanese' and 'english' keys."
+            "Keep the Japanese response under 30 words. Japanese ONLY in 'japanese' field. "
+            "Output ONLY valid JSON with 'japanese' and 'english' keys."
         )
-        user_prompt = "Give me a hint for what I should say next in Japanese."
-
-        # Retry logic for conversation hint
-        max_retries = 2
-        content = ""
-        for attempt in range(max_retries + 1):
-            response = think._client.chat.completions.create(
-                model=think._llm_model,
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt}
-                ],
-                response_format={"type": "json_object"},
-                timeout=120.0
-            )
-
-            content = response.choices[0].message.content
-            log.info(f"Lingo conversation hint response (attempt {attempt}): {content}")
-
-            try:
-                data = parse_lingo_json(content)
-                if data.get("japanese") or data.get("japaneseText"):
-                    break
-            except Exception as e:
-                if attempt == max_retries:
-                    raise
-                log.warning(f"Lingo JSON parse failed on attempt {attempt}: {e}")
-
-        data = parse_lingo_json(content)
-        japanese_text = data.get("japanese") or data.get("japaneseText") or ""
-        english_text = data.get("english") or data.get("englishTranslation") or ""
+        response = think._client.chat.completions.create(
+            model=think._llm_model,
+            messages=[{"role": "system", "content": system_prompt}, {"role": "user", "content": "Hint please"}],
+            response_format={"type": "json_object"},
+            timeout=120.0
+        )
+        data = parse_lingo_json(response.choices[0].message.content)
+        jp = data.get("japanese") or data.get("japaneseText") or ""
+        en = data.get("english") or data.get("englishTranslation") or "Translation unavailable"
         return ConversationResponse(
-            japaneseText=str(japanese_text),
-            englishTranslation=str(english_text) or "Translation unavailable",
-            audioUrl=generate_lingo_audio(str(japanese_text))
+            japaneseText=str(jp),
+            englishTranslation=str(en),
+            audioUrl=generate_lingo_audio(str(jp)),
+            isCorrect=True
         )
     except Exception as e:
         log.exception("Lingo conversation hint failed")
@@ -541,7 +468,6 @@ async def conversation_hint(session: dict = Depends(get_lingo_session)):
 
 @router.get("/tts")
 async def get_tts(text: str, session: dict = Depends(get_lingo_session)):
-    """Generate audio for a specific string on demand."""
     url = generate_lingo_audio(text)
     if not url:
         raise HTTPException(status_code=500, detail="TTS generation failed")
