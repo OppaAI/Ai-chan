@@ -476,7 +476,7 @@ async def conversation_respond_stream(request: RespondRequest, session: dict = D
                     elif tag == "SUGGESTION": data["suggestion"] = val
 
             # Fallback: if she just sent raw text without any tags, treat the whole thing as Japanese
-            if not any(f"{t}:" in flat_content.upper() for t in tags) and not data.get("japanese"):
+            if not any(f"{t}:" in flat_content.upper() for t in expected_tags) and not data.get("japanese"):
                 data["japanese"] = full_content.strip()
                 data["isCorrect"] = True
 
