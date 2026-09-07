@@ -216,7 +216,7 @@ async def translate(request: TranslateRequest, session: dict = Depends(get_lingo
             results.append(TranslationResult(
                 register=item.get("register", "Normal"),
                 text=text_jp,
-                audioUrl=generate_lingo_audio(text_jp)
+                audioUrl=None # We'll generate this on demand in the app
             ))
         return TranslateResponse(translations=results)
     except Exception as e:
@@ -443,6 +443,14 @@ async def conversation_hint(session: dict = Depends(get_lingo_session)):
         raise HTTPException(status_code=500, detail=str(e))
     finally:
         reset_current_user_id(token)
+
+@router.get("/tts")
+async def get_tts(text: str, session: dict = Depends(get_lingo_session)):
+    """Generate audio for a specific string on demand."""
+    url = generate_lingo_audio(text)
+    if not url:
+        raise HTTPException(status_code=500, detail="TTS generation failed")
+    return {"audioUrl": url}
 
 @router.post("/conversation/stop")
 async def conversation_stop(session: dict = Depends(get_lingo_session)):
