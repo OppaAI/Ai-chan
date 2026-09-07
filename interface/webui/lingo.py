@@ -60,9 +60,14 @@ def generate_lingo_audio(text: str) -> Optional[str]:
     if not text or not text.strip():
         return None
 
-    # Filter out English characters to ensure she only speaks Japanese
+    # Filter out Latin/English characters and Romaji completely.
     import re
-    clean_text = re.sub(r'[a-zA-Z]', '', text).strip()
+    # Remove all standard Latin letters
+    clean_text = re.sub(r'[a-zA-Z]', '', text)
+    # Remove common Romaji leftovers like empty parentheses: "こんにちは ( )"
+    clean_text = re.sub(r'\(\s*\)', '', clean_text)
+    # Remove any extra spaces left behind
+    clean_text = re.sub(r'\s{2,}', ' ', clean_text).strip()
 
     if not clean_text:
         return None
@@ -219,6 +224,7 @@ async def conversation_start(request: StartRequest, session: dict = Depends(get_
         try:
             system_prompt = (
                 "You are Aiko, teaching Japanese through conversation. "
+                "DO NOT use Romaji (Latin script). Use Kanji, Hiragana, and Katakana ONLY. "
                 "Output your response exactly like this:\n"
                 "REPLY_JP: <Japanese sentences>\n"
                 "REPLY_EN: <English translation>\n"
@@ -350,12 +356,13 @@ async def conversation_respond_stream(request: RespondRequest, session: dict = D
                 f"{base_prompt}\n\n"
                 "--- LINGO INSTRUCTIONS ---\n"
                 "You are acting as a Japanese teacher. Maintain a natural roleplay conversation. "
+                "DO NOT use Romaji (Latin script) in your Japanese responses. Use Kanji, Hiragana, and Katakana ONLY. "
                 "When the student responds, check their Japanese for grammar, spelling, or unnatural usage. "
                 "Format your response EXACTLY like this:\n"
                 "MISTAKE: <True/False>\n"
                 "FEEDBACK: <Explanation in English of the mistake, or empty if no mistake>\n"
-                "SUGGESTION: <Corrected Japanese version of what the student said, or empty if no mistake>\n"
-                "REPLY_JP: <Your NEXT Japanese conversation turn to keep the dialogue going>\n"
+                "SUGGESTION: <Corrected Japanese version of what the student said, or empty if no mistake. NO ROMAJI.>\n"
+                "REPLY_JP: <Your NEXT Japanese conversation turn to keep the dialogue going. NO ROMAJI.>\n"
                 "REPLY_EN: <English translation of your next turn>\n"
                 "FINISHED: <True if the conversation is naturally over (e.g. they said goodbye), otherwise False>"
             )
@@ -502,6 +509,12 @@ async def conversation_respond_stream(request: RespondRequest, session: dict = D
             # Determine final display text and audio text
             is_mistake = not data.get("isCorrect", True)
 
+            # Double check: if she says "Correct" or similar in feedback, it's not a mistake
+            feedback_text = (data.get("feedback") or "").lower()
+            if is_mistake and any(word in feedback_text for word in ["correct", "perfect", "good job", "great", "excellent"]):
+                is_mistake = False
+                data["isCorrect"] = True
+
             if is_mistake:
                 feedback = data.get("feedback") or "Grammar/usage error."
                 suggestion = data.get("suggestion") or ""
@@ -510,7 +523,10 @@ async def conversation_respond_stream(request: RespondRequest, session: dict = D
                     final_jp += f"\nSuggestion: {suggestion}"
                 audio_text = suggestion or feedback
             else:
-                final_jp = data.get("japanese") or "..."
+                # Ensure we show the Japanese reply if correct
+                final_jp = data.get("japanese")
+                if not final_jp or final_jp in ["...", "*"]:
+                    final_jp = data.get("suggestion") or "Great job! Let's continue."
                 audio_text = final_jp
 
             audio_url = generate_lingo_audio(audio_text)
@@ -521,7 +537,7 @@ async def conversation_respond_stream(request: RespondRequest, session: dict = D
                 "feedback": data.get("feedback"),
                 "suggestion": data.get("suggestion"),
                 "japanese": final_jp,
-                "english": data.get("english") or "Please correct your Japanese ♡",
+                "english": data.get("english") or "Perfect! Let's keep talking.",
                 "isFinished": data.get("isFinished", False),
                 "audioUrl": audio_url
             }) + "\n"
