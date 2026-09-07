@@ -356,15 +356,14 @@ async def conversation_respond_stream(request: RespondRequest, session: dict = D
                 f"{base_prompt}\n\n"
                 "--- LINGO INSTRUCTIONS ---\n"
                 "You are acting as a Japanese teacher. Maintain a natural roleplay conversation. "
-                "DO NOT use Romaji (Latin script) in your Japanese responses. Use Kanji, Hiragana, and Katakana ONLY. "
-                "When the student responds, check their Japanese for grammar, spelling, or unnatural usage. "
+                "DO NOT use Romaji (Latin script). Use Kanji, Hiragana, and Katakana ONLY. "
                 "Format your response EXACTLY like this:\n"
                 "MISTAKE: <True/False>\n"
-                "FEEDBACK: <Explanation in English of the mistake, or empty if no mistake>\n"
-                "SUGGESTION: <Corrected Japanese version of what the student said, or empty if no mistake. NO ROMAJI.>\n"
-                "REPLY_JP: <Your NEXT Japanese conversation turn to keep the dialogue going. NO ROMAJI.>\n"
-                "REPLY_EN: <English translation of your next turn>\n"
-                "FINISHED: <True if the conversation is naturally over (e.g. they said goodbye), otherwise False>"
+                "FEEDBACK: <Explanation in English of the mistake, or empty>\n"
+                "SUGGESTION: <Corrected Japanese version of what the student said. NO ROMAJI.>\n"
+                "REPLY_JP: <Your NEXT Japanese conversation turn. NO ROMAJI.>\n"
+                "REPLY_EN: <Provide a COMPLETE English translation of BOTH the suggestion (if any) and your reply_jp>\n"
+                "FINISHED: <True if the conversation is naturally over, otherwise False>"
             )
 
             # Strict role alternation for llama-server
@@ -522,12 +521,15 @@ async def conversation_respond_stream(request: RespondRequest, session: dict = D
                 if suggestion:
                     final_jp += f"\nSuggestion: {suggestion}"
                 audio_text = suggestion or feedback
+                # If it's a mistake, English should ideally translate the suggestion
+                english_text = data.get("english") or "Please correct your Japanese ♡"
             else:
                 # Ensure we show the Japanese reply if correct
                 final_jp = data.get("japanese")
                 if not final_jp or final_jp in ["...", "*"]:
                     final_jp = data.get("suggestion") or "Great job! Let's continue."
                 audio_text = final_jp
+                english_text = data.get("english") or "Perfect! Let's keep talking."
 
             audio_url = generate_lingo_audio(audio_text)
 
@@ -537,7 +539,7 @@ async def conversation_respond_stream(request: RespondRequest, session: dict = D
                 "feedback": data.get("feedback"),
                 "suggestion": data.get("suggestion"),
                 "japanese": final_jp,
-                "english": data.get("english") or "Perfect! Let's keep talking.",
+                "english": english_text,
                 "isFinished": data.get("isFinished", False),
                 "audioUrl": audio_url
             }) + "\n"
