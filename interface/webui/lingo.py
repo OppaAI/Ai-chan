@@ -286,21 +286,20 @@ async def conversation_start(request: StartRequest, session: dict = Depends(get_
                             yield json.dumps({"type": "delta", "text": clean_delta}) + "\n"
 
             # Final structured data extraction using robust regex
-            data = {"isCorrect": True}
+            data = {"isCorrect": True, "isFinished": False}
 
             tags = ["REPLY_JP", "REPLY_EN", "FINISHED"]
             flat_content = full_content.replace("**", "").replace("`", "")
 
             import re
-            tag_regex = r"([A-Z_]+)\s*:\s*(.*?)(?=\n[A-Z_]+\s*:|[A-Z_]+\s*:|$)"
-            found_tags = re.findall(tag_regex, flat_content, re.DOTALL | re.IGNORECASE)
-
-            for k, v in found_tags:
-                k = k.strip().upper()
-                v = v.strip()
-                if k == "FINISHED": data["isFinished"] = v.lower() in ["true", "yes", "1"]
-                elif k in ["REPLY_JP", "JAPANESE"]: data["japanese"] = v
-                elif k in ["REPLY_EN", "ENGLISH"]: data["english"] = v
+            for tag in tags:
+                pattern = rf"(?:^|\n){tag}\s*:\s*(.*?)(?=\n[A-Z_]+\s*:|$)"
+                match = re.search(pattern, flat_content, re.IGNORECASE | re.DOTALL)
+                if match:
+                    val = match.group(1).strip()
+                    if tag == "FINISHED": data["isFinished"] = val.lower() in ["true", "yes", "1"]
+                    elif tag == "REPLY_JP": data["japanese"] = val
+                    elif tag == "REPLY_EN": data["english"] = val
 
             # Fallback: if she just sent raw text without any tags, treat the whole thing as Japanese
             if not any(f"{t}:" in flat_content.upper() for t in tags) and not data.get("japanese"):
@@ -357,7 +356,8 @@ async def conversation_respond_stream(request: RespondRequest, session: dict = D
             system_prompt = (
                 f"{base_prompt}\n\n"
                 "ACTIVATE SKILL: JAPANESE_TUTOR\n"
-                "You are in 'Lingo App Mode'. You MUST follow the 'Lingo App Protocol (Strict Mode)' defined in your JAPANESE_TUTOR skill for every response."
+                "You are in 'Lingo App Mode'. You MUST follow the 'Lingo App Protocol (Strict Mode)' defined in your JAPANESE_TUTOR skill for every response.\n"
+                "IMPORTANT: Set FINISHED to True ONLY if the student explicitly ends the session or says goodbye. Otherwise, ALWAYS keep it False."
             )
 
             # Strict role alternation for llama-server
@@ -451,29 +451,29 @@ async def conversation_respond_stream(request: RespondRequest, session: dict = D
                             yield json.dumps({"type": "delta", "text": clean_delta}) + "\n"
 
             # Final structured data extraction using robust regex
-            data = {"isCorrect": True}
+            data = {"isCorrect": True, "isFinished": False}
 
-            # Map of internal keys to possible LLM tag variations
-            tags = ["MISTAKE", "FEEDBACK", "SUGGESTION", "REPLY_JP", "REPLY_EN", "FINISHED"]
+            # Specific tags we are looking for
+            expected_tags = ["MISTAKE", "FEEDBACK", "SUGGESTION", "REPLY_JP", "REPLY_EN", "FINISHED"]
 
             # Remove markdown bolding and backticks
             flat_content = full_content.replace("**", "").replace("`", "")
 
             import re
-            # Extract all tag-like patterns: TAG_NAME: content
-            # The lookahead ensures we stop before the next tag
-            tag_regex = r"([A-Z_]+)\s*:\s*(.*?)(?=\n[A-Z_]+\s*:|[A-Z_]+\s*:|$)"
-            found_tags = re.findall(tag_regex, flat_content, re.DOTALL | re.IGNORECASE)
-
-            for k, v in found_tags:
-                k = k.strip().upper()
-                v = v.strip()
-                if k == "MISTAKE": data["isCorrect"] = v.lower() not in ["true", "yes", "y", "1"]
-                elif k == "FINISHED": data["isFinished"] = v.lower() in ["true", "yes", "y", "1"]
-                elif k in ["REPLY_JP", "JAPANESE"]: data["japanese"] = v
-                elif k in ["REPLY_EN", "ENGLISH"]: data["english"] = v
-                elif k == "FEEDBACK": data["feedback"] = v
-                elif k == "SUGGESTION": data["suggestion"] = v
+            # Only match tags that are at the beginning of a line or the very start of the string
+            # and followed by a colon.
+            for tag in expected_tags:
+                # Regex looks for tag at start of string or after a newline
+                pattern = rf"(?:^|\n){tag}\s*:\s*(.*?)(?=\n[A-Z_]+\s*:|$)"
+                match = re.search(pattern, flat_content, re.IGNORECASE | re.DOTALL)
+                if match:
+                    val = match.group(1).strip()
+                    if tag == "MISTAKE": data["isCorrect"] = val.lower() not in ["true", "yes", "y", "1"]
+                    elif tag == "FINISHED": data["isFinished"] = val.lower() in ["true", "yes", "y", "1"]
+                    elif tag == "REPLY_JP": data["japanese"] = val
+                    elif tag == "REPLY_EN": data["english"] = val
+                    elif tag == "FEEDBACK": data["feedback"] = val
+                    elif tag == "SUGGESTION": data["suggestion"] = val
 
             # Fallback: if she just sent raw text without any tags, treat the whole thing as Japanese
             if not any(f"{t}:" in flat_content.upper() for t in tags) and not data.get("japanese"):

@@ -54,7 +54,7 @@ Use this skill when the Lingo app asks Aiko to teach/correct/quiz Japanese.
 
 ## Lingo App Protocol (Strict Mode)
 
-When used by the Lingo Android app (detected by instruction), you MUST follow this line-delimited format exactly. Use Kanji, Hiragana, and Katakana ONLY for Japanese fields. NO ROMAJI.
+When used by the Lingo Android app (detected by instruction), you MUST follow this line-delimited format exactly. Put each tag on its own line, in this exact order, with no markdown bold on tags. Use Kanji, Hiragana, and Katakana ONLY for Japanese fields. NO ROMAJI. REPLY_EN must be the COMPLETE English translation of REPLY_JP (plus SUGGESTION when MISTAKE is True) — never truncate at colons, never summarize, never leave it empty.
 
 MISTAKE: <True/False>
 FEEDBACK: <Explanation in English of the mistake, or empty>
