@@ -323,51 +323,53 @@ async def conversation_respond_stream(request: RespondRequest, session: dict = D
 
     async def event_generator():
         token = set_current_user_id(uid)
-        try:
+            # Combine Aiko's real persona with Lingo instructions
+            base_prompt = think._current_system_prompt(request.text)
             system_prompt = (
-                "You are Aiko, a Japanese teacher. Maintain a natural roleplay conversation. "
-                "Check the student's input for mistakes FIRST. "
+                f"{base_prompt}\n\n"
+                "--- LINGO INSTRUCTIONS ---\n"
+                "You are acting as a Japanese teacher. Maintain a natural roleplay conversation. "
+                "When the student responds, check their Japanese for grammar, spelling, or unnatural usage. "
                 "Format your response EXACTLY like this:\n"
                 "MISTAKE: <True/False>\n"
-                "FEEDBACK: <Explanation in English or empty>\n"
-                "SUGGESTION: <Corrected Japanese or empty>\n"
-                "REPLY_JP: <Next Japanese conversation turn>\n"
-                "REPLY_EN: <English translation of the next turn>\n"
-                "FINISHED: <True/False>"
+                "FEEDBACK: <Explanation in English of the mistake, or empty if no mistake>\n"
+                "SUGGESTION: <Corrected Japanese version of what the student said, or empty if no mistake>\n"
+                "REPLY_JP: <Your NEXT Japanese conversation turn to keep the dialogue going>\n"
+                "REPLY_EN: <English translation of your next turn>\n"
+                "FINISHED: <True if the conversation is naturally over (e.g. they said goodbye), otherwise False>"
             )
 
             # Strict role alternation for llama-server
             messages = [{"role": "system", "content": system_prompt}]
 
-            # If no history, we still need a User message first
-            if not request.history:
-                messages.append({"role": "user", "content": "Hello Aiko, I want to practice Japanese."})
-                messages.append({"role": "assistant", "content": "Sure! Let's start."})
-
-            # Build pending list
+            # Build pending list from history
             pending = []
             if request.history:
                 for entry in request.history:
+                    # Filter out empty or placeholder text
+                    text = entry.text.strip()
+                    if not text or text in ["...", "*"]:
+                        continue
+
                     role = "assistant" if entry.speaker == "aiko" else "user"
                     if not pending:
-                        # First message after system MUST be User
                         if role == "user":
-                            pending.append({"role": role, "content": entry.text})
+                            pending.append({"role": role, "content": text})
                         else:
-                            # Prepend dummy user if Aiko started
-                            pending.append({"role": "user", "content": "Please start the conversation."})
-                            pending.append({"role": "assistant", "content": entry.text})
+                            pending.append({"role": "user", "content": "I'm ready to talk Japanese."})
+                            pending.append({"role": "assistant", "content": text})
                     else:
                         if pending[-1]["role"] == role:
-                            pending[-1]["content"] += "\n" + entry.text
+                            pending[-1]["content"] += "\n" + text
                         else:
-                            pending.append({"role": role, "content": entry.text})
+                            pending.append({"role": role, "content": text})
 
-            # Append current user input
+            # Current user input
+            user_text = request.text.strip()
             if pending and pending[-1]["role"] == "user":
-                pending[-1]["content"] += "\n" + request.text
+                pending[-1]["content"] += "\n" + user_text
             else:
-                pending.append({"role": "user", "content": request.text})
+                pending.append({"role": "user", "content": user_text})
 
             messages.extend(pending)
 
@@ -375,7 +377,8 @@ async def conversation_respond_stream(request: RespondRequest, session: dict = D
                 model=think._llm_model,
                 messages=messages,
                 stream=True,
-                timeout=120.0
+                timeout=120.0,
+                temperature=0.7 # Higher temperature for more variety
             )
 
             full_content = ""
@@ -450,12 +453,16 @@ async def conversation_respond_stream(request: RespondRequest, session: dict = D
             audio_text = data.get("suggestion") if not data.get("isCorrect") else data.get("japanese")
             audio_url = generate_lingo_audio(audio_text)
 
+            final_jp = data.get("japanese") or data.get("suggestion")
+            if not final_jp or final_jp in ["...", "*"]:
+                final_jp = "Japanese text unavailable"
+
             yield json.dumps({
                 "type": "final",
                 "isCorrect": data.get("isCorrect", True),
                 "feedback": data.get("feedback"),
                 "suggestion": data.get("suggestion"),
-                "japanese": data.get("japanese") or data.get("suggestion") or "...",
+                "japanese": final_jp,
                 "english": data.get("english") or "Translation unavailable",
                 "isFinished": data.get("isFinished", False),
                 "audioUrl": audio_url
