@@ -244,10 +244,11 @@ async def conversation_start(request: StartRequest, session: dict = Depends(get_
                     full_content += delta
 
                     # More robust parsing for streaming
-                    if not is_streaming_jp and "REPLY_JP:" in full_content:
+                    clean_buf = full_content.replace("**", "")
+                    if not is_streaming_jp and "REPLY_JP:" in clean_buf:
                         is_streaming_jp = True
                         # Start from after the tag
-                        parts = full_content.split("REPLY_JP:", 1)
+                        parts = clean_buf.split("REPLY_JP:", 1)
                         if len(parts) > 1:
                             text = parts[1]
                             # If next tag is already here, stop
@@ -261,19 +262,20 @@ async def conversation_start(request: StartRequest, session: dict = Depends(get_
                         continue
 
                     if is_streaming_jp:
+                        clean_delta = delta.replace("**", "")
                         # Check if this delta contains a stop tag
                         stop_tags = ["REPLY_EN:", "FINISHED:"]
                         found_stop = False
                         for tag in stop_tags:
-                            if tag in delta:
-                                text = delta.split(tag, 1)[0]
+                            if tag in clean_delta:
+                                text = clean_delta.split(tag, 1)[0]
                                 if text:
                                     yield json.dumps({"type": "delta", "text": text}) + "\n"
                                 is_streaming_jp = False
                                 found_stop = True
                                 break
                         if not found_stop:
-                            yield json.dumps({"type": "delta", "text": delta}) + "\n"
+                            yield json.dumps({"type": "delta", "text": clean_delta}) + "\n"
 
             # Parse and send final
             data = {"isCorrect": True}
@@ -391,41 +393,50 @@ async def conversation_respond_stream(request: RespondRequest, session: dict = D
 
                     # Filter for streaming Japanese
                     # We want to stream either SUGGESTION: (if mistake) or REPLY_JP: (if correct)
-                    target_tag = "SUGGESTION:" if "MISTAKE: TRUE" in full_content.upper() else "REPLY_JP:"
+                    clean_buf = full_content.replace("**", "")
+                    target_tag = "SUGGESTION:" if "MISTAKE: TRUE" in clean_buf.upper() else "REPLY_JP:"
 
-                    if not is_streaming_jp and target_tag in full_content:
-                        is_streaming_jp = True
-                        parts = full_content.split(target_tag, 1)
-                        if len(parts) > 1:
-                            text = parts[1]
-                            stop_tags = ["REPLY_EN:", "FINISHED:", "REPLY_JP:"]
-                            if target_tag in stop_tags: stop_tags.remove(target_tag)
-                            for tag in stop_tags:
-                                if tag in text:
-                                    text = text.split(tag, 1)[0]
-                                    is_streaming_jp = False
-                            if text:
-                                yield json.dumps({"type": "delta", "text": text}) + "\n"
+                    if not is_streaming_jp:
+                        if target_tag in clean_buf:
+                            is_streaming_jp = True
+                            parts = clean_buf.split(target_tag, 1)
+                            if len(parts) > 1:
+                                text = parts[1]
+                                stop_tags = ["REPLY_EN:", "FINISHED:", "REPLY_JP:"]
+                                if target_tag in stop_tags: stop_tags.remove(target_tag)
+                                for tag in stop_tags:
+                                    if tag in text:
+                                        text = text.split(tag, 1)[0]
+                                        is_streaming_jp = False
+                                if text:
+                                    yield json.dumps({"type": "delta", "text": text}) + "\n"
+                        elif not any(t in clean_buf.upper() for t in ["MISTAKE:", "REPLY_JP:", "REPLY_EN:"]) and len(clean_buf) > 10:
+                            # Fallback: if it's just raw text, start streaming it
+                            is_streaming_jp = True
+                            yield json.dumps({"type": "delta", "text": delta.replace("**", "")}) + "\n"
                         continue
 
                     if is_streaming_jp:
+                        clean_delta = delta.replace("**", "")
                         stop_tags = ["REPLY_EN:", "FINISHED:", "REPLY_JP:", "SUGGESTION:"]
                         if target_tag in stop_tags: stop_tags.remove(target_tag)
                         found_stop = False
                         for tag in stop_tags:
-                            if tag in delta:
-                                text = delta.split(tag, 1)[0]
+                            if tag in clean_delta:
+                                text = clean_delta.split(tag, 1)[0]
                                 if text:
                                     yield json.dumps({"type": "delta", "text": text}) + "\n"
                                 is_streaming_jp = False
                                 found_stop = True
                                 break
                         if not found_stop:
-                            yield json.dumps({"type": "delta", "text": delta}) + "\n"
+                            yield json.dumps({"type": "delta", "text": clean_delta}) + "\n"
 
             # Final parse
             data = {"isCorrect": True}
-            for line in full_content.split("\n"):
+            clean_content = full_content.replace("**", "") # Remove any markdown bolding
+
+            for line in clean_content.split("\n"):
                 if ":" in line:
                     k, v = line.split(":", 1)
                     k, v = k.strip().upper(), v.strip()
@@ -436,19 +447,24 @@ async def conversation_respond_stream(request: RespondRequest, session: dict = D
                     if k == "REPLY_EN": data["english"] = v
                     if k == "FINISHED": data["isFinished"] = v.lower() == "true"
 
-            # Fallback regex for final data
+            # Fallback: if she just sent raw text without any tags, treat the whole thing as Japanese
+            if not any(tag in full_content for tag in ["REPLY_JP:", "MISTAKE:", "REPLY_EN:"]):
+                data["japanese"] = full_content.strip()
+                data["isCorrect"] = True
+
+            # Fallback regex for final data (more robust than line-based)
             import re
             if not data.get("japanese"):
-                m = re.search(r"REPLY_JP:(.*?)(?:\n|$|REPLY_EN:)", full_content, re.DOTALL)
+                m = re.search(r"(?:REPLY_JP|Japanese):\s*(.*?)(?:\n|$|REPLY_EN|English:)", clean_content, re.IGNORECASE | re.DOTALL)
                 if m: data["japanese"] = m.group(1).strip()
             if not data.get("suggestion"):
-                m = re.search(r"SUGGESTION:(.*?)(?:\n|$|REPLY_JP:)", full_content, re.DOTALL)
+                m = re.search(r"SUGGESTION:\s*(.*?)(?:\n|$|REPLY_JP|REPLY_EN)", clean_content, re.IGNORECASE | re.DOTALL)
                 if m: data["suggestion"] = m.group(1).strip()
             if not data.get("feedback"):
-                m = re.search(r"FEEDBACK:(.*?)(?:\n|$|SUGGESTION:)", full_content, re.DOTALL)
+                m = re.search(r"FEEDBACK:\s*(.*?)(?:\n|$|SUGGESTION|REPLY_JP)", clean_content, re.IGNORECASE | re.DOTALL)
                 if m: data["feedback"] = m.group(1).strip()
             if not data.get("english"):
-                m = re.search(r"REPLY_EN:(.*?)(?:\n|$|FINISHED:)", full_content, re.DOTALL)
+                m = re.search(r"(?:REPLY_EN|English):\s*(.*?)(?:\n|$|FINISHED)", clean_content, re.IGNORECASE | re.DOTALL)
                 if m: data["english"] = m.group(1).strip()
 
             audio_text = data.get("suggestion") if not data.get("isCorrect") else data.get("japanese")
