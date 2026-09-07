@@ -332,13 +332,18 @@ async def conversation_respond_stream(request: RespondRequest, session: dict = D
             )
 
             messages = [{"role": "system", "content": system_prompt}]
+            last_role = "system"
             if request.history:
                 for entry in request.history:
                     role = "assistant" if entry.speaker == "aiko" else "user"
-                    if messages[-1]["role"] != role:
+                    if role != last_role:
                         messages.append({"role": role, "content": entry.text})
+                        last_role = role
+                    else:
+                        # Merge consecutive messages from the same speaker
+                        messages[-1]["content"] += "\n" + entry.text
 
-            if messages[-1]["role"] == "user":
+            if last_role == "user":
                 messages[-1]["content"] += "\n" + request.text
             else:
                 messages.append({"role": "user", "content": request.text})
