@@ -29,8 +29,8 @@ from cognition import reason
 from system.userspace import user_state_dir
 from agentic.registry import TOOLS, tool
 
-DEFAULT_SKILLS_PATH = Path(__file__).resolve().parent.parent / "skills" / "SKILLS.md"
-SKILL_ROOT = Path(__file__).resolve().parent.parent / "skills"
+DEFAULT_SKILLS_PATH = Path(__file__).resolve().parent / "SKILLS.md"
+SKILL_ROOT = Path(__file__).resolve().parent
 
 _STOPWORDS = reason.STOPWORDS
 
@@ -124,6 +124,7 @@ class SkillDoc:
     summary: str
     triggers: tuple[str, ...] = ()
     tools: tuple[str, ...] = ()
+    sources: tuple[str, ...] = ()
 
     def as_dict(self) -> dict:
         try:
@@ -137,7 +138,44 @@ class SkillDoc:
             "summary": self.summary,
             "triggers": list(self.triggers),
             "tools": list(self.tools),
+            "sources": list(self.sources),
         }
+
+
+# ── source-gated skills (e.g. lingo-only) ─────────────────────────────────────
+# A skill with non-empty `sources` (front-matter `sources: lingo`) is
+# source-restricted: it must NOT be auto-retrieved for normal chat even when
+# its triggers match. It is only returned when the query carries an explicit
+# source marker, e.g. "lingo", "Lingo App Mode", "ACTIVATE SKILL: <id>",
+# or "[source:lingo]". The Lingo phone app forces JAPANESE_TUTOR via an
+# explicit system prompt (see interface/webui/lingo.py) and bypasses
+# retrieval, so gating here only blocks webui/threads/normal-chat
+# auto-activation — never the Lingo app itself.
+_SOURCE_MARKERS: dict[str, tuple[str, ...]] = {
+    "lingo": ("lingo", "lingo app mode", "activate skill: japanese_tutor", "[source:lingo]"),
+}
+
+
+def _query_has_source(query: str, source: str) -> bool:
+    q = (query or "").casefold()
+    for marker in _SOURCE_MARKERS.get(source.casefold(), (source.casefold(),)):
+        if marker in q:
+            return True
+    return False
+
+
+def _filter_source_gated(docs: list["SkillDoc"], query: str) -> list["SkillDoc"]:
+    """Drop source-restricted skills unless the query carries their marker."""
+    out: list[SkillDoc] = []
+    for doc in docs:
+        if not doc.sources:
+            out.append(doc)
+            continue
+        if any(_query_has_source(query, s) for s in doc.sources):
+            out.append(doc)
+            continue
+        # gated out: e.g. japanese_tutor without a lingo marker
+    return out
 
 
 # ── legacy single-file helpers ────────────────────────────────────────────────
@@ -266,6 +304,7 @@ def _discover_in(root: str | Path) -> list[SkillDoc]:
             summary=meta.get("summary") or _first_paragraph(body),
             triggers=_split_csv(meta.get("triggers", "")),
             tools=_split_csv(meta.get("tools", "")),
+            sources=_split_csv(meta.get("sources", "")),
         ))
     return docs
 
@@ -285,15 +324,20 @@ def list_skillsets() -> str:
 
 
 def search_skillsets(query: str, limit: int = 3, embedder: Embedder | None = None) -> list[SkillDoc]:
-    """Search local skill workflows by id/name/summary/triggers/tools."""
+    """Search local skill workflows by id/name/summary/triggers/tools.
+
+    Source-gated skills (front-matter `sources: lingo`) are filtered out
+    unless the query carries their explicit source marker — so generic
+    Japanese chat never auto-retrieves JAPANESE_TUTOR.
+    """
     docs = discover_skill_docs()
     if not query.strip():
-        return docs[:limit]
+        return _filter_source_gated(docs, query)[:limit]
 
     if embedder is not None:
         ranked = _semantic_rank_skills(query, docs, embedder, _SKILL_SEMANTIC_THRESHOLD)
         if ranked is not None:
-            return ranked[:limit]
+            return _filter_source_gated(ranked, query)[:limit]
 
     terms = [t.casefold() for t in query.split() if t.strip() and t.casefold() not in _STOPWORDS]
     if not terms:
@@ -321,7 +365,8 @@ def search_skillsets(query: str, limit: int = 3, embedder: Embedder | None = Non
         if score >= _MIN_RELEVANCE_SCORE:
             scored.append((score, doc))
     scored.sort(key=lambda item: (-item[0], item[1].skill_id))
-    return [doc for _score, doc in scored[:limit]]
+    ranked_docs = [doc for _score, doc in scored[:limit]]
+    return _filter_source_gated(ranked_docs, query)
 
 
 @tool(TOOLS["search_skillsets"])

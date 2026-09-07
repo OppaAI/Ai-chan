@@ -1,13 +1,22 @@
 ---
 id: JAPANESE_TUTOR
 name: Japanese Tutor
-summary: Teach Japanese through short corrections, natural examples, grammar notes, drills, and optional structured lesson sessions.
-triggers: Japanese, Nihongo, 日本語, teach me Japanese, correct my Japanese, Japanese lesson, Japanese practice, JLPT, kana, kanji, grammar, particles
+summary: Teach Japanese through short corrections, natural examples, grammar notes, drills, and optional structured lesson sessions. Lingo phone app only.
+triggers: lingo, Lingo App Mode, ACTIVATE SKILL: JAPANESE_TUTOR, Japanese, Nihongo, 日本語, teach me Japanese, correct my Japanese, Japanese lesson, Japanese practice, JLPT, kana, kanji, grammar, particles
 tools: save_note, adaptive_search, deep_research
+sources: lingo
 ---
-# Japanese Tutor
+# Japanese Tutor (Lingo app only)
 
-Use this skill when Oppa writes in Japanese, asks to learn Japanese, asks for corrections, requests Japanese practice, or wants a structured Japanese lesson.
+> SCOPE: Strict mode in this skill is for the Aiko Lingo phone app ONLY.
+> Do NOT auto-activate for normal chat in webui, threads, or any other
+> source — even when the user writes in Japanese. Normal Japanese chat uses
+> warm teaching via `persona/JAPANESE_CHAT.md` (no rigid tags). Only
+> activate this skill when the request carries an explicit Lingo marker
+> (`lingo`, `Lingo App Mode`, `ACTIVATE SKILL: JAPANESE_TUTOR`, or
+> `[source:lingo]`), which `interface/webui/lingo.py` always injects.
+
+Use this skill when the Lingo app asks Aiko to teach/correct/quiz Japanese.
 
 ## Modes
 
