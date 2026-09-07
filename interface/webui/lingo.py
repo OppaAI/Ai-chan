@@ -277,25 +277,37 @@ async def conversation_start(request: StartRequest, session: dict = Depends(get_
                         if not found_stop:
                             yield json.dumps({"type": "delta", "text": clean_delta}) + "\n"
 
-            # Parse and send final
+            # Final structured data extraction using robust regex
             data = {"isCorrect": True}
-            for line in full_content.split("\n"):
-                if ":" in line:
-                    k, v = line.split(":", 1)
-                    k, v = k.strip().upper(), v.strip()
-                    if k == "REPLY_JP": data["japanese"] = v
-                    if k == "REPLY_EN": data["english"] = v
-                    if k == "FINISHED": data["isFinished"] = v.lower() == "true"
 
-            # If line-based parsing failed, try finding tags in the full string
+            # Map of internal keys to possible LLM tag variations
+            tag_patterns = {
+                "isCorrect": r"MISTAKE:\s*(.*?)(?:\n|$)",
+                "feedback": r"FEEDBACK:\s*(.*?)(?:\n|$)",
+                "suggestion": r"SUGGESTION:\s*(.*?)(?:\n|$)",
+                "japanese": r"REPLY_JP:\s*(.*?)(?:\n|$)",
+                "english": r"REPLY_EN:\s*(.*?)(?:\n|$)",
+                "isFinished": r"FINISHED:\s*(.*?)(?:\n|$)"
+            }
+
+            # Remove markdown bolding for easier matching
+            flat_content = full_content.replace("**", "").replace("`", "")
+
+            import re
+            for key, pattern in tag_patterns.items():
+                match = re.search(pattern, flat_content, re.IGNORECASE | re.DOTALL)
+                if match:
+                    val = match.group(1).strip()
+                    if key == "isCorrect": data[key] = val.lower() != "true"
+                    elif key == "isFinished": data[key] = val.lower() == "true"
+                    else: data[key] = val
+
+            # Fallback: If REPLY_JP is missing but we have raw Japanese text, grab it
             if not data.get("japanese"):
-                import re
-                match = re.search(r"REPLY_JP:(.*?)(?:\n|$|REPLY_EN:)", full_content, re.DOTALL)
-                if match: data["japanese"] = match.group(1).strip()
-            if not data.get("english"):
-                import re
-                match = re.search(r"REPLY_EN:(.*?)(?:\n|$|FINISHED:)", full_content, re.DOTALL)
-                if match: data["english"] = match.group(1).strip()
+                # Regex for Japanese characters (Hiragana, Katakana, Kanji)
+                jp_match = re.search(r"([\u3040-\u30ff\u4e00-\u9fff].*?)(?:\n|REPLY_EN:|English:|$)", flat_content, re.DOTALL)
+                if jp_match:
+                    data["japanese"] = jp_match.group(1).strip()
 
             audio_url = generate_lingo_audio(data.get("japanese"))
             yield json.dumps({
@@ -432,40 +444,41 @@ async def conversation_respond_stream(request: RespondRequest, session: dict = D
                         if not found_stop:
                             yield json.dumps({"type": "delta", "text": clean_delta}) + "\n"
 
-            # Final parse
+            # Final structured data extraction using robust regex
             data = {"isCorrect": True}
-            clean_content = full_content.replace("**", "") # Remove any markdown bolding
 
-            for line in clean_content.split("\n"):
-                if ":" in line:
-                    k, v = line.split(":", 1)
-                    k, v = k.strip().upper(), v.strip()
-                    if k == "MISTAKE": data["isCorrect"] = v.lower() != "true"
-                    if k == "FEEDBACK": data["feedback"] = v
-                    if k == "SUGGESTION": data["suggestion"] = v
-                    if k == "REPLY_JP": data["japanese"] = v
-                    if k == "REPLY_EN": data["english"] = v
-                    if k == "FINISHED": data["isFinished"] = v.lower() == "true"
+            # Map of internal keys to possible LLM tag variations
+            tag_patterns = {
+                "isCorrect": r"MISTAKE:\s*(.*?)(?:\n|$)",
+                "feedback": r"FEEDBACK:\s*(.*?)(?:\n|$)",
+                "suggestion": r"SUGGESTION:\s*(.*?)(?:\n|$)",
+                "japanese": r"REPLY_JP:\s*(.*?)(?:\n|$)",
+                "english": r"REPLY_EN:\s*(.*?)(?:\n|$)",
+                "isFinished": r"FINISHED:\s*(.*?)(?:\n|$)"
+            }
+
+            # Remove markdown bolding for easier matching
+            flat_content = full_content.replace("**", "").replace("`", "")
+
+            import re
+            for key, pattern in tag_patterns.items():
+                match = re.search(pattern, flat_content, re.IGNORECASE | re.DOTALL)
+                if match:
+                    val = match.group(1).strip()
+                    if key == "isCorrect": data[key] = val.lower() != "true"
+                    elif key == "isFinished": data[key] = val.lower() == "true"
+                    else: data[key] = val
 
             # Fallback: if she just sent raw text without any tags, treat the whole thing as Japanese
             if not any(tag in full_content for tag in ["REPLY_JP:", "MISTAKE:", "REPLY_EN:"]):
                 data["japanese"] = full_content.strip()
-                data["isCorrect"] = True
 
-            # Fallback regex for final data (more robust than line-based)
-            import re
+            # Smart Fallback for Japanese: search for actual Japanese characters if tag is missing
             if not data.get("japanese"):
-                m = re.search(r"(?:REPLY_JP|Japanese):\s*(.*?)(?:\n|$|REPLY_EN|English:)", clean_content, re.IGNORECASE | re.DOTALL)
-                if m: data["japanese"] = m.group(1).strip()
-            if not data.get("suggestion"):
-                m = re.search(r"SUGGESTION:\s*(.*?)(?:\n|$|REPLY_JP|REPLY_EN)", clean_content, re.IGNORECASE | re.DOTALL)
-                if m: data["suggestion"] = m.group(1).strip()
-            if not data.get("feedback"):
-                m = re.search(r"FEEDBACK:\s*(.*?)(?:\n|$|SUGGESTION|REPLY_JP)", clean_content, re.IGNORECASE | re.DOTALL)
-                if m: data["feedback"] = m.group(1).strip()
-            if not data.get("english"):
-                m = re.search(r"(?:REPLY_EN|English):\s*(.*?)(?:\n|$|FINISHED)", clean_content, re.IGNORECASE | re.DOTALL)
-                if m: data["english"] = m.group(1).strip()
+                # Regex for Japanese characters (Hiragana, Katakana, Kanji)
+                jp_match = re.search(r"([\u3040-\u30ff\u4e00-\u9fff].*?)(?:\n|REPLY_EN:|English:|$)", flat_content, re.DOTALL)
+                if jp_match:
+                    data["japanese"] = jp_match.group(1).strip()
 
             audio_text = data.get("suggestion") if not data.get("isCorrect") else data.get("japanese")
             audio_url = generate_lingo_audio(audio_text)
