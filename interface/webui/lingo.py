@@ -2,6 +2,32 @@
 Complete Lingo endpoint with SRS integrated + streaks + XP system + reminders/toasts.
 This is a DROP-IN REPLACEMENT for your existing lingo.py.
 Includes Claude's fixes + pedagogical upgrades (SRS, closure, hints, difficulty scaling, thread-safe audio).
+
+=====================================================================
+BUGFIX PASS (this version):
+  1. review_respond mixed `yield` + `return <value>` -> SyntaxError at
+     import time, which took down the ENTIRE router. Converted to a
+     plain async function; the "toast" info is now returned inline
+     in the JSON body instead of being streamed.
+  2. `timedelta` was used in get_streak() but never imported -> NameError
+     at runtime. Added the import.
+  3. conversation_start's system_prompt was missing the `f` prefix on
+     the line referencing `{request.level}`, so the LLM literally saw
+     the text "{request.level}" instead of the actual level string.
+  4. Pydantic v2 renamed Field(regex=...) to Field(pattern=...). Using
+     `regex=` on Pydantic v2 raises at class-definition time (compounds
+     bug #1's import failure). Switched to `pattern=`.
+  5. get_streak()/record_practice() only tracked practice in an
+     in-memory dict that's wiped on restart and never wrote to disk,
+     so streaks never actually persisted or accumulated correctly
+     (capped at 2). Rewrote to persist to data/streaks/{uid}.json with
+     real day-over-day accumulation.
+  6. review_start() reported `cards_due=stats["reviews_today"]`, which
+     is "reviews completed today", not "cards currently due". Fixed to
+     use the actual due-card count so the client's progress bar
+     (reviewsCompleted / cardsDue) is comparing against the right
+     denominator.
+=====================================================================
 """
 import os
 import json
@@ -14,7 +40,7 @@ import threading
 from pathlib import Path
 from typing import Optional, List, Dict
 from functools import lru_cache
-from datetime import datetime, date
+from datetime import datetime, date, timedelta  # FIX #2: added timedelta
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
@@ -120,7 +146,10 @@ class TranslateRequest(BaseModel):
 
 
 class StartRequest(BaseModel):
-    level: str = Field(..., regex="^(beginner|intermediate|advanced)$")
+    # FIX #4: Pydantic v2 uses `pattern=`, not `regex=`. `regex=` raises
+    # a TypeError/PydanticUserError at class-definition time on v2,
+    # which would take the whole module (and router) down on import.
+    level: str = Field(..., pattern="^(beginner|intermediate|advanced)$")
 
 
 class DialogueHistoryEntry(BaseModel):
@@ -293,24 +322,91 @@ async def get_lingo_session(request: Request) -> dict:
 # ============================================================================
 # Streaks, XP, Toasts, Difficulty Scaling, Closure
 # ============================================================================
+
+# FIX #5: Streaks previously only lived in an in-memory dict that was wiped
+# on every restart, and get_streak()'s file-based fallback logic capped out
+# at 2 regardless of how many consecutive days were actually practiced.
+# This version persists {last_date, current_streak, total_sessions} to disk
+# and increments/resets correctly based on real day deltas.
+_streak_lock = threading.Lock()
+
+
+def _streak_file(uid: str) -> Path:
+    p = Path(f"data/streaks/{uid}.json")
+    p.parent.mkdir(parents=True, exist_ok=True)
+    return p
+
+
 def get_streak(uid: str) -> dict:
-    today = date.today()
-    streak_file = Path(f"data/streaks/{uid}.json")
-    streak_file.parent.mkdir(parents=True, exist_ok=True)
-    streak_days = 0
+    streak_file = _streak_file(uid)
+    current_streak = 0
+    total_sessions = 0
     if streak_file.exists():
         try:
             data = json.loads(streak_file.read_text())
-            last_date = date.fromisoformat(data.get("last_date", ""))
-            if last_date == today:
-                streak_days = 1
-            elif last_date == (today - timedelta(days=1)):
-                streak_days = 2
-            elif last_date and last_date > (today - timedelta(days=30)):
-                streak_days = 2
-        except:
-            pass
-    return {"days": streak_days, "total_sessions": 47, "next_reward": "Learn 5 new words" if streak_days >= 3 else "Start your first streak!"}
+            current_streak = int(data.get("current_streak", 0))
+            total_sessions = int(data.get("total_sessions", 0))
+        except Exception:
+            log.warning(f"Failed to read streak file for {uid}, resetting", exc_info=True)
+    next_reward = "Learn 5 new words" if current_streak >= 3 else "Start your first streak!"
+    return {
+        "days": current_streak,
+        "total_sessions": total_sessions,
+        "next_reward": next_reward,
+    }
+
+
+def has_user_practiced_today(uid: str) -> bool:
+    streak_file = _streak_file(uid)
+    if not streak_file.exists():
+        return False
+    try:
+        data = json.loads(streak_file.read_text())
+        last_date_str = data.get("last_date")
+        if not last_date_str:
+            return False
+        return date.fromisoformat(last_date_str) == date.today()
+    except Exception:
+        return False
+
+
+def record_practice(uid: str):
+    """Called once per practice event. Idempotent per-day: only the
+    first call in a given day advances the streak and session count."""
+    with _streak_lock:
+        streak_file = _streak_file(uid)
+        today = date.today()
+        current_streak = 0
+        total_sessions = 0
+        last_date = None
+        if streak_file.exists():
+            try:
+                data = json.loads(streak_file.read_text())
+                current_streak = int(data.get("current_streak", 0))
+                total_sessions = int(data.get("total_sessions", 0))
+                last_date_str = data.get("last_date")
+                if last_date_str:
+                    last_date = date.fromisoformat(last_date_str)
+            except Exception:
+                log.warning(f"Corrupt streak file for {uid}, resetting", exc_info=True)
+
+        if last_date == today:
+            # Already recorded today; no change.
+            return
+
+        if last_date == today - timedelta(days=1):
+            current_streak += 1
+        else:
+            # First-ever session, or the streak was broken.
+            current_streak = 1
+
+        total_sessions += 1
+
+        streak_file.write_text(json.dumps({
+            "last_date": today.isoformat(),
+            "current_streak": current_streak,
+            "total_sessions": total_sessions,
+        }, indent=2))
 
 
 def get_xp(uid: str) -> dict:
@@ -328,21 +424,7 @@ def get_xp(uid: str) -> dict:
     return {"xp": 347, "level": 1, "next_level_xp": 200}
 
 
-_last_practice: dict = {}
 _last_levels: dict = {}   # Claude's difficulty scaling
-
-def has_user_practiced_today(uid: str) -> bool:
-    today = date.today()
-    if uid not in _last_practice:
-        _last_practice[uid] = []
-    if _last_practice[uid] and _last_practice[uid][-1] == today:
-        return True
-    _last_practice[uid].append(today)
-    return len(_last_practice[uid]) > 0
-
-
-def record_practice(uid: str):
-    has_user_practiced_today(uid)
 
 
 def get_last_level(uid: str) -> str:
@@ -415,10 +497,13 @@ async def conversation_start(request: StartRequest, session: dict = Depends(get_
         token = set_current_user_id(uid)
         try:
             base_prompt = think._current_system_prompt("Start Japanese conversation")
+            # FIX #3: this line was missing the `f` prefix, so the LLM
+            # literally received the text "{request.level}" instead of
+            # the actual selected level (e.g. "beginner").
             system_prompt = (
                 f"{base_prompt}\n\n"
                 "ACTIVATE SKILL: JAPANESE_TUTOR\n"
-                "You are in 'Lingo App Mode'. Start a Japanese conversation at {request.level} level. "
+                f"You are in 'Lingo App Mode'. Start a Japanese conversation at {request.level} level. "
                 "Output your response exactly like this:\n"
                 f"{LingoTags.REPLY_JP}: <Japanese sentences>\n"
                 f"{LingoTags.REPLY_EN}: <English translation>\n"
@@ -681,7 +766,7 @@ async def conversation_respond_stream(request: RespondRequest, session: dict = D
                 final_jp = sanitize_text(data.get("japanese") or "...")
                 audio_text = final_jp
                 english_text = data.get("english") or "Perfect! Let's keep talking."
-            # ===== NEW: Extract vocabulary =====
+            # ===== Extract vocabulary =====
             new_vocab = []
             if data.get("japanese"):
                 extractor = VocabExtractor()
@@ -697,12 +782,13 @@ async def conversation_respond_stream(request: RespondRequest, session: dict = D
                         grade=ReviewGrade.EASY if data.get("isCorrect") else ReviewGrade.HARD,
                         is_correct=data.get("isCorrect", True)
                     )
-            # FIXED: Strip audio text before synthesis + Claude fixes
+            # Strip audio text before synthesis
             audio_url = get_cached_lingo_audio(audio_text)
             # ===== TOASTS & XP (Duolingo-style) =====
-            record_practice(uid)
+            record_practice(uid)  # FIX #5: now actually persists streak progress
             is_correct = data.get("isCorrect", True)
             xp = 10 if is_correct else 5
+            toast_message = "Perfect! Let's keep talking." if is_correct else feedback
             yield json.dumps({
                 "type": "final",
                 "isCorrect": is_correct,
@@ -713,7 +799,7 @@ async def conversation_respond_stream(request: RespondRequest, session: dict = D
                 "isFinished": data.get("isFinished", False),
                 "audioUrl": audio_url,
                 "vocabExtracted": len(new_vocab),
-                "toast": {"type": "success" if is_correct else "feedback", "message": toast_message := ("Perfect! Let's keep talking." if is_correct else feedback)}
+                "toast": {"type": "success" if is_correct else "feedback", "message": toast_message}
             }) + "\n"
             # Auto XP via post
             if xp > 0:
@@ -721,8 +807,8 @@ async def conversation_respond_stream(request: RespondRequest, session: dict = D
                 try:
                     async with httpx.AsyncClient(timeout=5) as client:
                         await client.post("http://localhost:8000/api/english/xp/add", json={"amount": xp})
-                except:
-                    pass
+                except Exception:
+                    log.warning("Failed to auto-post XP", exc_info=True)
             update_last_level(uid, get_last_level(uid))
         except Exception as e:
             log.exception("Lingo respond stream failed")
@@ -804,19 +890,23 @@ async def conversation_stop(session: dict = Depends(get_lingo_session)):
 # ============================================================================
 @router.post("/conversation/review/respond")
 async def review_respond(request: ReviewResponseRequest, session: dict = Depends(get_lingo_session)):
+    # FIX #1: This was previously mixing `yield` with `return <value>`,
+    # which is a SyntaxError in Python (async generators may only use a
+    # bare `return`). That syntax error prevented the whole module —
+    # and therefore every endpoint in this router — from importing.
+    # Converted to a plain async function; the "toast" message that used
+    # to be streamed is now just included in the JSON response body.
     uid = session.get("user_id", "OppaAI")
     srs = LingoSRS(uid)
     grade = ReviewGrade(request.grade)
     updated_card = srs.record_review(request.card_id, grade, response_time_ms=0)
 
+    toast = None
     if grade == ReviewGrade.EASY:
-        due_cards = srs.get_due_cards(limit=1)
-        if due_cards:
-            c = due_cards[0]
-            yield json.dumps({
-                "type": "toast",
-                "message": f"🌟 {c.hiragana} = {c.meaning}"
-            }) + "\n"
+        preview_cards = srs.get_due_cards(limit=1)
+        if preview_cards:
+            c = preview_cards[0]
+            toast = {"type": "info", "message": f"🌟 {c.hiragana} = {c.meaning}"}
 
     due_cards = srs.get_due_cards(limit=1)
     next_card = None
@@ -829,7 +919,7 @@ async def review_respond(request: ReviewResponseRequest, session: dict = Depends
             context=c.context or ""
         )
 
-    return {
+    result = {
         "updated_card": {
             "id": updated_card.id,
             "interval": updated_card.interval,
@@ -838,6 +928,9 @@ async def review_respond(request: ReviewResponseRequest, session: dict = Depends
         "next_card": next_card,
         "cards_remaining": len(srs.get_due_cards(limit=100))
     }
+    if toast:
+        result["toast"] = toast
+    return result
 
 
 @router.get("/stats", response_model=StatsResponse)
@@ -908,9 +1001,12 @@ async def review_start(session: dict = Depends(get_lingo_session)):
     if not due_cards:
         raise HTTPException(status_code=400, detail="No cards due for review")
     card = due_cards[0]
-    stats = srs.get_stats()
+    # FIX #6: was `cards_due=stats["reviews_today"]`, which is the count of
+    # reviews already completed today, not the count of cards due right now.
+    # That mismatch fed a wrong denominator into the client's progress bar.
+    total_due = len(srs.get_due_cards(limit=1000))
     return ReviewSessionResponse(
-        cards_due=stats["reviews_today"],
+        cards_due=total_due,
         first_card=ReviewCard(
             card_id=card.id,
             hiragana=card.hiragana,
