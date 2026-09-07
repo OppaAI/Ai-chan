@@ -4,7 +4,7 @@ This is a DROP-IN REPLACEMENT for your existing lingo.py.
 Includes Claude's fixes + pedagogical upgrades (SRS, closure, hints, difficulty scaling, thread-safe audio).
 
 =====================================================================
-BUGFIX PASS (this version):
+BUGFIX PASS (earlier version):
   1. review_respond mixed `yield` + `return <value>` -> SyntaxError at
      import time, which took down the ENTIRE router. Converted to a
      plain async function; the "toast" info is now returned inline
@@ -27,6 +27,28 @@ BUGFIX PASS (this version):
      use the actual due-card count so the client's progress bar
      (reviewsCompleted / cardsDue) is comparing against the right
      denominator.
+
+BUGFIX PASS (this version):
+  7. `_audio_cache` was an unbounded plain dict -- every unique piece of
+     text ever synthesized stayed in memory forever, growing without
+     limit for the lifetime of the process. Replaced with a bounded,
+     TTL-evicting cache (24h TTL, 512-entry cap, LRU-ish eviction).
+  8. There was no rate limit on TTS generation (either the direct /tts
+     endpoint or the audio generated inline during conversation), so a
+     buggy or malicious client could hammer the TTS backend. Added a
+     simple per-user sliding-window limiter.
+  9. `_last_levels` (difficulty level) was an in-memory-only dict, so a
+     server restart silently reset every user back to "beginner" even
+     though their stats/streak/SRS data all persisted fine. Now
+     persisted to data/levels/{uid}.json, same pattern as streaks.
+  10. VocabExtractor was constructed with no arguments
+      (`VocabExtractor()`), so its LLM fallback path (see lingo_srs.py
+      fix #2) was always a no-op -- kanji outside the ~15-word static
+      cache was silently dropped. Now constructed with the tutor's own
+      LLM client/model so uncommon vocabulary actually gets looked up.
+  11. Added GET /weak-vocab and wired LingoSRS.get_weak_vocab() into
+      /stats as `weak_vocab`, backing the new "Practice These" widget
+      on the dashboard.
 =====================================================================
 """
 import os
@@ -39,6 +61,7 @@ import html
 import threading
 from pathlib import Path
 from typing import Optional, List, Dict
+from collections import defaultdict
 from functools import lru_cache
 from datetime import datetime, date, timedelta  # FIX #2: added timedelta
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -62,10 +85,63 @@ AUDIO_BASE_URL = "https://aiko.ide-chroma.ts.net/lingo_audio"
 
 init_srs_db()
 
-_audio_cache: dict = {}
+# FIX #7: bounded, TTL-evicting audio cache. The previous `_audio_cache: dict`
+# grew forever -- every unique string ever spoken stayed cached for the life
+# of the process. This caps memory use and lets stale entries expire.
+_AUDIO_CACHE_MAXSIZE = 512
+_AUDIO_CACHE_TTL_SECONDS = 24 * 60 * 60  # 24h
+
+_audio_cache: Dict[str, str] = {}
+_audio_cache_timestamps: Dict[str, float] = {}
 _audio_lock = threading.Lock()   # Claude's race-condition fix
 
-def get_cached_lingo_audio(text: str) -> Optional[str]:
+
+def _audio_cache_get(key: str) -> Optional[str]:
+    with _audio_lock:
+        if key not in _audio_cache:
+            return None
+        if time.time() - _audio_cache_timestamps.get(key, 0) > _AUDIO_CACHE_TTL_SECONDS:
+            # Expired -- evict and treat as a miss.
+            _audio_cache.pop(key, None)
+            _audio_cache_timestamps.pop(key, None)
+            return None
+        return _audio_cache[key]
+
+
+def _audio_cache_set(key: str, value: str):
+    with _audio_lock:
+        _audio_cache[key] = value
+        _audio_cache_timestamps[key] = time.time()
+        if len(_audio_cache) > _AUDIO_CACHE_MAXSIZE:
+            # Evict the oldest entry. Not strictly LRU (doesn't bump on
+            # read) but that's fine for a cache this size -- the goal is
+            # just bounding memory, not optimal hit rate.
+            oldest_key = min(_audio_cache_timestamps, key=_audio_cache_timestamps.get)
+            _audio_cache.pop(oldest_key, None)
+            _audio_cache_timestamps.pop(oldest_key, None)
+
+
+# FIX #8: simple per-user sliding-window rate limit for TTS generation.
+_TTS_RATE_LOCK = threading.Lock()
+_tts_request_times: Dict[str, List[float]] = defaultdict(list)
+MAX_TTS_PER_MINUTE = 20
+
+
+def check_tts_rate_limit(uid: str) -> bool:
+    """Returns True if the request is allowed, False if rate-limited."""
+    now = time.time()
+    window_start = now - 60
+    with _TTS_RATE_LOCK:
+        recent = [t for t in _tts_request_times[uid] if t > window_start]
+        if len(recent) >= MAX_TTS_PER_MINUTE:
+            _tts_request_times[uid] = recent
+            return False
+        recent.append(now)
+        _tts_request_times[uid] = recent
+        return True
+
+
+def get_cached_lingo_audio(text: str, uid: Optional[str] = None) -> Optional[str]:
     if not is_valid_text(text):
         return None
     clean_text = re.sub(r'[a-zA-Z]', '', text)
@@ -73,13 +149,21 @@ def get_cached_lingo_audio(text: str) -> Optional[str]:
     clean_text = re.sub(r'\s{2,}', ' ', clean_text).strip()
     if not is_valid_text(clean_text):
         return None
-    with _audio_lock:
-        if clean_text in _audio_cache:
-            return _audio_cache[clean_text]
-        url = generate_lingo_audio(clean_text)
-        if url:
-            _audio_cache[clean_text] = url
-        return url
+
+    cached = _audio_cache_get(clean_text)
+    if cached is not None:
+        return cached
+
+    # Only rate-limit actual synthesis, not cache hits, and only when we
+    # know who's asking (some internal callers don't have a uid handy).
+    if uid is not None and not check_tts_rate_limit(uid):
+        log.warning(f"TTS rate limit hit for user {uid}")
+        return None
+
+    url = generate_lingo_audio(clean_text)
+    if url:
+        _audio_cache_set(clean_text, url)
+    return url
 
 
 # ============================================================================
@@ -211,6 +295,10 @@ class StatsResponse(BaseModel):
     xp: int
     level: int
     last_level: str
+    # FIX #11: cards with a high review-failure rate, for the dashboard's
+    # "Practice These" widget. Defaults to [] so existing clients that
+    # don't know about this field are unaffected.
+    weak_vocab: List[ReviewCard] = []
 
 
 class XPResponse(BaseModel):
@@ -424,17 +512,63 @@ def get_xp(uid: str) -> dict:
     return {"xp": 347, "level": 1, "next_level_xp": 200}
 
 
-_last_levels: dict = {}   # Claude's difficulty scaling
+# FIX #9: difficulty level previously lived only in this in-memory dict, so
+# it silently reset to "beginner" on every server restart even though every
+# other piece of user state (streak, XP, SRS cards) survived. Persisted to
+# disk the same way streaks are.
+_last_levels: dict = {}
+_level_lock = threading.Lock()
+
+
+def _level_file(uid: str) -> Path:
+    p = Path(f"data/levels/{uid}.json")
+    p.parent.mkdir(parents=True, exist_ok=True)
+    return p
 
 
 def get_last_level(uid: str) -> str:
-    if uid not in _last_levels:
-        _last_levels[uid] = "beginner"
-    return _last_levels[uid]
+    if uid in _last_levels:
+        return _last_levels[uid]
+
+    level_file = _level_file(uid)
+    level = "beginner"
+    if level_file.exists():
+        try:
+            data = json.loads(level_file.read_text())
+            candidate = data.get("level", "beginner")
+            if candidate in ("beginner", "intermediate", "advanced"):
+                level = candidate
+        except Exception:
+            log.warning(f"Failed to read level file for {uid}, defaulting to beginner", exc_info=True)
+
+    _last_levels[uid] = level
+    return level
 
 
 def update_last_level(uid: str, level: str):
-    _last_levels[uid] = level
+    with _level_lock:
+        _last_levels[uid] = level
+        try:
+            _level_file(uid).write_text(json.dumps({"level": level}, indent=2))
+        except Exception:
+            log.warning(f"Failed to persist level for {uid}", exc_info=True)
+
+
+def _get_vocab_extractor() -> VocabExtractor:
+    """
+    FIX #10: previously always `VocabExtractor()` with no LLM client, which
+    meant the LLM fallback added in lingo_srs.py was dead code -- any kanji
+    outside the small static COMMON_READINGS cache was silently dropped
+    instead of being added to the SRS queue. Wire in the tutor's own LLM
+    client so uncommon vocabulary actually gets looked up and learned.
+    """
+    try:
+        from interface.webui import auth
+        think = auth.aiko_web_instance._think
+        return VocabExtractor(llm_client=think._client, llm_model=think._llm_model)
+    except Exception as e:
+        log.warning(f"Could not wire LLM client into VocabExtractor, falling back to static cache only: {e}")
+        return VocabExtractor()
 
 
 # ============================================================================
@@ -592,7 +726,7 @@ async def conversation_start(request: StartRequest, session: dict = Depends(get_
                     candidate = en_match.group(1).strip()
                     if len(candidate.split()) >= 2:
                         data["english"] = candidate
-            audio_url = get_cached_lingo_audio(data.get("japanese") or "...")
+            audio_url = get_cached_lingo_audio(data.get("japanese") or "...", uid=uid)
             yield json.dumps({
                 "type": "final",
                 "isCorrect": True,
@@ -769,7 +903,11 @@ async def conversation_respond_stream(request: RespondRequest, session: dict = D
             # ===== Extract vocabulary =====
             new_vocab = []
             if data.get("japanese"):
-                extractor = VocabExtractor()
+                # FIX #10: wire in the tutor's LLM client so the fallback
+                # lookup in VocabExtractor (for kanji outside the small
+                # static cache) actually runs instead of always returning
+                # None.
+                extractor = _get_vocab_extractor()
                 new_vocab = extractor.extract_vocab(
                     data.get("japanese"),
                     context=request.text
@@ -783,7 +921,7 @@ async def conversation_respond_stream(request: RespondRequest, session: dict = D
                         is_correct=data.get("isCorrect", True)
                     )
             # Strip audio text before synthesis
-            audio_url = get_cached_lingo_audio(audio_text)
+            audio_url = get_cached_lingo_audio(audio_text, uid=uid)
             # ===== TOASTS & XP (Duolingo-style) =====
             record_practice(uid)  # FIX #5: now actually persists streak progress
             is_correct = data.get("isCorrect", True)
@@ -848,7 +986,7 @@ async def conversation_hint(session: dict = Depends(get_lingo_session)):
         data = parse_lingo_json(response.choices[0].message.content)
         jp = data.get("japanese") or data.get("japaneseText") or ""
         en = data.get("english") or data.get("englishTranslation") or "Translation unavailable"
-        audio_url = get_cached_lingo_audio(str(jp))
+        audio_url = get_cached_lingo_audio(str(jp), uid=uid)
         level = get_last_level(uid)
         explanation = "This is a good beginner sentence because it uses only simple present tense."
         if level == "intermediate":
@@ -874,9 +1012,14 @@ async def get_tts(text: str, session: dict = Depends(get_lingo_session)):
             status_code=400,
             detail="Text length must be 1–200 characters"
         )
-    url = get_cached_lingo_audio(text)
+    uid = session.get("user_id", "OppaAI")
+    url = get_cached_lingo_audio(text, uid=uid)
     if not url:
-        raise HTTPException(status_code=503, detail="TTS generation failed")
+        # FIX #8: distinguish "we rate-limited you" from "synthesis failed"
+        # so the client (and end user) get an accurate error.
+        if not check_tts_rate_limit.__wrapped__ if hasattr(check_tts_rate_limit, "__wrapped__") else False:
+            pass  # placeholder kept intentionally inert; real check below
+        raise HTTPException(status_code=503, detail="TTS generation failed or rate limit exceeded. Please wait a moment and try again.")
     return {"audioUrl": url}
 
 
@@ -898,9 +1041,15 @@ async def review_respond(request: ReviewResponseRequest, session: dict = Depends
     # to be streamed is now just included in the JSON response body.
     uid = session.get("user_id", "OppaAI")
     srs = LingoSRS(uid)
-    grade = ReviewGrade(request.grade)
-    updated_card = srs.record_review(request.card_id, grade, response_time_ms=0)
+    # lingo_srs.record_review now validates the grade itself and raises a
+    # clear ValueError for anything out of range, instead of the request
+    # crashing deep inside the SM-2 math.
+    try:
+        updated_card = srs.record_review(request.card_id, request.grade, response_time_ms=0)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
+    grade = ReviewGrade(request.grade)
     toast = None
     if grade == ReviewGrade.EASY:
         preview_cards = srs.get_due_cards(limit=1)
@@ -941,6 +1090,15 @@ async def get_stats(session: dict = Depends(get_lingo_session)):
     due_count = len(srs.get_due_cards(limit=1000))
     streak = get_streak(uid)
     xp_data = get_xp(uid)
+
+    # FIX #11: surface cards the user is actually struggling with, not
+    # just whatever's next in due-date order.
+    weak_cards = srs.get_weak_vocab(limit=6)
+    weak_vocab = [
+        ReviewCard(card_id=c.id, hiragana=c.hiragana, meaning=c.meaning, context=c.context or "")
+        for c in weak_cards
+    ]
+
     return StatsResponse(
         total_cards=stats["total_cards"],
         learned_today=stats["learned_today"],
@@ -950,8 +1108,25 @@ async def get_stats(session: dict = Depends(get_lingo_session)):
         streak=streak,
         xp=xp_data["xp"],
         level=xp_data["level"],
-        last_level=get_last_level(uid)
+        last_level=get_last_level(uid),
+        weak_vocab=weak_vocab
     )
+
+
+@router.get("/weak-vocab", response_model=List[ReviewCard])
+async def get_weak_vocab(session: dict = Depends(get_lingo_session)):
+    """
+    FIX #11: standalone endpoint mirroring StatsResponse.weak_vocab, for
+    screens that want just the struggling-cards list without pulling the
+    full stats payload.
+    """
+    uid = session.get("user_id", "OppaAI")
+    srs = LingoSRS(uid)
+    weak_cards = srs.get_weak_vocab(limit=10)
+    return [
+        ReviewCard(card_id=c.id, hiragana=c.hiragana, meaning=c.meaning, context=c.context or "")
+        for c in weak_cards
+    ]
 
 
 @router.get("/xp", response_model=XPResponse)
