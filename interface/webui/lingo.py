@@ -357,6 +357,7 @@ async def conversation_respond_stream(request: RespondRequest, session: dict = D
                 f"{base_prompt}\n\n"
                 "ACTIVATE SKILL: JAPANESE_TUTOR\n"
                 "You are in 'Lingo App Mode'. You MUST follow the 'Lingo App Protocol (Strict Mode)' defined in your JAPANESE_TUTOR skill for every response.\n"
+                "REPLY_EN MUST be a COMPLETE, LITERAL English translation of your REPLY_JP.\n"
                 "IMPORTANT: Set FINISHED to True ONLY if the student explicitly ends the session or says goodbye. Otherwise, ALWAYS keep it False."
             )
 
@@ -460,41 +461,34 @@ async def conversation_respond_stream(request: RespondRequest, session: dict = D
             flat_content = full_content.replace("**", "").replace("`", "")
 
             import re
-            # Only match tags that are at the beginning of a line or the very start of the string
-            # and followed by a colon.
-            for tag in expected_tags:
-                # Regex looks for tag at start of string or after a newline
-                pattern = rf"(?:^|\n){tag}\s*:\s*(.*?)(?=\n[A-Z_]+\s*:|$)"
-                match = re.search(pattern, flat_content, re.IGNORECASE | re.DOTALL)
-                if match:
-                    val = match.group(1).strip()
-                    if tag == "MISTAKE": data["isCorrect"] = val.lower() not in ["true", "yes", "y", "1"]
-                    elif tag == "FINISHED": data["isFinished"] = val.lower() in ["true", "yes", "y", "1"]
-                    elif tag == "REPLY_JP": data["japanese"] = val
-                    elif tag == "REPLY_EN": data["english"] = val
-                    elif tag == "FEEDBACK": data["feedback"] = val
-                    elif tag == "SUGGESTION": data["suggestion"] = val
+            # Extract tags using a flexible regex that doesn't strictly require newlines
+            # but respects the colon boundary.
+            tag_regex = r"([A-Z_]+)\s*:\s*(.*?)(?=[A-Z_]+\s*:|$)"
+            found_pairs = re.findall(tag_regex, flat_content, re.DOTALL | re.IGNORECASE)
+
+            for k, v in found_pairs:
+                k = k.strip().upper()
+                v = v.strip()
+                if k == "MISTAKE": data["isCorrect"] = v.lower() not in ["true", "yes", "y", "1"]
+                elif k == "FINISHED": data["isFinished"] = v.lower() in ["true", "yes", "y", "1"]
+                elif k == "REPLY_JP": data["japanese"] = v
+                elif k == "REPLY_EN": data["english"] = v
+                elif k == "FEEDBACK": data["feedback"] = v
+                elif k == "SUGGESTION": data["suggestion"] = v
 
             # Fallback: if she just sent raw text without any tags, treat the whole thing as Japanese
-            if not any(f"{t}:" in flat_content.upper() for t in expected_tags) and not data.get("japanese"):
+            if not data.get("japanese") and not any(f"{t}:" in flat_content.upper() for t in expected_tags):
                 data["japanese"] = full_content.strip()
-                data["isCorrect"] = True
 
-            # Smart Fallback for Japanese: search for actual Japanese characters if tag is missing
-            if not data.get("japanese") and data.get("isCorrect"):
-                jp_match = re.search(r"([\u3040-\u30ff\u4e00-\u9fff].*?)(?:\n|$|REPLY_EN:|English:)", flat_content, re.DOTALL)
+            # Smart Fallback for Japanese characters if tag is missing
+            if not data.get("japanese"):
+                jp_match = re.search(r"([\u3040-\u30ff\u4e00-\u9fff].*?)(?:\n|REPLY_EN:|English:|$)", flat_content, re.DOTALL)
                 if jp_match:
                     data["japanese"] = jp_match.group(1).strip()
 
-            # Smart Fallback for English: ensure English field doesn't accidentally contain Japanese
-            if data.get("english"):
-                # If 'english' contains lots of Japanese characters, it's probably a wrong match
-                jp_chars = len(re.findall(r"[\u3040-\u30ff\u4e00-\u9fff]", data["english"]))
-                if jp_chars > len(data["english"]) / 2:
-                    data["english"] = None # Reset it to search again
-
+            # Smart Fallback for English: search for a block of English text if tag is missing
             if not data.get("english"):
-                # Search for a block of English text (basic letters and spaces)
+                # Look for English words between Japanese or tags
                 en_match = re.search(r"([a-zA-Z][a-zA-Z\s,.'\"?!-]{10,})", flat_content)
                 if en_match:
                     data["english"] = en_match.group(1).strip()
