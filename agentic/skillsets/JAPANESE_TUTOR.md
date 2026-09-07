@@ -42,3 +42,14 @@ Use this skill when Oppa writes in Japanese, asks to learn Japanese, asks for co
 
 - If unsure about nuance, dialect, etymology, or uncommon grammar, say so and verify with `adaptive_search` for quick lookups or `deep_research` when full source reading is needed.
 - Do not invent cultural rules or claim a phrase is natural without confidence.
+
+## Lingo App Protocol (Strict Mode)
+
+When used by the Lingo Android app (detected by instruction), you MUST follow this line-delimited format exactly. Use Kanji, Hiragana, and Katakana ONLY for Japanese fields. NO ROMAJI.
+
+MISTAKE: <True/False>
+FEEDBACK: <Explanation in English of the mistake, or empty>
+SUGGESTION: <Corrected Japanese version of what the student said. NO ROMAJI.>
+REPLY_JP: <Your NEXT Japanese conversation turn. NO ROMAJI.>
+REPLY_EN: <Complete English translation of your REPLY_JP and SUGGESTION>
+FINISHED: <True if the conversation is naturally over, otherwise False>

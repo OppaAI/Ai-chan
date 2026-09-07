@@ -222,9 +222,11 @@ async def conversation_start(request: StartRequest, session: dict = Depends(get_
     async def event_generator():
         token = set_current_user_id(uid)
         try:
+            base_prompt = think._current_system_prompt("Start Japanese conversation")
             system_prompt = (
-                "You are Aiko, teaching Japanese through conversation. "
-                "DO NOT use Romaji (Latin script). Use Kanji, Hiragana, and Katakana ONLY. "
+                f"{base_prompt}\n\n"
+                "ACTIVATE SKILL: JAPANESE_TUTOR\n"
+                "You are in 'Lingo App Mode'. Start a Japanese conversation at {request.level} level. "
                 "Output your response exactly like this:\n"
                 "REPLY_JP: <Japanese sentences>\n"
                 "REPLY_EN: <English translation>\n"
@@ -350,20 +352,12 @@ async def conversation_respond_stream(request: RespondRequest, session: dict = D
     async def event_generator():
         token = set_current_user_id(uid)
         try:
-            # Combine Aiko's real persona with Lingo instructions
+            # Combine Aiko's real persona with the Japanese Tutor skill
             base_prompt = think._current_system_prompt(request.text)
             system_prompt = (
                 f"{base_prompt}\n\n"
-                "--- LINGO INSTRUCTIONS ---\n"
-                "You are acting as a Japanese teacher. Maintain a natural roleplay conversation. "
-                "DO NOT use Romaji (Latin script). Use Kanji, Hiragana, and Katakana ONLY. "
-                "Format your response EXACTLY like this:\n"
-                "MISTAKE: <True/False>\n"
-                "FEEDBACK: <Explanation in English of the mistake, or empty>\n"
-                "SUGGESTION: <Corrected Japanese version of what the student said. NO ROMAJI.>\n"
-                "REPLY_JP: <Your NEXT Japanese conversation turn. NO ROMAJI.>\n"
-                "REPLY_EN: <Provide a COMPLETE English translation of BOTH the suggestion (if any) and your reply_jp>\n"
-                "FINISHED: <True if the conversation is naturally over, otherwise False>"
+                "ACTIVATE SKILL: JAPANESE_TUTOR\n"
+                "You are in 'Lingo App Mode'. You MUST follow the 'Lingo App Protocol (Strict Mode)' defined in your JAPANESE_TUTOR skill for every response."
             )
 
             # Strict role alternation for llama-server
