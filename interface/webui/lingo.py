@@ -353,12 +353,18 @@ async def conversation_respond_stream(request: RespondRequest, session: dict = D
         try:
             # Combine Aiko's real persona with the Japanese Tutor skill
             base_prompt = think._current_system_prompt(request.text)
+            # Force the protocol instructions to be the highest priority
             system_prompt = (
-                f"{base_prompt}\n\n"
-                "ACTIVATE SKILL: JAPANESE_TUTOR\n"
-                "You are in 'Lingo App Mode'. You MUST follow the 'Lingo App Protocol (Strict Mode)' defined in your JAPANESE_TUTOR skill for every response.\n"
-                "REPLY_EN MUST be a COMPLETE, LITERAL English translation of your REPLY_JP.\n"
-                "IMPORTANT: Set FINISHED to True ONLY if the student explicitly ends the session or says goodbye. Otherwise, ALWAYS keep it False."
+                "You are Aiko, a helpful Japanese tutor. Maintain your unique personality but "
+                "you MUST suppress all emojis and roleplay actions (like *smiles*). "
+                "You are in 'Lingo App Mode' and must output ONLY these tags in order:\n\n"
+                "MISTAKE: <True/False>\n"
+                "FEEDBACK: <English explanation or empty>\n"
+                "SUGGESTION: <Corrected Japanese or empty>\n"
+                "REPLY_JP: <Next Japanese conversation turn. NO ROMAJI. NO ACTIONS.>\n"
+                "REPLY_EN: <Complete literal English translation of REPLY_JP and SUGGESTION>\n"
+                "FINISHED: <False>\n\n"
+                "Do not include any other text."
             )
 
             # Strict role alternation for llama-server
@@ -400,7 +406,7 @@ async def conversation_respond_stream(request: RespondRequest, session: dict = D
                 messages=messages,
                 stream=True,
                 timeout=120.0,
-                temperature=0.7 # Higher temperature for more variety
+                temperature=0.3 # Lower temperature for strict protocol compliance
             )
 
             full_content = ""
@@ -496,26 +502,26 @@ async def conversation_respond_stream(request: RespondRequest, session: dict = D
             # Determine final display text and audio text
             is_mistake = not data.get("isCorrect", True)
 
-            # Double check: if she says "Correct" or similar in feedback, it's not a mistake
-            feedback_text = (data.get("feedback") or "").lower()
-            if is_mistake and any(word in feedback_text for word in ["correct", "perfect", "good job", "great", "excellent"]):
-                is_mistake = False
-                data["isCorrect"] = True
+            # Sanitize Japanese text: remove actions and emojis
+            import re
+            def sanitize(text):
+                if not text: return text
+                # Remove actions like *smiles*
+                t = re.sub(r'\*.*?\*', '', text)
+                # Remove common emojis
+                t = re.sub(r'[\u2600-\u27bf\U0001f300-\U0001f64f\U0001f680-\U0001f6ff]', '', t)
+                return t.strip()
 
             if is_mistake:
                 feedback = data.get("feedback") or "Grammar/usage error."
-                suggestion = data.get("suggestion") or ""
+                suggestion = sanitize(data.get("suggestion") or "")
                 final_jp = f"Mistake: {feedback}"
                 if suggestion:
                     final_jp += f"\nSuggestion: {suggestion}"
                 audio_text = suggestion or feedback
-                # If it's a mistake, English should ideally translate the suggestion
                 english_text = data.get("english") or "Please correct your Japanese ♡"
             else:
-                # Ensure we show the Japanese reply if correct
-                final_jp = data.get("japanese")
-                if not final_jp or final_jp in ["...", "*"]:
-                    final_jp = data.get("suggestion") or "Great job! Let's continue."
+                final_jp = sanitize(data.get("japanese") or "...")
                 audio_text = final_jp
                 english_text = data.get("english") or "Perfect! Let's keep talking."
 
