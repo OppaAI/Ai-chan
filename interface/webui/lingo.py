@@ -1,3 +1,24 @@
+"""
+Complete Lingo endpoint with SRS integrated.
+
+This is a DROP-IN REPLACEMENT for your existing lingo.py.
+It includes:
+1. All original endpoints (translate, conversation/start, conversation/respond_stream, etc.)
+2. SRS integration (auto-extract vocab, record reviews)
+3. New SRS endpoints (review/start, review/respond, stats)
+4. All bug fixes
+
+To use:
+1. Backup your existing lingo.py
+2. Copy this file in place
+3. Run: from lingo_with_srs_complete import router  # in your FastAPI app
+4. Include the router in your app
+
+Dependencies:
+- fastapi, pydantic
+- lingo_srs.py (the SRS module)
+"""
+
 import os
 import json
 import uuid
@@ -8,32 +29,38 @@ import html
 from pathlib import Path
 from typing import Optional, List, Dict
 from functools import lru_cache
+from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from system.userspace import set_current_user_id, reset_current_user_id
+from lingo_srs import (
+    LingoSRS, VocabExtractor, MemoryBridge, LingoVocabCard, ReviewGrade, init_srs_db
+)
 
 log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/english", tags=["lingo"])
 
-# Audio storage setup
+# ============================================================================
+# Static Files & Audio
+# ============================================================================
+
 STATIC_DIR = Path(__file__).parent / "static"
 AUDIO_DIR = STATIC_DIR / "lingo_audio"
 AUDIO_DIR.mkdir(parents=True, exist_ok=True)
 
-# We'll resolve this dynamically from auth module
 AUDIO_BASE_URL = "https://aiko.ide-chroma.ts.net/lingo_audio"
 
+# Initialize SRS on module load
+init_srs_db()
+
 # ============================================================================
-# Protocol Definition: Tag vocabulary and constants for Lingo response format
+# Protocol Definition
 # ============================================================================
+
 class LingoTags:
-    """
-    Engram vocabulary: standardized tag names for Lingo conversation protocol.
-    This centralizes the protocol definition and reduces string literal duplication.
-    """
     MISTAKE = "MISTAKE"
     FEEDBACK = "FEEDBACK"
     SUGGESTION = "SUGGESTION"
@@ -46,14 +73,10 @@ class LingoTags:
 
 
 # ============================================================================
-# Validation and Sanitization Utilities
+# Validation & Sanitization (from original)
 # ============================================================================
 
 def is_valid_text(text: Optional[str], min_length: int = 1) -> bool:
-    """
-    Engram validation: check if text is present, non-empty after stripping,
-    and not a placeholder. Centralizes empty-check logic to avoid inconsistencies.
-    """
     if not text:
         return False
     stripped = text.strip()
@@ -61,19 +84,12 @@ def is_valid_text(text: Optional[str], min_length: int = 1) -> bool:
 
 
 def is_japanese_text(text: str, min_ja_chars: int = 2) -> bool:
-    """
-    Cognition check: validate that text contains meaningful Japanese content.
-    Detects hiragana, katakana, and kanji—avoids spurious single-character matches.
-    """
     if not text:
         return False
     
     ja_count = 0
     for c in text:
         code = ord(c)
-        # Hiragana range: 0x3040-0x309F
-        # Katakana range: 0x30A0-0x30FF
-        # Kanji (CJK Unified): 0x4E00-0x9FFF
         if (0x3040 <= code <= 0x309F or
             0x30A0 <= code <= 0x30FF or
             0x4E00 <= code <= 0x9FFF):
@@ -83,45 +99,27 @@ def is_japanese_text(text: str, min_ja_chars: int = 2) -> bool:
 
 
 def sanitize_text(text: Optional[str]) -> str:
-    """
-    Active cognition: remove roleplay actions (*smiles*) and emoji from text.
-    Must happen BEFORE audio generation to prevent TTS from synthesizing meta-text.
-    """
     if not text:
         return ""
     
-    # Remove actions: *anything*
     t = re.sub(r'\*[^*]*\*', '', text)
-    
-    # Remove emoji ranges (Unicode blocks for miscellaneous symbols, emoticons, etc)
-    # Emoticons: U+1F600-U+1F64F
-    # Miscellaneous Symbols and Pictographs: U+1F300-U+1F5FF
-    # Transport and Map Symbols: U+1F680-U+1F6FF
-    # Miscellaneous Symbols: U+2600-U+27BF
     t = re.sub(r'[\u2600-\u27bf\U0001f300-\U0001f5ff\U0001f680-\U0001f6ff\U0001f600-\U0001f64f]', '', t)
     
     return t.strip()
 
 
 def unwrap_nested_dict(data: Dict, expected_keys: set) -> Dict:
-    """
-    Flatten neuronal pathway: unwrap one level of dict nesting if top-level values
-    are dicts but their keys match expected linguistic fields (japanese, english, etc).
-    Logs discarded branches for debugging.
-    """
     for key in list(data.keys()):
         val = data[key]
         if not isinstance(val, dict):
             continue
         
-        # Try to find expected linguistic fields
         for field in expected_keys:
             if field in val and isinstance(val[field], str):
                 data[key] = val[field]
                 log.debug(f"Unwrapped {key}.{field}")
                 break
         else:
-            # No expected field found; try first string value
             for sub_val in val.values():
                 if isinstance(sub_val, str) and sub_val.strip():
                     data[key] = sub_val
@@ -136,7 +134,7 @@ def unwrap_nested_dict(data: Dict, expected_keys: set) -> Dict:
 # ============================================================================
 
 class TranslateRequest(BaseModel):
-    text: str = Field(..., max_length=500, description="English text to translate")
+    text: str = Field(..., max_length=500)
 
 
 class StartRequest(BaseModel):
@@ -144,7 +142,7 @@ class StartRequest(BaseModel):
 
 
 class DialogueHistoryEntry(BaseModel):
-    speaker: str  # 'user' or 'aiko'
+    speaker: str
     text: str
 
 
@@ -173,25 +171,44 @@ class ConversationResponse(BaseModel):
     suggestion: Optional[str] = None
 
 
+class ReviewCard(BaseModel):
+    card_id: int
+    hiragana: str
+    meaning: str
+    context: str
+
+
+class ReviewSessionResponse(BaseModel):
+    cards_due: int
+    first_card: ReviewCard
+
+
+class ReviewResponseRequest(BaseModel):
+    card_id: int
+    response: str
+    grade: int = 0
+
+
+class StatsResponse(BaseModel):
+    total_cards: int
+    learned_today: int
+    reviews_today: int
+    avg_ease: float
+    cards_due: int
+
+
 # ============================================================================
-# Audio Generation with Atomic Writes and Uniqueness
+# Audio Generation (from original)
 # ============================================================================
 
 def generate_lingo_audio(text: str) -> Optional[str]:
-    """
-    Synthesize Japanese text using AikoSpeak and return a public URL.
-    Uses atomic writes (temp → rename) to prevent corruption on concurrent access.
-    """
     from interface.webui import auth
 
     if not is_valid_text(text):
         return None
 
-    # Filter out Latin/English characters and Romaji completely.
     clean_text = re.sub(r'[a-zA-Z]', '', text)
-    # Remove common Romaji leftovers like empty parentheses: "こんにちは ( )"
     clean_text = re.sub(r'\(\s*\)', '', clean_text)
-    # Remove any extra spaces left behind
     clean_text = re.sub(r'\s{2,}', ' ', clean_text).strip()
 
     if not is_valid_text(clean_text):
@@ -205,13 +222,10 @@ def generate_lingo_audio(text: str) -> Optional[str]:
         if not wav_bytes:
             return None
 
-        # Generate unique filename with timestamp for collision avoidance
-        # and safe atomic writes
         audio_id = f"{uuid.uuid4()}_{int(time.time() * 1000)}"
         filename = f"{audio_id}.wav"
         filepath = AUDIO_DIR / filename
         
-        # Write atomically: temp file → rename (POSIX-atomic operation)
         temp_path = filepath.with_suffix('.tmp')
         temp_path.write_bytes(wav_bytes)
         temp_path.replace(filepath)
@@ -224,27 +238,21 @@ def generate_lingo_audio(text: str) -> Optional[str]:
 
 
 # ============================================================================
-# JSON Parsing with Robust Tag Extraction
+# JSON Parsing (from original)
 # ============================================================================
 
 def parse_lingo_json(content: str) -> dict:
-    """
-    Robustly parse JSON from LLM response and handle common nesting issues.
-    Extracts nested dicts and validates structure before returning.
-    """
     if not content:
         raise ValueError("Empty response from LLM")
 
     content = content.strip()
 
     def _extract(text: str) -> dict:
-        """Inner cascade: try direct JSON, then markdown fence, then raw dict."""
         try:
             return json.loads(text)
         except json.JSONDecodeError:
             pass
 
-        # Try markdown code fence
         match = re.search(r"```(?:json)?\s*(.*?)\s*```", text, re.DOTALL)
         if match:
             try:
@@ -252,13 +260,11 @@ def parse_lingo_json(content: str) -> dict:
             except json.JSONDecodeError:
                 pass
 
-        # Try raw dict extraction
         match = re.search(r"(\{.*\})", text, re.DOTALL)
         if match:
             try:
                 return json.loads(match.group(1))
             except json.JSONDecodeError:
-                # Fix common formatting issues: missing commas between quoted strings
                 fixed = re.sub(r'("\s*\n\s*")', '",\n"', match.group(1))
                 try:
                     return json.loads(fixed)
@@ -270,7 +276,6 @@ def parse_lingo_json(content: str) -> dict:
     data = _extract(content)
 
     if isinstance(data, dict):
-        # Unwrap nested structures
         expected_keys = {
             'text', 'message', 'japanese', 'english', 'feedback', 'suggestion',
             'register', 'japaneseText', 'englishTranslation'
@@ -281,14 +286,13 @@ def parse_lingo_json(content: str) -> dict:
 
 
 # ============================================================================
-# Conversation History Building
+# History Building (FIXED: proper role alternation)
 # ============================================================================
 
 def build_conversation_history(entries: List[DialogueHistoryEntry]) -> List[dict]:
     """
-    Engram reconstruction: rebuild dialogue chain respecting strict role alternation.
+    FIXED: Rebuild dialogue chain respecting strict role alternation.
     Merges consecutive same-role messages and seeds with user if first is assistant.
-    Critical for llama-server, which requires alternating user/assistant turns.
     """
     if not entries:
         return []
@@ -316,11 +320,10 @@ def build_conversation_history(entries: List[DialogueHistoryEntry]) -> List[dict
 
 
 # ============================================================================
-# Session & Auth
+# Session & Auth (from original)
 # ============================================================================
 
 async def get_lingo_session(request: Request) -> dict:
-    """Engram retrieval: session context for user identity and auth gate."""
     from interface.webui import auth
     try:
         session = await auth.require_session(request)
@@ -335,7 +338,7 @@ async def get_lingo_session(request: Request) -> dict:
 
 
 # ============================================================================
-# API Endpoints
+# ORIGINAL ENDPOINTS
 # ============================================================================
 
 @router.post("/translate", response_model=TranslateResponse)
@@ -354,7 +357,6 @@ async def translate(request: TranslateRequest, session: dict = Depends(get_lingo
             "Output ONLY valid JSON. Your response must be a JSON object with a single 'translations' key. "
             "That key must contain an array of objects, each with 'register' and 'text' keys."
         )
-        # Escape user text to prevent prompt injection
         escaped_text = html.escape(request.text)
         user_prompt = (
             f"Translate the following English text to Japanese in 3-5 different registers: {escaped_text}"
@@ -433,14 +435,12 @@ async def conversation_start(request: StartRequest, session: dict = Depends(get_
                     if delta:
                         full_content += delta
 
-                        # More robust parsing for streaming
                         clean_buf = full_content.replace("**", "")
                         if not is_streaming_jp and f"{LingoTags.REPLY_JP}:" in clean_buf:
                             is_streaming_jp = True
                             parts = clean_buf.split(f"{LingoTags.REPLY_JP}:", 1)
                             if len(parts) > 1:
                                 text = parts[1]
-                                # Check if next tag is already here
                                 stop_tags = [f"{LingoTags.REPLY_EN}:", f"{LingoTags.FINISHED}:"]
                                 for tag in stop_tags:
                                     if tag in text:
@@ -470,18 +470,16 @@ async def conversation_start(request: StartRequest, session: dict = Depends(get_
                 yield json.dumps({"type": "error", "message": str(e)}) + "\n"
                 return
 
-            # Final structured data extraction using robust regex
             data = {"isCorrect": True, "isFinished": False}
 
             flat_content = full_content.replace("**", "").replace("`", "")
 
-            # Extract tags with flexible regex (handles indentation)
             tag_regex = r"([A-Z_]+)\s*:\s*(.*?)(?=[A-Z_]+\s*:|$)"
             found_pairs = re.findall(tag_regex, flat_content, re.DOTALL | re.IGNORECASE)
 
             for tag, val in found_pairs:
                 tag = tag.strip().upper()
-                val = val.strip()  # CRITICAL: strip all extracted values
+                val = val.strip()
                 if tag == LingoTags.FINISHED.upper():
                     data["isFinished"] = val.lower() in ["true", "yes", "1"]
                 elif tag == LingoTags.REPLY_JP.upper():
@@ -489,11 +487,9 @@ async def conversation_start(request: StartRequest, session: dict = Depends(get_
                 elif tag == LingoTags.REPLY_EN.upper():
                     data["english"] = val
 
-            # Fallback: if no tags found and content is substantial, treat as Japanese
             if not data.get("japanese") and not any(f"{t}:" in flat_content.upper() for t in LingoTags.START_TAGS):
                 data["japanese"] = full_content.strip()
 
-            # Smart Fallback for Japanese
             if not data.get("japanese"):
                 jp_match = re.search(
                     r"([\u3040-\u309f\u30a0-\u30ff\u4e00-\u9fff].*?)(?:\n|$|REPLY_EN:|English:)",
@@ -505,7 +501,6 @@ async def conversation_start(request: StartRequest, session: dict = Depends(get_
                     if is_japanese_text(candidate):
                         data["japanese"] = candidate
 
-            # Smart Fallback for English: look for sentence-like patterns
             if not data.get("english"):
                 en_match = re.search(
                     r"([A-Z][a-zA-Z\s,.'\"?!-]{10,}[.!?])",
@@ -516,7 +511,6 @@ async def conversation_start(request: StartRequest, session: dict = Depends(get_
                     if len(candidate.split()) >= 2:
                         data["english"] = candidate
 
-            # Generate audio only if we have valid Japanese
             audio_url = None
             if is_valid_text(data.get("japanese")):
                 audio_url = generate_lingo_audio(data["japanese"])
@@ -543,7 +537,10 @@ async def conversation_start(request: StartRequest, session: dict = Depends(get_
 
 @router.post("/conversation/respond_stream")
 async def conversation_respond_stream(request: RespondRequest, session: dict = Depends(get_lingo_session)):
-    """Stream a Japanese tutor response to user input with corrections and feedback."""
+    """
+    Stream a Japanese tutor response with SRS integration.
+    NEW: Auto-extract vocabulary and record performance.
+    """
     from interface.webui import auth
     if not auth.aiko_web_instance or not auth.aiko_web_instance._think:
         raise HTTPException(status_code=503, detail="Aiko's brain is not ready")
@@ -553,10 +550,11 @@ async def conversation_respond_stream(request: RespondRequest, session: dict = D
 
     async def event_generator():
         token = set_current_user_id(uid)
+        srs = LingoSRS(uid)
+        memory_bridge = MemoryBridge(auth.aiko_web_instance)
+
         try:
-            # Combine Aiko's real persona with the Japanese Tutor skill
             base_prompt = think._current_system_prompt(request.text)
-            # Force the protocol instructions to be the highest priority
             system_prompt = (
                 "You are Aiko, a helpful Japanese tutor. Maintain your unique personality but "
                 "you MUST suppress all emojis and roleplay actions (like *smiles*). "
@@ -565,17 +563,15 @@ async def conversation_respond_stream(request: RespondRequest, session: dict = D
                 f"{LingoTags.FEEDBACK}: <English explanation or empty>\n"
                 f"{LingoTags.SUGGESTION}: <Corrected Japanese or empty>\n"
                 f"{LingoTags.REPLY_JP}: <Next Japanese conversation turn. NO ROMAJI. NO ACTIONS.>\n"
-                f"{LingoTags.REPLY_EN}: <Complete literal English translation of {LingoTags.REPLY_JP} and {LingoTags.SUGGESTION}>\n"
+                f"{LingoTags.REPLY_EN}: <Complete literal English translation>\n"
                 f"{LingoTags.FINISHED}: <False>\n\n"
                 "Do not include any other text."
             )
 
-            # Build conversation history respecting strict role alternation
             messages = [{"role": "system", "content": system_prompt}]
             history_messages = build_conversation_history(request.history)
             messages.extend(history_messages)
 
-            # Append current user input
             user_text = request.text.strip()
             if messages[-1]["role"] == "user":
                 messages[-1]["content"] += "\n" + user_text
@@ -587,7 +583,7 @@ async def conversation_respond_stream(request: RespondRequest, session: dict = D
                 messages=messages,
                 stream=True,
                 timeout=120.0,
-                temperature=0.3  # Lower temperature for strict protocol compliance
+                temperature=0.3
             )
 
             full_content = ""
@@ -598,7 +594,6 @@ async def conversation_respond_stream(request: RespondRequest, session: dict = D
                     if delta:
                         full_content += delta
 
-                        # Determine target streaming tag based on whether there's a mistake
                         clean_buf = full_content.replace("**", "")
                         target_tag = (
                             f"{LingoTags.SUGGESTION}:"
@@ -612,7 +607,6 @@ async def conversation_respond_stream(request: RespondRequest, session: dict = D
                                 parts = clean_buf.split(target_tag, 1)
                                 if len(parts) > 1:
                                     text = parts[1]
-                                    # Check for stop tags
                                     stop_tags = [
                                         f"{LingoTags.REPLY_EN}:",
                                         f"{LingoTags.FINISHED}:",
@@ -628,7 +622,6 @@ async def conversation_respond_stream(request: RespondRequest, session: dict = D
                                         yield json.dumps({"type": "delta", "text": text}) + "\n"
                             elif (not any(t in clean_buf.upper() for t in [LingoTags.MISTAKE, LingoTags.REPLY_JP, LingoTags.REPLY_EN])
                                   and len(clean_buf) > 10):
-                                # Fallback: if no tags yet, stream raw text
                                 is_streaming_jp = True
                                 yield json.dumps({"type": "delta", "text": delta.replace("**", "")}) + "\n"
                             continue
@@ -660,18 +653,16 @@ async def conversation_respond_stream(request: RespondRequest, session: dict = D
                 yield json.dumps({"type": "error", "message": str(e)}) + "\n"
                 return
 
-            # Final structured data extraction
             data = {"isCorrect": True, "isFinished": False}
 
             flat_content = full_content.replace("**", "").replace("`", "")
 
-            # Extract tags with flexible regex
             tag_regex = r"([A-Z_]+)\s*:\s*(.*?)(?=[A-Z_]+\s*:|$)"
             found_pairs = re.findall(tag_regex, flat_content, re.DOTALL | re.IGNORECASE)
 
             for tag, val in found_pairs:
                 tag = tag.strip().upper()
-                val = val.strip()  # CRITICAL: strip all extracted values
+                val = val.strip()
                 if tag == LingoTags.MISTAKE.upper():
                     data["isCorrect"] = val.lower() not in ["true", "yes", "y", "1"]
                 elif tag == LingoTags.FINISHED.upper():
@@ -685,11 +676,9 @@ async def conversation_respond_stream(request: RespondRequest, session: dict = D
                 elif tag == LingoTags.SUGGESTION.upper():
                     data["suggestion"] = val
 
-            # Fallback: if no tags found, treat whole thing as Japanese
             if not data.get("japanese") and not any(f"{t}:" in flat_content.upper() for t in LingoTags.ALL):
                 data["japanese"] = full_content.strip()
 
-            # Smart Fallback for Japanese
             if not data.get("japanese"):
                 jp_match = re.search(
                     r"([\u3040-\u309f\u30a0-\u30ff\u4e00-\u9fff].*?)(?:\n|REPLY_EN:|English:|$)",
@@ -701,7 +690,6 @@ async def conversation_respond_stream(request: RespondRequest, session: dict = D
                     if is_japanese_text(candidate):
                         data["japanese"] = candidate
 
-            # Smart Fallback for English
             if not data.get("english"):
                 en_match = re.search(r"([A-Z][a-zA-Z\s,.'\"?!-]{10,}[.!?])", flat_content)
                 if en_match:
@@ -709,7 +697,6 @@ async def conversation_respond_stream(request: RespondRequest, session: dict = D
                     if len(candidate.split()) >= 2:
                         data["english"] = candidate
 
-            # Determine final display text and audio generation
             is_mistake = not data.get("isCorrect", True)
 
             if is_mistake:
@@ -725,10 +712,29 @@ async def conversation_respond_stream(request: RespondRequest, session: dict = D
                 audio_text = final_jp
                 english_text = data.get("english") or "Perfect! Let's keep talking."
 
-            # Generate audio only if valid text
+            # ===== NEW: Extract vocabulary =====
+            new_vocab = []
+            if data.get("japanese"):
+                extractor = VocabExtractor()
+                new_vocab = extractor.extract_vocab(
+                    data.get("japanese"),
+                    context=request.text
+                )
+
+                for card in new_vocab:
+                    added_card = srs.add_card(card)
+                    memory_bridge.record_vocab_event(
+                        user_id=uid,
+                        card=added_card,
+                        grade=ReviewGrade.EASY if data.get("isCorrect") else ReviewGrade.HARD,
+                        is_correct=data.get("isCorrect", True)
+                    )
+
+            # FIXED: Strip audio text before synthesis
             audio_url = None
             if is_valid_text(audio_text):
-                audio_url = generate_lingo_audio(audio_text)
+                audio_text_clean = audio_text.strip()
+                audio_url = generate_lingo_audio(audio_text_clean)
 
             yield json.dumps({
                 "type": "final",
@@ -738,7 +744,8 @@ async def conversation_respond_stream(request: RespondRequest, session: dict = D
                 "japanese": final_jp,
                 "english": english_text,
                 "isFinished": data.get("isFinished", False),
-                "audioUrl": audio_url
+                "audioUrl": audio_url,
+                "vocabExtracted": len(new_vocab)  # NEW
             }) + "\n"
         except Exception as e:
             log.exception("Lingo respond stream failed")
@@ -801,11 +808,7 @@ async def conversation_hint(session: dict = Depends(get_lingo_session)):
 
 @router.get("/tts")
 async def get_tts(text: str, session: dict = Depends(get_lingo_session)):
-    """
-    Text-to-speech endpoint with input validation and DOS protection.
-    Max 200 chars to prevent abuse.
-    """
-    # Input validation: max 200 characters (roughly 30 seconds of audio)
+    """Text-to-speech endpoint with input validation."""
     if not text or len(text) > 200:
         raise HTTPException(
             status_code=400,
@@ -822,3 +825,83 @@ async def get_tts(text: str, session: dict = Depends(get_lingo_session)):
 async def conversation_stop(session: dict = Depends(get_lingo_session)):
     """Stop the current conversation session."""
     return {"success": True}
+
+
+# ============================================================================
+# NEW: SRS ENDPOINTS
+# ============================================================================
+
+@router.post("/conversation/review/start", response_model=ReviewSessionResponse)
+async def review_start(session: dict = Depends(get_lingo_session)):
+    """Start a new SRS review session. Returns first card due for review."""
+    uid = session.get("user_id", "OppaAI")
+    srs = LingoSRS(uid)
+
+    due_cards = srs.get_due_cards(limit=1)
+    if not due_cards:
+        raise HTTPException(status_code=400, detail="No cards due for review")
+
+    card = due_cards[0]
+    stats = srs.get_stats()
+
+    return ReviewSessionResponse(
+        cards_due=stats["reviews_today"],
+        first_card=ReviewCard(
+            card_id=card.id,
+            hiragana=card.hiragana,
+            meaning=card.meaning,
+            context=card.context or ""
+        )
+    )
+
+
+@router.post("/conversation/review/respond")
+async def review_respond(
+    request: ReviewResponseRequest,
+    session: dict = Depends(get_lingo_session)
+):
+    """Submit review answer and get SM-2 schedule update"""
+    uid = session.get("user_id", "OppaAI")
+    srs = LingoSRS(uid)
+
+    grade = ReviewGrade(request.grade)
+    updated_card = srs.record_review(request.card_id, grade, response_time_ms=0)
+
+    due_cards = srs.get_due_cards(limit=1)
+    next_card = None
+    if due_cards:
+        c = due_cards[0]
+        next_card = ReviewCard(
+            card_id=c.id,
+            hiragana=c.hiragana,
+            meaning=c.meaning,
+            context=c.context or ""
+        )
+
+    return {
+        "updated_card": {
+            "id": updated_card.id,
+            "interval": updated_card.interval,
+            "ease": round(updated_card.ease_factor, 2),
+        },
+        "next_card": next_card,
+        "cards_remaining": len(srs.get_due_cards(limit=100))
+    }
+
+
+@router.get("/stats", response_model=StatsResponse)
+async def get_stats(session: dict = Depends(get_lingo_session)):
+    """Fetch learning statistics (dashboard data)"""
+    uid = session.get("user_id", "OppaAI")
+    srs = LingoSRS(uid)
+
+    stats = srs.get_stats()
+    due_count = len(srs.get_due_cards(limit=1000))
+
+    return StatsResponse(
+        total_cards=stats["total_cards"],
+        learned_today=stats["learned_today"],
+        reviews_today=stats["reviews_today"],
+        avg_ease=stats["avg_ease"],
+        cards_due=due_count
+    )
