@@ -323,6 +323,7 @@ async def conversation_respond_stream(request: RespondRequest, session: dict = D
 
     async def event_generator():
         token = set_current_user_id(uid)
+        try:
             # Combine Aiko's real persona with Lingo instructions
             base_prompt = think._current_system_prompt(request.text)
             system_prompt = (
