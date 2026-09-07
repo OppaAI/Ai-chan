@@ -5,6 +5,7 @@ import logging
 from pathlib import Path
 from typing import Optional, List
 from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from system.userspace import set_current_user_id, reset_current_user_id
@@ -225,64 +226,70 @@ async def translate(request: TranslateRequest, session: dict = Depends(get_lingo
     finally:
         reset_current_user_id(token)
 
-@router.post("/conversation/start", response_model=ConversationResponse)
+@router.post("/conversation/start")
 async def conversation_start(request: StartRequest, session: dict = Depends(get_lingo_session)):
     from interface.webui import auth
     think = auth.aiko_web_instance._think
     uid = session.get("user_id")
     token = set_current_user_id(uid)
-    try:
-        system_prompt = (
-            "You are Aiko, teaching Japanese through conversation. "
-            "Output ONLY valid JSON. Your response must be a JSON object with 'japanese' and 'english' keys. "
-            "The 'japanese' value must be in Japanese ONLY (no English). "
-            "DO NOT include any text before or after the JSON block."
-        )
-        user_prompt = (
-            f"Start a Japanese conversation at {request.level} level. Speak 1-3 sentences in Japanese. "
-            "Example response format: {\"japanese\": \"こんにちは、お元気ですか？\", \"english\": \"Hello, how are you?\"}"
-        )
 
-        # Retry logic for conversation start
-        max_retries = 2
-        content = ""
-        for attempt in range(max_retries + 1):
+    async def event_generator():
+        try:
+            system_prompt = (
+                "You are Aiko, teaching Japanese through conversation. "
+                "Output your response exactly like this:\n"
+                "REPLY_JP: <Japanese sentences>\n"
+                "REPLY_EN: <English translation>\n"
+                "FINISHED: False"
+            )
+            user_prompt = f"Start a Japanese conversation at {request.level} level. Speak 1-3 sentences in Japanese."
+
             response = think._client.chat.completions.create(
                 model=think._llm_model,
                 messages=[
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_prompt}
                 ],
-                response_format={"type": "json_object"},
+                stream=True,
                 timeout=120.0
             )
 
-            content = response.choices[0].message.content
-            log.info(f"Lingo conversation start response (attempt {attempt}): {content}")
+            full_content = ""
+            for chunk in response:
+                delta = chunk.choices[0].delta.content
+                if delta:
+                    full_content += delta
+                    yield json.dumps({"type": "delta", "text": delta}) + "\n"
 
-            try:
-                data = parse_lingo_json(content)
-                if data.get("japanese") or data.get("japaneseText"):
-                    break
-            except Exception as e:
-                if attempt == max_retries:
-                    raise
-                log.warning(f"Lingo JSON parse failed on attempt {attempt}: {e}")
+            # Parse and send final
+            data = {"isCorrect": True}
+            lines = full_content.split("\n")
+            for line in lines:
+                if ":" in line:
+                    k, v = line.split(":", 1)
+                    k = k.strip().upper()
+                    v = v.strip()
+                    if k == "REPLY_JP": data["japanese"] = v
+                    if k == "REPLY_EN": data["english"] = v
+                    if k == "FINISHED": data["isFinished"] = v.lower() == "true"
 
-        data = parse_lingo_json(content)
-        japanese_text = data.get("japanese") or data.get("japaneseText") or ""
-        english_text = data.get("english") or data.get("englishTranslation") or ""
-        return ConversationResponse(
-            japaneseText=str(japanese_text),
-            englishTranslation=str(english_text) or "Translation unavailable",
-            audioUrl=generate_lingo_audio(str(japanese_text)),
-            isFinished=data.get("finished", data.get("isFinished", False))
-        )
-    except Exception as e:
-        log.exception("Lingo conversation start failed")
-        raise HTTPException(status_code=500, detail=str(e))
-    finally:
-        reset_current_user_id(token)
+            audio_url = generate_lingo_audio(data.get("japanese"))
+            yield json.dumps({
+                "type": "final",
+                "isCorrect": True,
+                "japanese": data.get("japanese"),
+                "english": data.get("english"),
+                "isFinished": data.get("isFinished", False),
+                "audioUrl": audio_url
+            }) + "\n"
+
+        except Exception as e:
+            log.exception("Lingo start stream failed")
+            yield json.dumps({"type": "error", "message": str(e)}) + "\n"
+        finally:
+            reset_current_user_id(token)
+
+    return StreamingResponse(event_generator(), media_type="text/event-stream")
 
 @router.post("/conversation/respond", response_model=ConversationResponse)
 async def conversation_respond(request: RespondRequest, session: dict = Depends(get_lingo_session)):
@@ -387,6 +394,94 @@ async def conversation_respond(request: RespondRequest, session: dict = Depends(
         raise HTTPException(status_code=500, detail=str(e))
     finally:
         reset_current_user_id(token)
+
+@router.post("/conversation/respond_stream")
+async def conversation_respond_stream(request: RespondRequest, session: dict = Depends(get_lingo_session)):
+    from interface.webui import auth
+    think = auth.aiko_web_instance._think
+    uid = session.get("user_id")
+    token = set_current_user_id(uid)
+
+    async def event_generator():
+        try:
+            # We use a slightly different prompt to get a parsable stream
+            system_prompt = (
+                "You are Aiko, a Japanese teacher. Maintain a natural roleplay conversation. "
+                "Check the student's input for mistakes FIRST. "
+                "Format your response EXACTLY like this:\n"
+                "MISTAKE: <True/False>\n"
+                "FEEDBACK: <Explanation in English or empty>\n"
+                "SUGGESTION: <Corrected Japanese or empty>\n"
+                "REPLY_JP: <Next Japanese conversation turn>\n"
+                "REPLY_EN: <English translation of the next turn>\n"
+                "FINISHED: <True/False>"
+            )
+
+            messages = [{"role": "system", "content": system_prompt}]
+            if request.history:
+                for entry in request.history:
+                    role = "assistant" if entry.speaker == "aiko" else "user"
+                    messages.append({"role": role, "content": entry.text})
+            messages.append({"role": "user", "content": request.text})
+
+            response = think._client.chat.completions.create(
+                model=think._llm_model,
+                messages=messages,
+                stream=True,
+                timeout=120.0
+            )
+
+            full_content = ""
+            for chunk in response:
+                delta = chunk.choices[0].delta.content
+                if delta:
+                    full_content += delta
+                    # Send raw delta for real-time typewriter
+                    yield json.dumps({"type": "delta", "text": delta}) + "\n"
+
+            # After streaming finishes, we provide the final structured data
+            # This helps the app finalize the UI (e.g. generate audio)
+            # We'll parse the full_content to extract fields
+            log.info(f"Lingo stream finished. Parsing: {full_content}")
+
+            # Simple line-based parser
+            data = {"isCorrect": True}
+            lines = full_content.split("\n")
+            for line in lines:
+                if ":" in line:
+                    k, v = line.split(":", 1)
+                    k = k.strip().upper()
+                    v = v.strip()
+                    if k == "MISTAKE": data["isCorrect"] = v.lower() != "true"
+                    if k == "FEEDBACK": data["feedback"] = v
+                    if k == "SUGGESTION": data["suggestion"] = v
+                    if k == "REPLY_JP": data["japanese"] = v
+                    if k == "REPLY_EN": data["english"] = v
+                    if k == "FINISHED": data["isFinished"] = v.lower() == "true"
+
+            # Special case for mistakes: generate audio for suggestion
+            # Otherwise generate audio for REPLY_JP
+            audio_text = data.get("suggestion") if not data.get("isCorrect") else data.get("japanese")
+            audio_url = generate_lingo_audio(audio_text) if audio_text else None
+
+            yield json.dumps({
+                "type": "final",
+                "isCorrect": data.get("isCorrect", True),
+                "feedback": data.get("feedback"),
+                "suggestion": data.get("suggestion"),
+                "japanese": data.get("japanese"),
+                "english": data.get("english"),
+                "isFinished": data.get("isFinished", False),
+                "audioUrl": audio_url
+            }) + "\n"
+
+        except Exception as e:
+            log.exception("Lingo streaming failed")
+            yield json.dumps({"type": "error", "message": str(e)}) + "\n"
+        finally:
+            reset_current_user_id(token)
+
+    return StreamingResponse(event_generator(), media_type="text/event-stream")
 
 @router.post("/conversation/hint", response_model=ConversationResponse)
 async def conversation_hint(session: dict = Depends(get_lingo_session)):
