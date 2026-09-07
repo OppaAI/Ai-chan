@@ -10,6 +10,30 @@ Architecture:
 - LingoSRS: SM-2 scheduler (interval, ease factor, review history)
 - VocabExtractor: parse Japanese text → kanji/word/reading triples
 - MemoryBridge: vocab reviews → Aiko LTM with valence (correct=+1, mistake=-1)
+
+=====================================================================
+BUGFIX PASS (this version):
+  1. _hiragana_to_romaji() only handled single hiragana characters, so
+     any word with youon (combined sounds like きゃ/しゅ/ちょ) or small
+     kana (ぁぃぅぇぉ) produced garbled romaji (e.g. "きゃ" -> "kya" was
+     actually rendered as "ki" + "や" = "kiya"). Rewrote as a proper
+     longest-match tokenizer over an expanded mapping table, including
+     small tsu (っ) for consonant gemination and the long vowel mark (ー).
+  2. VocabExtractor accepted an `llm_client` in __init__ but never
+     actually called it -- unknown kanji just silently returned None
+     from _kanji_lookup(), so anything outside the ~15-entry
+     COMMON_READINGS cache was dropped and never added to the SRS
+     queue. Implemented the fallback lookup.
+  3. LingoSRS.record_review() called `grade.value` assuming its caller
+     always passed a valid ReviewGrade enum member. A bad int (e.g. a
+     stray 99 from a client bug) would raise deep inside SM-2 math
+     with a confusing traceback. Added explicit validation that
+     produces a clear ValueError up front.
+  4. Added LingoSRS.get_weak_vocab() -- there was no way to identify
+     cards the user is actually struggling with (high review failure
+     rate); it just returned whatever was due next, in due-date order.
+     This backs the new "Practice These" dashboard widget.
+=====================================================================
 """
 
 import sqlite3
@@ -222,7 +246,38 @@ class LingoSRS:
         conn.close()
         return [self._row_to_card(row) for row in rows]
 
-    def record_review(self, card_id: int, grade: ReviewGrade, response_time_ms: int = 0) -> LingoVocabCard:
+    def get_weak_vocab(self, limit: int = 10, min_reviews: int = 2, error_threshold: float = 0.4) -> List[LingoVocabCard]:
+        """
+        FIX #4: Fetch cards the user is actually struggling with, ranked by
+        review failure rate, rather than just whatever's next in the due
+        queue. A card needs at least `min_reviews` attempts before it's
+        eligible (otherwise a single bad first guess dominates the list),
+        and needs a failure rate (grade < GOOD) above `error_threshold`.
+        """
+        conn = sqlite3.connect(DB_PATH)
+        c = conn.cursor()
+
+        c.execute("""
+            SELECT lvc.*,
+                   CAST(SUM(CASE WHEN lrl.grade < ? THEN 1 ELSE 0 END) AS FLOAT)
+                       / COUNT(lrl.id) AS error_rate,
+                   COUNT(lrl.id) AS review_count
+            FROM lingo_vocab_cards lvc
+            JOIN lingo_review_logs lrl ON lvc.id = lrl.card_id
+            WHERE lvc.user_id = ?
+            GROUP BY lvc.id
+            HAVING review_count >= ? AND error_rate >= ?
+            ORDER BY error_rate DESC, review_count DESC
+            LIMIT ?
+        """, (ReviewGrade.GOOD.value, self.user_id, min_reviews, error_threshold, limit))
+
+        rows = c.fetchall()
+        conn.close()
+        # Each row has two extra trailing columns (error_rate, review_count)
+        # beyond the normal card row shape -- strip them before mapping.
+        return [self._row_to_card(row[:16]) for row in rows]
+
+    def record_review(self, card_id: int, grade, response_time_ms: int = 0) -> LingoVocabCard:
         """
         Record a review attempt and update card schedule using SM-2 algorithm.
 
@@ -235,7 +290,21 @@ class LingoSRS:
                 where q ∈ [0, 5]
 
         Intervals are in days; next_review = now + I(n).
+
+        `grade` accepts either a ReviewGrade enum member or a raw int
+        (0-4). FIX #3: previously a raw out-of-range int would blow up
+        deep inside the SM-2 math with an opaque error; now it's
+        validated up front with a clear message.
         """
+        if isinstance(grade, ReviewGrade):
+            grade_enum = grade
+        else:
+            try:
+                grade_enum = ReviewGrade(int(grade))
+            except (ValueError, TypeError):
+                valid = ", ".join(f"{g.value}={g.name}" for g in ReviewGrade)
+                raise ValueError(f"Invalid review grade {grade!r}; must be one of: {valid}")
+
         conn = sqlite3.connect(DB_PATH)
         c = conn.cursor()
 
@@ -247,7 +316,7 @@ class LingoSRS:
             raise ValueError(f"Card {card_id} not found for user {self.user_id}")
 
         card = self._row_to_card(row)
-        q = grade.value  # Quality (0-5)
+        q = grade_enum.value  # Quality (0-5)
 
         # SM-2 algorithm
         if q < 3:
@@ -393,9 +462,21 @@ class VocabExtractor:
         "水": {"hiragana": ["みず"], "meaning": "water"},
     }
 
-    def __init__(self, llm_client=None):
-        """llm_client: optional Anthropic client for vocabulary lookup fallback"""
+    # FIX #2: cache of successful LLM lookups so we don't re-ask the model
+    # for the same kanji in every conversation turn.
+    _llm_lookup_cache: Dict[str, Optional[dict]] = {}
+
+    def __init__(self, llm_client=None, llm_model: Optional[str] = None):
+        """
+        llm_client: optional client exposing `.chat.completions.create(...)`
+                    (e.g. Aiko's `think._client`), used as a fallback for
+                    kanji not present in COMMON_READINGS.
+        llm_model:  model name to use for the fallback lookup. If omitted,
+                    the fallback is skipped even when llm_client is set,
+                    since we don't want to guess at a model name.
+        """
         self.llm_client = llm_client
+        self.llm_model = llm_model
 
     def extract_vocab(self, japanese_text: str, context: str = "") -> List[LingoVocabCard]:
         """
@@ -481,9 +562,75 @@ class VocabExtractor:
                 pos="noun"
             )
 
-        # Fallback: assume first hiragana reading is primary (crude but works for common words)
-        # Full implementation would use MeCab or similar
-        return None
+        # FIX #2: actually use the LLM fallback for anything outside the
+        # small static cache above. Without this, essentially all
+        # intermediate/advanced vocabulary was silently dropped and never
+        # made it into the SRS queue.
+        return self._llm_lookup(token)
+
+    def _llm_lookup(self, token: str) -> Optional[LingoVocabCard]:
+        if token in self._llm_lookup_cache:
+            cached = self._llm_lookup_cache[token]
+            if not cached:
+                return None
+            return LingoVocabCard(
+                kanji=token,
+                hiragana=cached["hiragana"],
+                romaji=self._hiragana_to_romaji(cached["hiragana"]),
+                meaning=cached["meaning"],
+                pos=cached.get("pos", "unknown"),
+            )
+
+        if not self.llm_client or not self.llm_model:
+            return None
+
+        try:
+            response = self.llm_client.chat.completions.create(
+                model=self.llm_model,
+                messages=[{
+                    "role": "system",
+                    "content": (
+                        "You are a Japanese dictionary. Given a single word or "
+                        "kanji compound, respond with ONLY a JSON object with "
+                        "keys 'hiragana' (the primary reading, hiragana only), "
+                        "'meaning' (a short English gloss), and 'pos' "
+                        "(part of speech: noun/verb/adjective/adverb/particle/"
+                        "unknown). If you don't recognize the word, respond "
+                        "with {\"hiragana\": \"\", \"meaning\": \"\", \"pos\": \"unknown\"}."
+                    )
+                }, {
+                    "role": "user",
+                    "content": token
+                }],
+                response_format={"type": "json_object"},
+                timeout=5.0,
+            )
+            content = response.choices[0].message.content
+            data = json.loads(content)
+            hiragana = (data.get("hiragana") or "").strip()
+            meaning = (data.get("meaning") or "").strip()
+
+            if not hiragana or not meaning:
+                self._llm_lookup_cache[token] = None
+                return None
+
+            self._llm_lookup_cache[token] = {
+                "hiragana": hiragana,
+                "meaning": meaning,
+                "pos": data.get("pos", "unknown"),
+            }
+            return LingoVocabCard(
+                kanji=token,
+                hiragana=hiragana,
+                romaji=self._hiragana_to_romaji(hiragana),
+                meaning=meaning,
+                pos=data.get("pos", "unknown"),
+            )
+        except Exception as e:
+            log.warning(f"LLM vocab lookup failed for '{token}': {e}")
+            # Don't cache failures from transient errors (timeouts, etc.) --
+            # only cache confirmed "the model doesn't know this word" results.
+            return None
 
     def _hiragana_card(self, token: str, context: str = "") -> LingoVocabCard:
         """Create card for hiragana token (verb/adjective)"""
@@ -518,27 +665,96 @@ class VocabExtractor:
         """Check if text contains kanji"""
         return bool(re.search(r'[\u4e00-\u9fff]', text))
 
+    # FIX #1: Full hiragana romanization table + longest-match tokenizer.
+    # Base single-kana mapping (used both directly and to build youon combos).
+    _ROMAJI_BASE = {
+        "あ": "a", "い": "i", "う": "u", "え": "e", "お": "o",
+        "か": "ka", "き": "ki", "く": "ku", "け": "ke", "こ": "ko",
+        "が": "ga", "ぎ": "gi", "ぐ": "gu", "げ": "ge", "ご": "go",
+        "さ": "sa", "し": "shi", "す": "su", "せ": "se", "そ": "so",
+        "ざ": "za", "じ": "ji", "ず": "zu", "ぜ": "ze", "ぞ": "zo",
+        "た": "ta", "ち": "chi", "つ": "tsu", "て": "te", "と": "to",
+        "だ": "da", "ぢ": "ji", "づ": "zu", "で": "de", "ど": "do",
+        "な": "na", "に": "ni", "ぬ": "nu", "ね": "ne", "の": "no",
+        "は": "ha", "ひ": "hi", "ふ": "fu", "へ": "he", "ほ": "ho",
+        "ば": "ba", "び": "bi", "ぶ": "bu", "べ": "be", "ぼ": "bo",
+        "ぱ": "pa", "ぴ": "pi", "ぷ": "pu", "ぺ": "pe", "ぽ": "po",
+        "ま": "ma", "み": "mi", "む": "mu", "め": "me", "も": "mo",
+        "や": "ya", "ゆ": "yu", "よ": "yo",
+        "ら": "ra", "り": "ri", "る": "ru", "れ": "re", "ろ": "ro",
+        "わ": "wa", "ゐ": "wi", "ゑ": "we", "を": "wo", "ん": "n",
+        # Small vowels (used standalone in loanwords, e.g. ふぁ = "fa")
+        "ぁ": "a", "ぃ": "i", "ぅ": "u", "ぇ": "e", "ぉ": "o",
+        "ー": "",  # long vowel mark: extends the previous vowel, drop here
+    }
+
+    # Youon (combined sounds): consonant kana + small ya/yu/yo.
+    _YOUON_SMALL = {"ゃ": "ya", "ゅ": "yu", "ょ": "yo"}
+    _YOUON_STEMS = {
+        "き": "ky", "ぎ": "gy", "し": "sh", "じ": "j", "ち": "ch", "ぢ": "j",
+        "に": "ny", "ひ": "hy", "び": "by", "ぴ": "py", "み": "my", "り": "ry",
+    }
+
+    @classmethod
+    def _build_romaji_table(cls) -> Dict[str, str]:
+        table = dict(cls._ROMAJI_BASE)
+        for stem_kana, stem_romaji in cls._YOUON_STEMS.items():
+            for small_kana, small_romaji in cls._YOUON_SMALL.items():
+                # e.g. き + ゃ -> "kya", し + ゅ -> "shu"
+                vowel = small_romaji[1:]  # strip leading 'y' -> "a"/"u"/"o"
+                table[stem_kana + small_kana] = stem_romaji + vowel
+        return table
+
     @staticmethod
     def _hiragana_to_romaji(hiragana: str) -> str:
-        """Convert hiragana to romaji (simple mapping)"""
-        mapping = {
-            "あ": "a", "い": "i", "う": "u", "え": "e", "お": "o",
-            "か": "ka", "き": "ki", "く": "ku", "け": "ke", "こ": "ko",
-            "が": "ga", "ぎ": "gi", "ぐ": "gu", "げ": "ge", "ご": "go",
-            "さ": "sa", "し": "si", "す": "su", "せ": "se", "そ": "so",
-            "ざ": "za", "じ": "zi", "ず": "zu", "ぜ": "ze", "ぞ": "zo",
-            "た": "ta", "ち": "ti", "つ": "tu", "て": "te", "と": "to",
-            "だ": "da", "ぢ": "di", "づ": "du", "で": "de", "ど": "do",
-            "な": "na", "に": "ni", "ぬ": "nu", "ね": "ne", "の": "no",
-            "は": "ha", "ひ": "hi", "ふ": "hu", "へ": "he", "ほ": "ho",
-            "ば": "ba", "び": "bi", "ぶ": "bu", "べ": "be", "ぼ": "bo",
-            "ぱ": "pa", "ぴ": "pi", "ぷ": "pu", "ぺ": "pe", "ぽ": "po",
-            "ま": "ma", "み": "mi", "む": "mu", "め": "me", "も": "mo",
-            "や": "ya", "ゆ": "yu", "よ": "yo",
-            "ら": "ra", "り": "ri", "る": "ru", "れ": "re", "ろ": "ro",
-            "わ": "wa", "を": "wo", "ん": "n",
-        }
-        return "".join(mapping.get(char, char) for char in hiragana)
+        """
+        Convert hiragana to romaji using a longest-match tokenizer so that
+        youon (きゃ, しゅ, ちょ, ...), small tsu (っ, gemination), and the
+        long vowel mark (ー) are all handled correctly instead of being
+        transliterated character-by-character.
+        """
+        table = VocabExtractor._build_romaji_table()
+        result = []
+        i = 0
+        n = len(hiragana)
+        while i < n:
+            char = hiragana[i]
+
+            # Small tsu (っ): doubles the consonant of the following mora.
+            if char == "っ" and i + 1 < n:
+                nxt = hiragana[i + 1]
+                # Look ahead for a 2-char youon combo after the っ too.
+                two_char = hiragana[i + 1:i + 3]
+                following_romaji = table.get(two_char) or table.get(nxt)
+                if following_romaji:
+                    first_consonant = following_romaji[0]
+                    if first_consonant not in "aeiou":
+                        result.append(first_consonant)
+                    i += 1
+                    continue
+                # Unknown following mora; just skip the sokuon marker.
+                i += 1
+                continue
+
+            # Long vowel mark: repeat the last vowel of what we've built.
+            if char == "ー":
+                if result and result[-1]:
+                    result.append(result[-1][-1])
+                i += 1
+                continue
+
+            # Try a 2-character youon combo first (きゃ, しゅ, ちょ, ...).
+            two_char = hiragana[i:i + 2]
+            if two_char in table:
+                result.append(table[two_char])
+                i += 2
+                continue
+
+            # Fall back to single character.
+            result.append(table.get(char, char))
+            i += 1
+
+        return "".join(result)
 
 
 # ============================================================================
