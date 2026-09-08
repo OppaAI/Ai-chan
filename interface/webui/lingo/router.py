@@ -63,6 +63,20 @@ BUGFIX PASS (this version, from lingo_audit.md):
       full rows just to count them. Replaced with
       `srs.count_due_cards()`, a single COUNT(*) query
       (lingo_audit.md #4).
+
+BUGFIX PASS (this version, from a second audit pass):
+  16. SRS reviews never touched the streak or XP files -- only
+      conversation turns did (via _finalize_respond_turn's internal
+      /xp/add call and its record_practice() call). A user could clear
+      their entire due review queue and the dashboard's streak/XP would
+      not move at all, even though the "Practice These" weak-vocab
+      widget funnels straight into the review flow. review_respond()
+      now calls record_practice(uid) and awards XP scaled by review
+      grade, using the same bookkeeping paths conversation turns use.
+  17. Extracted the XP-file read/increment/write logic out of the
+      /xp/add handler into _award_xp() so it can be reused by
+      review_respond() (see #16) instead of duplicating the same
+      read-modify-write logic in two places.
 =====================================================================
 """
 import os
@@ -469,6 +483,37 @@ def get_xp(uid: str) -> dict:
         except Exception:
             pass
     return {"xp": 347, "level": 1, "next_level_xp": 200}
+
+
+# FIX #17: pulled out of the /xp/add handler so it can be shared with
+# review_respond() (FIX #16) instead of duplicating the same
+# read-modify-write logic in two places.
+def _award_xp(uid: str, amount: int) -> int:
+    """Add `amount` XP for a user and persist it, returning the new total."""
+    xp_file = Path(f"data/xp/{uid}.json")
+    xp_file.parent.mkdir(parents=True, exist_ok=True)
+    if xp_file.exists():
+        try:
+            data = json.loads(xp_file.read_text())
+        except Exception:
+            data = {"xp": 0}
+    else:
+        data = {"xp": 0}
+    data["xp"] = data.get("xp", 0) + amount
+    xp_file.write_text(json.dumps(data, indent=2))
+    return data["xp"]
+
+
+# FIX #16: XP awarded per SRS review, scaled by how well the card was
+# remembered -- mirrors the correct/incorrect split conversation turns use
+# (10/5 XP), but with finer grading since reviews already carry a 0-4 scale.
+_REVIEW_XP_BY_GRADE = {
+    ReviewGrade.AGAIN: 1,
+    ReviewGrade.HARD: 2,
+    ReviewGrade.GOOD: 5,
+    ReviewGrade.EASY: 8,
+    ReviewGrade.PERFECT: 10,
+}
 
 
 # FIX #9: difficulty level previously lived only in this in-memory dict, so
@@ -1106,6 +1151,15 @@ async def review_respond(request: ReviewResponseRequest, session: dict = Depends
         raise HTTPException(status_code=400, detail=str(e))
 
     grade = ReviewGrade(request.grade)
+
+    # FIX #16: reviews previously never touched the streak or XP files --
+    # only conversation turns did (via _finalize_respond_turn). A user could
+    # clear their entire due queue and the dashboard would show no
+    # progress at all. Drive both from the same per-user bookkeeping
+    # conversation turns already use.
+    record_practice(uid)
+    _award_xp(uid, _REVIEW_XP_BY_GRADE.get(grade, 5))
+
     toast = None
     if grade == ReviewGrade.EASY:
         preview_cards = srs.get_due_cards(limit=1)
@@ -1209,19 +1263,11 @@ async def get_leaderboard(session: dict = Depends(get_lingo_session)):
 
 @router.post("/xp/add")
 async def add_xp(request: dict, session: dict = Depends(get_lingo_session)):
+    # FIX #17: read/increment/write logic now lives in _award_xp() so
+    # review_respond() (FIX #16) can share it instead of a second copy.
     uid = session["user_id"]  # FIX #14: no silent fallback
-    xp_file = Path(f"data/xp/{uid}.json")
-    xp_file.parent.mkdir(parents=True, exist_ok=True)
-    if xp_file.exists():
-        try:
-            data = json.loads(xp_file.read_text())
-        except Exception:
-            data = {"xp": 0}
-    else:
-        data = {"xp": 0}
-    data["xp"] = data.get("xp", 0) + request.get("amount", 10)
-    xp_file.write_text(json.dumps(data, indent=2))
-    return {"xp": data["xp"]}
+    new_total = _award_xp(uid, request.get("amount", 10))
+    return {"xp": new_total}
 
 
 @router.post("/conversation/review/start", response_model=ReviewSessionResponse)
