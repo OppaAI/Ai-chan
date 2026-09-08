@@ -102,6 +102,7 @@ from .models import (
     TranslationResult, TranslateResponse, Toast, ConversationResponse,
     ReviewCard, ReviewSessionResponse, ReviewResponseRequest, UpdatedCard,
     ReviewResponseData, StatsResponse, XPResponse, WordOfDayResponse,
+    LessonCard, LessonDeck, LessonDeckMeta,
 )
 from .srs import LingoSRS, ReviewGrade, init_srs_db
 from .vocab import VocabExtractor, MemoryBridge
@@ -1281,6 +1282,27 @@ async def get_word_of_day(session: dict = Depends(get_lingo_session)):
         context=ctx,
         audioUrl=get_cached_lingo_audio(hira, uid=uid),
         date=today.isoformat(),
+    )
+
+
+@router.get("/lessons", response_model=List[LessonDeckMeta])
+async def list_lessons(session: dict = Depends(get_lingo_session)):
+    """Static Learn-mode decks (kana, words, phrases, kanji). Read-only."""
+    from .lessons import list_decks
+    return [LessonDeckMeta(**d) for d in list_decks()]
+
+
+@router.get("/lessons/{deck_id}", response_model=LessonDeck)
+async def get_lesson(deck_id: str, session: dict = Depends(get_lingo_session)):
+    """Full card list for one Learn-mode deck. 404 on unknown ids."""
+    from .lessons import get_deck
+    deck = get_deck(deck_id)
+    if deck is None:
+        raise HTTPException(status_code=404, detail=f"Unknown lesson deck: {deck_id}")
+    return LessonDeck(
+        id=deck["id"], title=deck["title"], subtitle=deck.get("subtitle", ""),
+        kind=deck.get("kind", ""),
+        cards=[LessonCard(**c) for c in deck["cards"]],
     )
 
 

@@ -113,6 +113,28 @@ class XPResponse(BaseModel):
     next_level_xp: int
 
 
+class LessonCard(BaseModel):
+    front: str
+    back: str
+    reading: str = ""
+
+
+class LessonDeckMeta(BaseModel):
+    id: str
+    title: str
+    subtitle: str = ""
+    kind: str = ""
+    card_count: int = 0
+
+
+class LessonDeck(BaseModel):
+    id: str
+    title: str
+    subtitle: str = ""
+    kind: str = ""
+    cards: List[LessonCard] = []
+
+
 class WordOfDayResponse(BaseModel):
     card_id: int
     hiragana: str

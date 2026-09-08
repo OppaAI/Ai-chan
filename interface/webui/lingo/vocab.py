@@ -34,6 +34,20 @@ log = logging.getLogger(__name__)
 
 
 class VocabExtractor:
+    # Function words and verb-ending fragments that the regex segmenter
+    # splits off as bare hiragana runs. Carding them produced the
+    # meaningless "[hiragana: は]" style quiz questions.
+    _FUNCTION_WORDS = frozenset({
+        "は", "が", "を", "に", "へ", "と", "で", "も", "の", "ね", "よ",
+        "か", "な", "や", "わ", "ぞ", "ぜ", "さ", "て", "って", "たら",
+        "れば", "ても", "でも", "から", "まで", "より", "だけ", "しか",
+        "ばかり", "けれど", "けれども", "けど", "のに", "ので", "ため",
+        "みたい", "とか", "など", "なんて", "ながら", "たり", "だり",
+        "そうだ", "ようだ", "らしい", "べき", "はず", "わけ", "ところ",
+        "まま", "ごと", "たび", "ごろ", "ころ", "あたり", "について",
+        "によって", "に対して", "として", "ない", "ます", "です",
+    })
+
     """
     Parse Japanese text and extract vocabulary for SRS cards.
 
@@ -99,7 +113,20 @@ class VocabExtractor:
         tokens = self._segment_tokens(clean_text)
 
         for token in tokens:
-            if len(token) < 1 or not self._is_japanese(token):
+            if not token or not self._is_japanese(token):
+                continue
+            if token in self._FUNCTION_WORDS:
+                continue
+            # Single-kana runs are particles/endings split off by the
+            # segmenter, never standalone vocab. Single KANJI still go
+            # through lookup (they can be real words like 日/水).
+            if len(token) <= 1 and not self._has_kanji(token):
+                continue
+            # Hiragana runs have no spaces: greedily match known words
+            # inside them (e.g. ねこがすきです -> ねこ + すき + です),
+            # skipping particles/endings between matches.
+            if self._is_hiragana(token) and token not in self._HIRAGANA_MEANINGS:
+                self._scan_hiragana_run(token, context, seen, cards)
                 continue
 
             # Try to extract vocab from token
@@ -127,18 +154,14 @@ class VocabExtractor:
         Attempt to extract vocab from single token.
         Tries kanji lookup, then hiragana lookup, then LLM fallback.
         """
-        # All hiragana: likely verb/adjective
+        # All hiragana: only the curated common words become cards.
+        # Anything else (particles, endings, fragments) is skipped — the
+        # old generic "[hiragana: ...]" fallback filled the SRS queue and
+        # Word of the Day with meaningless questions.
         if self._is_hiragana(token):
-            # Known common verb/adjective
-            if token in ["です", "ます", "ある", "いる", "する", "なる"]:
+            if token in self._HIRAGANA_MEANINGS:
                 return self._hiragana_card(token, context)
-            # Generic hiragana word
-            return LingoVocabCard(
-                hiragana=token,
-                meaning=f"[hiragana: {token}]",  # Fallback
-                context=context,
-                pos="unknown"
-            )
+            return None
 
         # Kanji present: try lookup
         if self._has_kanji(token):
@@ -208,6 +231,9 @@ class VocabExtractor:
             )
             content = response.choices[0].message.content
             data = json.loads(content)
+            if data.get("pos") == "particle":
+                self._llm_lookup_cache[token] = None
+                return None
             hiragana = (data.get("hiragana") or "").strip()
             meaning = (data.get("meaning") or "").strip()
 
@@ -233,20 +259,86 @@ class VocabExtractor:
             # only cache confirmed "the model doesn't know this word" results.
             return None
 
+    # Curated common kana-only words with real glosses. Only these (plus
+    # kanji lookups) may become cards — everything else hiragana-only is a
+    # particle, ending, or fragment and is skipped.
+    _HIRAGANA_MEANINGS = {
+        "です": "is, am, are (polite)",
+        "ます": "does, go (polite ending)",
+        "ある": "to exist, to have",
+        "いる": "to be, to exist (animate)",
+        "する": "to do, to make",
+        "なる": "to become",
+        "ねこ": "cat",
+        "いぬ": "dog",
+        "とり": "bird",
+        "さかな": "fish",
+        "ごはん": "cooked rice, meal",
+        "こと": "thing, matter",
+        "もの": "thing",
+        "ところ": "place",
+        "これ": "this one",
+        "それ": "that one",
+        "あれ": "that one over there",
+        "ここ": "here",
+        "そこ": "there",
+        "あそこ": "over there",
+        "だれ": "who",
+        "なに": "what",
+        "いつ": "when",
+        "どう": "how",
+        "とても": "very",
+        "たくさん": "a lot, many",
+        "すこし": "a little",
+        "もっと": "more",
+        "もう": "already",
+        "まだ": "yet, still",
+        "ぜひ": "by all means",
+        "きょう": "today",
+        "あした": "tomorrow",
+        "きのう": "yesterday",
+        "すき": "liking, fondness",
+        "きらい": "dislike",
+        "おおきい": "big",
+        "ちいさい": "small",
+        "あたらしい": "new",
+        "おいしい": "delicious",
+        "たのしい": "fun, enjoyable",
+        "こんにちは": "hello, good afternoon",
+        "ありがとう": "thank you",
+        "ありがとうございます": "thank you (polite)",
+        "おはよう": "good morning",
+        "おはようございます": "good morning (polite)",
+        "すみません": "excuse me, sorry",
+        "おやすみ": "good night",
+        "さようなら": "goodbye",
+        "はじめまして": "nice to meet you",
+        "おねがいします": "please (request)",
+    }
+
+    def _scan_hiragana_run(self, run: str, context: str, seen: set, cards: list) -> None:
+        """Greedy longest-match of curated words inside a hiragana run."""
+        keys = sorted(self._HIRAGANA_MEANINGS, key=len, reverse=True)
+        i = 0
+        while i < len(run):
+            match = next((k for k in keys if run.startswith(k, i)), None)
+            if match is None:
+                i += 1
+                continue
+            vocab = self._hiragana_card(match, context)
+            key = (vocab.hiragana, vocab.meaning)
+            if key not in seen:
+                cards.append(vocab)
+                seen.add(key)
+            i += len(match)
+
     def _hiragana_card(self, token: str, context: str = "") -> LingoVocabCard:
         """Create card for hiragana token (verb/adjective)"""
-        meanings = {
-            "です": "is, am, are (polite)",
-            "ます": "does, go (polite ending)",
-            "ある": "to exist, to have",
-            "いる": "to be, to exist (animate)",
-            "する": "to do, to make",
-            "なる": "to become",
-        }
+        meanings = self._HIRAGANA_MEANINGS
         return LingoVocabCard(
             hiragana=token,
             romaji=self._hiragana_to_romaji(token),
-            meaning=meanings.get(token, f"[verb/adj: {token}]"),
+            meaning=meanings[token],
             context=context,
             pos="verb" if token.endswith("う") or token in ["する", "ある", "いる"] else "auxiliary"
         )
