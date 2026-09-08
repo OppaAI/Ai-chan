@@ -111,3 +111,12 @@ class XPResponse(BaseModel):
     xp: int
     level: int
     next_level_xp: int
+
+
+class WordOfDayResponse(BaseModel):
+    card_id: int
+    hiragana: str
+    meaning: str
+    context: str = ""
+    audioUrl: Optional[str] = None
+    date: str

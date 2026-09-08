@@ -101,7 +101,7 @@ from .models import (
     TranslateRequest, StartRequest, DialogueHistoryEntry, RespondRequest,
     TranslationResult, TranslateResponse, Toast, ConversationResponse,
     ReviewCard, ReviewSessionResponse, ReviewResponseRequest, UpdatedCard,
-    ReviewResponseData, StatsResponse, XPResponse,
+    ReviewResponseData, StatsResponse, XPResponse, WordOfDayResponse,
 )
 from .srs import LingoSRS, ReviewGrade, init_srs_db
 from .vocab import VocabExtractor, MemoryBridge
@@ -865,13 +865,14 @@ async def _finalize_respond_turn(uid: str, data: dict, source_text: str) -> dict
     xp = 10 if is_correct else 5
     toast_message = "Perfect! Let's keep talking." if is_correct else feedback
 
+    # Award XP directly — a previous version self-POSTed to a hardcoded
+    # http://localhost:8000 (the server listens on 8787), so every
+    # conversation turn's XP was silently lost to connection-refused.
     if xp > 0:
-        import httpx
         try:
-            async with httpx.AsyncClient(timeout=5) as client:
-                await client.post("http://localhost:8000/api/english/xp/add", json={"amount": xp})
+            _award_xp(uid, xp)
         except Exception:
-            log.warning("Failed to auto-post XP", exc_info=True)
+            log.warning("Failed to award conversation XP", exc_info=True)
     update_last_level(uid, get_last_level(uid))
 
     return {
@@ -1242,6 +1243,47 @@ async def get_weak_vocab(session: dict = Depends(get_lingo_session)):
     ]
 
 
+# Curated starter deck for Word of the Day — shown before the user has
+# learned any words of their own (vocab enters SRS through conversation).
+# Cycles one per day; (hiragana, meaning, example context).
+_WORD_OF_DAY_FALLBACK = [
+    ("ありがとう", "thank you", "ありがとうと言いました。"),
+    ("おはよう", "good morning", "おはようございます。"),
+    ("すみません", "excuse me / sorry", "すみませんが、手伝ってください。"),
+    ("かわいい", "cute", "かわいいねこですね。"),
+    ("がんばって", "do your best", "がんばってください。"),
+    ("おいしい", "delicious", "おいしいりょうりですね。"),
+    ("さくら", "cherry blossom", "さくらがさきました。"),
+]
+
+
+@router.get("/word-of-day", response_model=WordOfDayResponse)
+async def get_word_of_day(session: dict = Depends(get_lingo_session)):
+    """Duolingo-style daily word: deterministic pick per calendar day.
+
+    Prefers words the user is struggling with (weak vocab), then due
+    cards, then the curated starter deck for brand-new users.
+    """
+    uid = session["user_id"]  # FIX #14: no silent fallback
+    srs = LingoSRS(uid)
+    pool = srs.get_weak_vocab(limit=50) or srs.get_due_cards(limit=50)
+    today = date.today()
+    if pool:
+        card = pool[today.toordinal() % len(pool)]
+        cid, hira, mean, ctx = card.id, card.hiragana, card.meaning, card.context or ""
+    else:
+        hira, mean, ctx = _WORD_OF_DAY_FALLBACK[today.toordinal() % len(_WORD_OF_DAY_FALLBACK)]
+        cid = 0
+    return WordOfDayResponse(
+        card_id=cid,
+        hiragana=hira,
+        meaning=mean,
+        context=ctx,
+        audioUrl=get_cached_lingo_audio(hira, uid=uid),
+        date=today.isoformat(),
+    )
+
+
 @router.get("/xp", response_model=XPResponse)
 async def get_xp_endpoint(session: dict = Depends(get_lingo_session)):
     uid = session["user_id"]  # FIX #14: no silent fallback
@@ -1269,8 +1311,10 @@ async def add_xp(request: dict, session: dict = Depends(get_lingo_session)):
     # FIX #17: read/increment/write logic now lives in _award_xp() so
     # review_respond() (FIX #16) can share it instead of a second copy.
     uid = session["user_id"]  # FIX #14: no silent fallback
-    new_total = _award_xp(uid, request.get("amount", 10))
-    return {"xp": new_total}
+    _award_xp(uid, request.get("amount", 10))
+    # Return the full shape — the Android XPResponse requires
+    # xp + level + next_level_xp, and a bare {"xp": ...} crashes its parser.
+    return get_xp(uid)
 
 
 @router.post("/conversation/review/start", response_model=ReviewSessionResponse)
