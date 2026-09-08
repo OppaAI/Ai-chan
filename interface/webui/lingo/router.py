@@ -105,7 +105,7 @@ from .models import (
     LessonCard, LessonDeck, LessonDeckMeta,
 )
 from .srs import LingoSRS, ReviewGrade, init_srs_db
-from .vocab import VocabExtractor, MemoryBridge
+from .vocab import VocabExtractor
 
 log = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/english", tags=["lingo"])
@@ -670,14 +670,16 @@ async def conversation_start(request: StartRequest, session: dict = Depends(get_
     async def event_generator():
         token = set_current_user_id(uid)
         try:
-            base_prompt = think._current_system_prompt("Start Japanese conversation")
-            # FIX #3: this line was missing the `f` prefix, so the LLM
-            # literally received the text "{request.level}" instead of
-            # the actual selected level (e.g. "beginner").
+            # Lingo is a pure language-skill mode: fixed tutor prompt with NO
+            # persona / memory / knowledge base prompt mixed in. The tutor
+            # teaches Japanese and nothing else.
+            # (FIX #3 history: this line once missed its `f` prefix, sending
+            # the literal text "{request.level}" to the model.)
             system_prompt = (
-                f"{base_prompt}\n\n"
-                "ACTIVATE SKILL: JAPANESE_TUTOR\n"
-                f"You are in 'Lingo App Mode'. Start a Japanese conversation at {request.level} level. "
+                "You are a Japanese language tutor in 'Lingo App Mode'. "
+                "Teach Japanese language skill only — no persona chat, no "
+                "memories, no general-knowledge answers. "
+                f"Start a Japanese conversation at {request.level} level. "
                 "Output your response exactly like this:\n"
                 f"{LingoTags.REPLY_JP}: <Japanese sentences>\n"
                 f"{LingoTags.REPLY_EN}: <English translation>\n"
@@ -827,7 +829,6 @@ async def _finalize_respond_turn(uid: str, data: dict, source_text: str) -> dict
     from interface.webui import auth
 
     srs = LingoSRS(uid)
-    memory_bridge = MemoryBridge(auth.aiko_web_instance)
 
     is_mistake = not data.get("isCorrect", True)
     if is_mistake:
@@ -850,13 +851,7 @@ async def _finalize_respond_turn(uid: str, data: dict, source_text: str) -> dict
         extractor = _get_vocab_extractor()
         new_vocab = extractor.extract_vocab(data.get("japanese"), context=source_text)
         for card in new_vocab:
-            added_card = srs.add_card(card)
-            memory_bridge.record_vocab_event(
-                user_id=uid,
-                card=added_card,
-                grade=ReviewGrade.EASY if data.get("isCorrect") else ReviewGrade.HARD,
-                is_correct=data.get("isCorrect", True)
-            )
+            srs.add_card(card)
 
     audio_url = get_cached_lingo_audio(audio_text, uid=uid)
 
@@ -1258,6 +1253,89 @@ _WORD_OF_DAY_FALLBACK = [
 ]
 
 
+_RANDOM_WORD_COUNT = 5
+
+
+def _llm_random_words(uid: str, count: int = _RANDOM_WORD_COUNT,
+                      level: str | None = None, stock_srs: bool = True) -> List[dict]:
+    """Ask the tutor LLM for fresh random vocab at the user's level.
+
+    Returns LessonCard-ready dicts (front/back/reading). Empty list when
+    the brain is offline or the model output is unusable — callers fall
+    back to static decks. Generated words are inserted into the user's
+    SRS queue so Practice can quiz them later.
+    """
+    from interface.webui import auth
+    if not auth.aiko_web_instance or not auth.aiko_web_instance._think:
+        return []
+    think = auth.aiko_web_instance._think
+    level = level or get_last_level(uid)
+    try:
+        response = think._client.chat.completions.create(
+            model=think._llm_model,
+            messages=[
+                {"role": "system", "content": (
+                    "You are a Japanese teacher writing a mini vocabulary list. "
+                    f"Pick {count} RANDOM, USEFUL {level}-level Japanese words "
+                    "and short everyday phrases (mix nouns, verbs, adjectives, "
+                    "phrases — no particles, no single kana, no copulas). "
+                    "Output ONLY valid JSON: "
+                    '{"words": [{"japanese": "<word as normally written>", '
+                    '"hiragana": "<reading in hiragana>", '
+                    '"meaning": "<short English gloss>"}]}'
+                )},
+                {"role": "user", "content": "Surprise me with new words."},
+            ],
+            response_format={"type": "json_object"},
+            timeout=60.0,
+        )
+        data = parse_lingo_json(response.choices[0].message.content)
+        out = []
+        for w in (data.get("words") or [])[:count]:
+            surf = str(w.get("japanese") or "").strip()
+            hira = str(w.get("hiragana") or surf).strip()
+            mean = str(w.get("meaning") or "").strip()
+            if not surf or not mean or len(surf) > 20:
+                continue
+            out.append({"front": surf, "back": mean, "reading": hira})
+        # Stock the SRS queue so these words resurface in Practice reviews
+        # (skipped for pool top-ups — stocking happens at serve time there).
+        if out and stock_srs:
+            srs = LingoSRS(uid)
+            for c in out:
+                try:
+                    srs.add_card(LingoVocabCard(
+                        kanji=c["front"] if re.search(r'[\u4e00-\u9fff]', c["front"]) else "",
+                        hiragana=c["reading"],
+                        meaning=c["back"],
+                        pos="lesson",
+                        context="random words",
+                    ))
+                except Exception:
+                    log.warning("Random-word SRS insert failed", exc_info=True)
+        return out
+    except Exception:
+        log.exception("LLM random vocab generation failed")
+        return []
+
+
+def _ensure_lesson_pool(uid: str, level: str) -> None:
+    """Top up the pregenerated LLM pool when a level runs low."""
+    from .lessons import pool_add, pool_count, POOL_MIN, POOL_TOPUP
+    try:
+        if pool_count(level) >= POOL_MIN:
+            return
+    except Exception:
+        log.warning("Lesson pool count failed", exc_info=True)
+        return
+    words = _llm_random_words(uid, POOL_TOPUP, level=level, stock_srs=False)
+    if words:
+        try:
+            pool_add(words, level)
+        except Exception:
+            log.warning("Lesson pool top-up insert failed", exc_info=True)
+
+
 @router.get("/word-of-day", response_model=WordOfDayResponse)
 async def get_word_of_day(session: dict = Depends(get_lingo_session)):
     """Duolingo-style daily word: deterministic pick per calendar day.
@@ -1273,8 +1351,14 @@ async def get_word_of_day(session: dict = Depends(get_lingo_session)):
         card = pool[today.toordinal() % len(pool)]
         cid, hira, mean, ctx = card.id, card.hiragana, card.meaning, card.context or ""
     else:
-        hira, mean, ctx = _WORD_OF_DAY_FALLBACK[today.toordinal() % len(_WORD_OF_DAY_FALLBACK)]
-        cid = 0
+        # No learned words yet: ask the LLM for a fresh one (also stocked
+        # into SRS above) before falling back to the static starter deck.
+        fresh = _llm_random_words(uid, 1)
+        if fresh:
+            hira, mean, ctx, cid = fresh[0]["reading"], fresh[0]["back"], "", 0
+        else:
+            hira, mean, ctx = _WORD_OF_DAY_FALLBACK[today.toordinal() % len(_WORD_OF_DAY_FALLBACK)]
+            cid = 0
     return WordOfDayResponse(
         card_id=cid,
         hiragana=hira,
@@ -1287,15 +1371,50 @@ async def get_word_of_day(session: dict = Depends(get_lingo_session)):
 
 @router.get("/lessons", response_model=List[LessonDeckMeta])
 async def list_lessons(session: dict = Depends(get_lingo_session)):
-    """Static Learn-mode decks (kana, words, phrases, kanji). Read-only."""
-    from .lessons import list_decks
-    return [LessonDeckMeta(**d) for d in list_decks()]
+    """Learn-mode decks (static kana/words/phrases/kanji + AI random)."""
+    from .lessons import list_decks, POOL_SERVE_N
+    decks = [LessonDeckMeta(**d) for d in list_decks()
+             if d["id"] in ("hiragana", "katakana")]
+    decks.append(LessonDeckMeta(
+        id="words-phrases", title="Words & Phrases",
+        subtitle="Fresh AI picks, saved for you",
+        kind="words", card_count=POOL_SERVE_N,
+    ))
+    return decks
 
 
 @router.get("/lessons/{deck_id}", response_model=LessonDeck)
 async def get_lesson(deck_id: str, session: dict = Depends(get_lingo_session)):
     """Full card list for one Learn-mode deck. 404 on unknown ids."""
     from .lessons import get_deck
+    if deck_id == "words-phrases":
+        from .lessons import pool_take, POOL_SERVE_N
+        uid = session["user_id"]  # FIX #14: no silent fallback
+        level = get_last_level(uid)
+        _ensure_lesson_pool(uid, level)
+        rows = pool_take(level, POOL_SERVE_N)
+        if not rows:
+            raise HTTPException(status_code=503, detail="Word pool unavailable right now")
+        # Serving graduates these words into the SRS queue for Practice.
+        srs = LingoSRS(uid)
+        cards = []
+        for r in rows:
+            try:
+                srs.add_card(LingoVocabCard(
+                    kanji=r["front"] if re.search(r'[\u4e00-\u9fff]', r["front"]) else "",
+                    hiragana=r["reading"] or r["front"],
+                    meaning=r["back"],
+                    pos="lesson",
+                    context="words & phrases",
+                ))
+            except Exception:
+                log.warning("Lesson-word SRS insert failed", exc_info=True)
+            cards.append(LessonCard(front=r["front"], back=r["back"], reading=r["reading"]))
+        return LessonDeck(
+            id="words-phrases", title="Words & Phrases",
+            subtitle=f"Fresh {level} picks",
+            kind="words", cards=cards,
+        )
     deck = get_deck(deck_id)
     if deck is None:
         raise HTTPException(status_code=404, detail=f"Unknown lesson deck: {deck_id}")
