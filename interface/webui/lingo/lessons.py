@@ -72,14 +72,25 @@ def get_deck(deck_id: str) -> dict | None:
     return _DECKS.get(deck_id)
 
 
-POOL_DB = _Path(__file__).parent / "lesson_pool.db"
+def _pool_db_path() -> _Path:
+    """Shared pregen pool (not per-user) under USER_SPACE_ROOT/_shared/agentic/lingo/."""
+    try:
+        from system.userspace import _user_state_root_value
+        root = _Path(_user_state_root_value()).expanduser() / "_shared" / "agentic" / "lingo"
+    except Exception:
+        root = _Path(__file__).parent
+    root.mkdir(parents=True, exist_ok=True)
+    return root / "lesson_pool.db"
+
+
+POOL_DB = _pool_db_path()  # resolved at import; directory created as needed
 POOL_MIN = 10      # top up when a level's pool drops below this
 POOL_TOPUP = 15    # fresh items generated per top-up
 POOL_SERVE_N = 10  # cards per deck open
 
 
 def _pool_conn():
-    con = _sqlite3.connect(POOL_DB)
+    con = _sqlite3.connect(_pool_db_path())
     con.execute(
         """CREATE TABLE IF NOT EXISTS lesson_pool (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
