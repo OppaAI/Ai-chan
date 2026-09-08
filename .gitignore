@@ -248,3 +248,4 @@ interface/webui/static/silero_vad.onnx
 interface/webui/static/silero_vad_op18_ifless.onnx
 # Stray SQLite DB created by edge_state.py when USER_SPACE_ROOT is unset
 memory/
+data/
