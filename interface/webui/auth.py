@@ -103,9 +103,9 @@ except ImportError as e:
 
 # Lingo Japanese Learning API
 try:
-    from interface.webui.lingo import router as lingo_router
+    from interface.webui.lingo.router import router as lingo_router
     app.include_router(lingo_router)
-except ImportError as e:
+except Exception as e:
     log.warning(f"Could not mount Lingo router: {e}")
 
 # Codebase Figure Studio (sharp silhouette — brain/eyes/ears/mouth/legs)
