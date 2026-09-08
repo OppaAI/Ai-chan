@@ -1,14 +1,13 @@
 """
 Lingo lesson decks (static curated content for Learn mode).
 
-Unlike SRS cards (auto-extracted from conversation into the per-user DB),
-these decks are fixed study material: kana charts, starter words, daily
-phrases, and N5 kanji. Served read-only via GET /lessons and
-GET /lessons/{deck_id} — no SRS writes, no auth side effects.
+Static kana decks stay here. AI / hourly-spawned mixed vocab lives in the
+SHARED package-local pool (see spawn.py → vocab_pool.db next to this file).
+Per-user learnt progress and SRS schedule live under
+USER_SPACE_ROOT/<uid>/agentic/lingo/vocab.db — not in the shared pool.
 """
 from typing import Dict, List
 
-# Each card: (front, back, reading). Reading feeds the app's speak button.
 _DECKS: Dict[str, dict] = {}
 
 
@@ -47,19 +46,7 @@ _kana_deck("katakana", "Katakana", "46 basic characters", [
 ])
 
 
-# ============================================================================
-# Pregenerated LLM word/phrase pool (SQLite-backed)
-# ============================================================================
-# The Words & Phrases deck is LLM-generated but NOT generated live per
-# request: a background-topped pool keeps N fresh items ready per level so
-# opens are instant and repeat visits rotate stock. Served items graduate
-# into the user's SRS queue (router does the insert at serve time).
-import sqlite3 as _sqlite3
-import time as _time
-from pathlib import Path as _Path
-
 def list_decks() -> List[dict]:
-    """Deck metadata without cards (for the lesson picker)."""
     return [
         {"id": d["id"], "title": d["title"], "subtitle": d["subtitle"],
          "kind": d["kind"], "card_count": len(d["cards"])}
@@ -68,29 +55,25 @@ def list_decks() -> List[dict]:
 
 
 def get_deck(deck_id: str) -> dict | None:
-    """Full deck with cards, or None for unknown ids."""
     return _DECKS.get(deck_id)
 
 
-def _pool_db_path() -> _Path:
-    """Shared pregen pool (not per-user) under USER_SPACE_ROOT/_shared/agentic/lingo/."""
-    try:
-        from system.userspace import _user_state_root_value
-        root = _Path(_user_state_root_value()).expanduser() / "_shared" / "agentic" / "lingo"
-    except Exception:
-        root = _Path(__file__).parent
-    root.mkdir(parents=True, exist_ok=True)
-    return root / "lesson_pool.db"
+# ---------------------------------------------------------------------------
+# Back-compat aliases used by older router helpers (_ensure_lesson_pool).
+# New code should import from .spawn instead.
+# ---------------------------------------------------------------------------
+import sqlite3 as _sqlite3
+import time as _time
+from pathlib import Path as _Path
 
-
-POOL_DB = _pool_db_path()  # resolved at import; directory created as needed
-POOL_MIN = 10      # top up when a level's pool drops below this
-POOL_TOPUP = 15    # fresh items generated per top-up
-POOL_SERVE_N = 10  # cards per deck open
+POOL_DB = _Path(__file__).parent / "lesson_pool.db"  # legacy name; spawn uses vocab_pool.db
+POOL_MIN = 10
+POOL_TOPUP = 15
+POOL_SERVE_N = 10
 
 
 def _pool_conn():
-    con = _sqlite3.connect(_pool_db_path())
+    con = _sqlite3.connect(POOL_DB)
     con.execute(
         """CREATE TABLE IF NOT EXISTS lesson_pool (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -115,7 +98,6 @@ def pool_count(level: str) -> int:
 
 
 def pool_add(words: list, level: str) -> int:
-    """Insert pregenerated words; duplicates ignored. Returns rows added."""
     con = _pool_conn()
     try:
         added = 0
@@ -138,7 +120,6 @@ def pool_add(words: list, level: str) -> int:
 
 
 def pool_take(level: str, n: int = POOL_SERVE_N) -> list:
-    """Take the least-used words for a level and bump their use counts."""
     con = _pool_conn()
     try:
         rows = con.execute(
