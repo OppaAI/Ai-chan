@@ -495,6 +495,12 @@ class AikoSpeak:
         per-chunk saving here is TCP keep-alive via _http(), not disk I/O.
         """
         import json
+        # Skip empty chunks (e.g. emoji/markup-only LLM output that
+        # sanitizes to nothing) — the server 400s on empty text.
+        text = (text or "").strip()
+        if not text:
+            log.debug("[speak] skipping TTS synthesis for empty text")
+            return None
         # Increased limit from 300 to 600 for Lingo support
         if len(text) > 600:
             log.warning(f"[speak] truncating oversized TTS chunk: {len(text)} chars")

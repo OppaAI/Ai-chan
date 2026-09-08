@@ -113,7 +113,10 @@ router = APIRouter(prefix="/api/english", tags=["lingo"])
 # Static Files & Audio (thread-safe for race-condition fix)
 # ============================================================================
 STATIC_DIR = Path(__file__).parent / "static"
-AUDIO_DIR = STATIC_DIR / "lingo_audio"
+# NOTE: wav files must land under interface/webui/static — that is the
+# directory webui.py actually mounts. lingo/static is NOT served, so audio
+# URLs written there 404 and the app's Play button silently fails.
+AUDIO_DIR = Path(__file__).parent.parent / "static" / "lingo_audio"
 AUDIO_DIR.mkdir(parents=True, exist_ok=True)
 AUDIO_BASE_URL = "https://aiko.ide-chroma.ts.net/lingo_audio"
 
