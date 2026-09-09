@@ -110,12 +110,18 @@ def _is_learned(front: str, back: str, reading: str, learned: set[tuple[str, str
     return (reading or front, back) in learned or (front, back) in learned
 
 
-def pool_count_unlearned(uid: str, level: Optional[str] = None) -> int:
+def pool_count_unlearned(uid: str, level: Optional[str] = None,
+                          levels: Optional[list] = None) -> int:
     """Count pool rows not yet in this user's SRS (same match rules as take)."""
     learned = _learned_keys(uid)
+    if levels is not None:
+        levels = [normalize_level(l) for l in levels]
     con = _conn()
     try:
-        if level:
+        if levels is not None:
+            q = f"SELECT front, back, reading FROM vocab_pool WHERE level IN ({','.join('?' * len(levels))})"
+            rows = con.execute(q, levels).fetchall()
+        elif level:
             rows = con.execute(
                 "SELECT front, back, reading FROM vocab_pool WHERE level = ?",
                 (normalize_level(level),),
@@ -168,18 +174,20 @@ def pool_take_unlearned(
     uid: str,
     n: int = LEARN_SESSION_N,
     level: Optional[str] = None,
+    levels: Optional[list] = None,
 ) -> List[dict]:
     learned_keys = _learned_keys(uid)
-    if level:
-        level = normalize_level(level)
+    if levels is not None:
+        levels = [normalize_level(l) for l in levels]
+    elif level:
+        levels = [normalize_level(level)]
     con = _conn()
     try:
-        if level:
-            candidates = con.execute(
-                "SELECT id, front, back, reading, kind FROM vocab_pool "
-                "WHERE level = ? ORDER BY used_count ASC, RANDOM() LIMIT ?",
-                (level, max(n * 5, 50)),
-            ).fetchall()
+        if levels:
+            q = (f"SELECT id, front, back, reading, kind FROM vocab_pool "
+                 f"WHERE level IN ({','.join('?' * len(levels))}) "
+                 f"ORDER BY used_count ASC, RANDOM() LIMIT ?")
+            candidates = con.execute(q, (*levels, max(n * 5, 50))).fetchall()
         else:
             candidates = con.execute(
                 "SELECT id, front, back, reading, kind FROM vocab_pool "
@@ -240,6 +248,7 @@ def mark_learned(uid: str, items: List[dict]) -> int:
                 pos=kind,
                 context="spawn",
                 source_context="hourly_spawn",
+                level=normalize_level(stored.get("level")),
             ))
             # Only count if this is a newly inserted row (new id and total grew),
             # or if add_card returned a card that was just created (review_count 0

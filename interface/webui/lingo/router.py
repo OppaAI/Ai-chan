@@ -893,7 +893,9 @@ async def _finalize_respond_turn(uid: str, data: dict, source_text: str) -> dict
     if data.get("japanese"):
         extractor = _get_vocab_extractor()
         new_vocab = extractor.extract_vocab(data.get("japanese"), context=source_text)
+        user_jlpt = get_jlpt_level(uid)
         for card in new_vocab:
+            card.level = user_jlpt
             srs.add_card(card)
 
     audio_url = get_cached_lingo_audio(audio_text, uid=uid)
@@ -1330,7 +1332,7 @@ def _llm_random_words(uid: str, count: int = _RANDOM_WORD_COUNT,
                 {"role": "user", "content": "Surprise me with new words."},
             ],
             response_format={"type": "json_object"},
-            timeout=60.0,
+            timeout=25.0,  # bounded: word-of-day falls back to static deck
         )
         data = parse_lingo_json(response.choices[0].message.content)
         out = []
@@ -1344,6 +1346,7 @@ def _llm_random_words(uid: str, count: int = _RANDOM_WORD_COUNT,
         # Stock the SRS queue so these words resurface in Practice reviews
         # (skipped for pool top-ups — stocking happens at serve time there).
         if out and stock_srs:
+            from .lingo_store import normalize_level
             srs = LingoSRS(uid)
             for c in out:
                 try:
@@ -1353,6 +1356,7 @@ def _llm_random_words(uid: str, count: int = _RANDOM_WORD_COUNT,
                         meaning=c["back"],
                         pos="lesson",
                         context="random words",
+                        level=normalize_level(level),
                     ))
                 except Exception:
                     log.warning("Random-word SRS insert failed", exc_info=True)
@@ -1451,11 +1455,11 @@ async def get_lesson(deck_id: str, session: dict = Depends(get_lingo_session)):
     """Full card list for one Learn-mode deck. 404 on unknown ids."""
     from .lessons import get_deck
     if deck_id == "words-phrases":
-        from .lessons import pool_take, POOL_SERVE_N
+        from .lessons import pool_take_levels, POOL_SERVE_N
         uid = session["user_id"]  # FIX #14: no silent fallback
-        level = get_last_level(uid)
+        level = get_jlpt_level(uid)
         _ensure_lesson_pool(uid, level)
-        rows = pool_take(level, POOL_SERVE_N)
+        rows = pool_take_levels(_allowed_jlpt_levels(uid), POOL_SERVE_N)
         if not rows:
             raise HTTPException(status_code=503, detail="Word pool unavailable right now")
         # Serving graduates these words into the SRS queue for Practice.
@@ -1469,6 +1473,7 @@ async def get_lesson(deck_id: str, session: dict = Depends(get_lingo_session)):
                     meaning=r["back"],
                     pos="lesson",
                     context="words & phrases",
+                    level=r.get("level") or level,
                 ))
             except Exception:
                 log.warning("Lesson-word SRS insert failed", exc_info=True)
@@ -1532,12 +1537,12 @@ def _seed_starter_srs_cards(uid: str, srs) -> int:
         con = sqlite3.connect(str(MATERIALS_DB))
         try:
             rows = con.execute(
-                "SELECT front,reading,back FROM jlpt_cards"
+                "SELECT front,reading,back,level FROM jlpt_cards"
                 " WHERE level='N5' AND kind IN ('vocab','kanji') LIMIT 10"
             ).fetchall()
         finally:
             con.close()
-        for front, reading, back in rows:
+        for front, reading, back, level in rows:
             try:
                 srs.add_card(LingoVocabCard(
                     kanji=front if re.search(r'[\u4e00-\u9fff]', front or "") else "",
@@ -1545,6 +1550,7 @@ def _seed_starter_srs_cards(uid: str, srs) -> int:
                     meaning=back,
                     pos="starter",
                     context="starter deck",
+                    level=level or "N5",
                 ))
                 added += 1
             except Exception:
@@ -1552,6 +1558,122 @@ def _seed_starter_srs_cards(uid: str, srs) -> int:
     except Exception:
         log.warning("Starter SRS seed query failed", exc_info=True)
     return added
+
+
+def _allowed_jlpt_levels(uid: str) -> list:
+    """Equal-or-lower JLPT only: N5 sees N5; N4 sees N5+N4; ... N1 sees all."""
+    lvl = get_jlpt_level(uid)
+    idx = JLPT_LEVELS.index(lvl) if lvl in JLPT_LEVELS else 0
+    return JLPT_LEVELS[:idx + 1]
+
+
+def _session_cards(uid: str, n: int) -> list:
+    """Random learnt cards at/below the user's JLPT (repeats across sessions
+    allowed). Tops up from shared materials when the learnt pool is short."""
+    from .srs import LingoVocabCard
+    srs = LingoSRS(uid)
+    allowed = _allowed_jlpt_levels(uid)
+    picked = srs.get_random_cards(limit=n, allowed_levels=allowed)
+    if len(picked) >= n:
+        return picked
+    try:
+        from .lingo_store import init_materials_db, MATERIALS_DB, normalize_level
+        import sqlite3
+        import random as _random
+        init_materials_db(seed=True)
+        learnt = {(c.hiragana or "", c.meaning or "") for c in
+                  srs.get_random_cards(limit=5000, allowed_levels=None)}
+        con = sqlite3.connect(str(MATERIALS_DB))
+        try:
+            q = f"""SELECT front,reading,back,kind,level FROM jlpt_cards
+                WHERE level IN ({','.join('?' * len(allowed))})"""
+            mat = con.execute(q, allowed).fetchall()
+            prow = []
+            try:
+                prow = con.execute(
+                    f"""SELECT front,back,reading,kind,level FROM vocab_pool
+                        WHERE level IN ({','.join('?' * len(allowed))})""", allowed).fetchall()
+            except Exception:
+                pass
+        finally:
+            con.close()
+        cands = [(f, r, b, k, normalize_level(l)) for f, r, b, k, l in mat]
+        cands += [(f, rd or f, b, k, normalize_level(l)) for f, b, rd, k, l in prow]
+        _random.shuffle(cands)
+        for front, reading, back, kind, level in cands:
+            if len(picked) >= n:
+                break
+            key = (reading or front or "", back or "")
+            if not front or not back or key in learnt:
+                continue
+            try:
+                card = srs.add_card(LingoVocabCard(
+                    kanji=front if re.search(r'[\u4e00-\u9fff]', front) else "",
+                    hiragana=reading or front,
+                    meaning=back,
+                    pos=kind or "session",
+                    context="session top-up",
+                    level=level,
+                ))
+                learnt.add(key)
+                picked.append(card)
+            except Exception:
+                continue
+    except Exception:
+        log.warning("Session top-up failed", exc_info=True)
+    return picked
+
+
+def _to_review_card(c) -> "ReviewCard":
+    return ReviewCard(
+        card_id=c.id or 0,
+        hiragana=c.hiragana or "",
+        meaning=c.meaning or "",
+        context=c.context or "",
+    )
+
+
+@router.get("/review/session", response_model=List[ReviewCard])
+async def review_session(n: int = 10, session: dict = Depends(get_lingo_session)):
+    """10 random learnt cards (equal-or-lower JLPT) for a Review session."""
+    uid = session["user_id"]
+    cards = _session_cards(uid, max(1, min(n, 20)))
+    if not cards:
+        raise HTTPException(status_code=400, detail="No cards available yet")
+    return [_to_review_card(c) for c in cards]
+
+
+@router.get("/practice/session", response_model=List[ReviewCard])
+async def practice_session(n: int = 10, session: dict = Depends(get_lingo_session)):
+    """10 random learnt cards (equal-or-lower JLPT) for a typing Practice session."""
+    uid = session["user_id"]
+    cards = _session_cards(uid, max(1, min(n, 20)))
+    if not cards:
+        raise HTTPException(status_code=400, detail="No cards available yet")
+    return [_to_review_card(c) for c in cards]
+
+
+@router.post("/practice/mark")
+async def practice_mark(request: dict, session: dict = Depends(get_lingo_session)):
+    """Award XP for a finished typing session: 5 XP per correct card."""
+    uid = session["user_id"]
+    try:
+        correct = max(0, int(request.get("correct", 0)))
+    except (TypeError, ValueError):
+        correct = 0
+    try:
+        total = max(correct, int(request.get("total", correct)))
+    except (TypeError, ValueError):
+        total = correct
+    record_practice(uid)
+    xp = 0
+    if correct > 0:
+        try:
+            _award_xp(uid, correct * 5)
+            xp = correct * 5
+        except Exception:
+            log.warning("Practice XP award failed", exc_info=True)
+    return {"xp": xp, "correct": correct, "total": total}
 
 
 @router.post("/conversation/review/start", response_model=ReviewSessionResponse)
@@ -1624,9 +1746,11 @@ def _read_course_table(table: str) -> list:
         return []
 
 
-def _course_meta_rows(table: str) -> list:
+def _course_meta_rows(table: str, allowed: list | None = None) -> list:
     out = []
     for cid, title, level, kind, cards_json in _read_course_table(table):
+        if allowed is not None and level not in allowed:
+            continue
         try:
             count = len(json.loads(cards_json or "[]"))
         except Exception:
@@ -1638,13 +1762,16 @@ def _course_meta_rows(table: str) -> list:
 
 @router.get("/courses")
 async def list_courses(session: dict = Depends(get_lingo_session)):
-    return _course_meta_rows("courses")
+    return _course_meta_rows("courses", _allowed_jlpt_levels(session["user_id"]))
 
 
 @router.get("/courses/{course_id}")
 async def get_course(course_id: str, session: dict = Depends(get_lingo_session)):
+    allowed = _allowed_jlpt_levels(session["user_id"])
     for cid, title, level, kind, cards_json in _read_course_table("courses"):
         if cid == course_id:
+            if level not in allowed:
+                raise HTTPException(status_code=404, detail=f"Unknown course: {course_id}")
             try:
                 cards = json.loads(cards_json or "[]")
             except Exception:
@@ -1656,13 +1783,16 @@ async def get_course(course_id: str, session: dict = Depends(get_lingo_session))
 
 @router.get("/grammar")
 async def list_grammar(session: dict = Depends(get_lingo_session)):
-    return _course_meta_rows("grammar_decks")
+    return _course_meta_rows("grammar_decks", _allowed_jlpt_levels(session["user_id"]))
 
 
 @router.get("/grammar/{grammar_id}")
 async def get_grammar(grammar_id: str, session: dict = Depends(get_lingo_session)):
+    allowed = _allowed_jlpt_levels(session["user_id"])
     for cid, title, level, kind, cards_json in _read_course_table("grammar_decks"):
         if cid == grammar_id:
+            if level not in allowed:
+                raise HTTPException(status_code=404, detail=f"Unknown grammar deck: {grammar_id}")
             try:
                 cards = json.loads(cards_json or "[]")
             except Exception:

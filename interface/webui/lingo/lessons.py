@@ -146,7 +146,20 @@ def pool_take(level: str, n: int = POOL_SERVE_N) -> list:
             )
             con.commit()
         return [
-            {"front": r[1], "back": r[2], "reading": r[3]} for r in rows
+            {"front": r[1], "back": r[2], "reading": r[3], "level": level} for r in rows
         ]
     finally:
         con.close()
+
+
+def pool_take_levels(levels: list, n: int = POOL_SERVE_N) -> list:
+    """Round-robin across equal-or-lower JLPT levels (N4 sees N5+N4)."""
+    from .lingo_store import normalize_level
+    levels = [normalize_level(l) for l in (levels or ["N5"])]
+    if not levels:
+        levels = ["N5"]
+    per, rem = divmod(n, len(levels))
+    out = []
+    for i, lvl in enumerate(levels):
+        out += pool_take(lvl, per + (1 if i < rem else 0))
+    return out

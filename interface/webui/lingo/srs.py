@@ -56,6 +56,7 @@ class LingoVocabCard:
     next_review: Optional[str] = None
     created_at: str = ""
     source_context: str = ""
+    level: str = "N5"  # JLPT track at learn time; sessions filter level<=user
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -88,7 +89,15 @@ def init_srs_db(db_path: Path | None = None):
         hiragana TEXT NOT NULL, romaji TEXT, meaning TEXT NOT NULL, pos TEXT, context TEXT,
         interval INTEGER DEFAULT 0, ease_factor REAL DEFAULT 2.5, review_count INTEGER DEFAULT 0,
         consecutive_correct INTEGER DEFAULT 0, last_review TEXT, next_review TEXT,
-        created_at TEXT NOT NULL, source_context TEXT, UNIQUE(user_id, hiragana, meaning))""")
+        created_at TEXT NOT NULL, source_context TEXT, level TEXT DEFAULT 'N5',
+        UNIQUE(user_id, hiragana, meaning))""")
+    # Migrate pre-level DBs (per-user vocab.db files created before this).
+    try:
+        cols = [r[1] for r in c.execute("PRAGMA table_info(lingo_vocab_cards)").fetchall()]
+        if "level" not in cols:
+            c.execute("ALTER TABLE lingo_vocab_cards ADD COLUMN level TEXT DEFAULT 'N5'")
+    except sqlite3.Error:
+        pass
     c.execute("""CREATE TABLE IF NOT EXISTS lingo_review_logs (
         id INTEGER PRIMARY KEY AUTOINCREMENT, card_id INTEGER NOT NULL, user_id TEXT NOT NULL,
         grade INTEGER NOT NULL, review_date TEXT NOT NULL, before_interval INTEGER,
@@ -154,10 +163,11 @@ class LingoSRS:
         try:
             c.execute("""INSERT INTO lingo_vocab_cards
                 (user_id, kanji, hiragana, romaji, meaning, pos, context,
-                 interval, ease_factor, created_at, source_context, next_review)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
+                 interval, ease_factor, created_at, source_context, next_review, level)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (self.user_id, card.kanji, card.hiragana, card.romaji, card.meaning, card.pos, card.context,
-                 card.interval, card.ease_factor, card.created_at, card.source_context, card.next_review))
+                 card.interval, card.ease_factor, card.created_at, card.source_context, card.next_review,
+                 card.level or "N5"))
             conn.commit()
             card.id = c.lastrowid
             return card
@@ -201,7 +211,23 @@ class LingoSRS:
             (ReviewGrade.GOOD.value, self.user_id, min_reviews, error_threshold, limit))
         rows = c.fetchall()
         conn.close()
-        return [self._row_to_card(r[:16]) for r in rows]
+        return [self._row_to_card(r[:17]) for r in rows]
+
+    def get_random_cards(self, limit: int = 10,
+                         allowed_levels: Optional[List[str]] = None) -> List[LingoVocabCard]:
+        """Random learnt cards for Review/Practice sessions (repeats across
+        sessions allowed; level-gated to equal-or-lower JLPT)."""
+        conn = sqlite3.connect(self.db_path)
+        c = conn.cursor()
+        rows = c.execute("SELECT * FROM lingo_vocab_cards WHERE user_id=?", (self.user_id,)).fetchall()
+        conn.close()
+        cards = [self._row_to_card(r) for r in rows]
+        if allowed_levels is not None:
+            allowed = set(allowed_levels)
+            cards = [cd for cd in cards if (cd.level or "N5") in allowed]
+        import random
+        random.shuffle(cards)
+        return cards[:limit]
 
     def record_review(self, card_id: int, grade, response_time_ms: int = 0) -> LingoVocabCard:
         if isinstance(grade, ReviewGrade):
@@ -269,11 +295,15 @@ class LingoSRS:
 
     @staticmethod
     def _row_to_card(row: tuple) -> LingoVocabCard:
+        # 16-col legacy rows (no level) vs 17-col current rows. Weak-vocab
+        # rows carry 2 trailing aggregate cols -- callers already strip them.
+        raw_level = row[16] if len(row) > 16 else "N5"
+        level = raw_level if isinstance(raw_level, str) and raw_level else "N5"
         return LingoVocabCard(
             id=row[0], user_id=row[1], kanji=row[2], hiragana=row[3], romaji=row[4],
             meaning=row[5], pos=row[6], context=row[7], interval=row[8], ease_factor=row[9],
             review_count=row[10], consecutive_correct=row[11], last_review=row[12],
-            next_review=row[13], created_at=row[14], source_context=row[15])
+            next_review=row[13], created_at=row[14], source_context=row[15], level=level)
 
 
 __all__ = ["LingoVocabCard", "ReviewLog", "ReviewGrade", "LingoSRS", "init_srs_db", "DB_PATH", "db_path_for"]

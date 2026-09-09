@@ -20,7 +20,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 MATERIALS_DB = Path(__file__).parent / "materials.db"
-MATERIALS_VERSION = "2026.09.03-courses"
+MATERIALS_VERSION = "2026.09.04-n4decks"
 USER_DB_REL = "agentic/lingo.db"
 
 # Old 3-track -> JLPT (N5 lowest/start).
@@ -165,6 +165,36 @@ def _seed_courses(con: sqlite3.Connection) -> None:
         " VALUES(?,?,?,?,?)",
         ("n5-grammar-basics", "N5 Grammar Basics", "N5", "grammar",
          _json.dumps(n5_grammar, ensure_ascii=False)))
+    n4_lesson1 = [
+        {"front": "約束", "back": "promise", "reading": "やくそく", "note": "daily noun"},
+        {"front": "準備", "back": "preparation", "reading": "じゅんび", "note": "daily noun"},
+        {"front": "連絡", "back": "contact; message", "reading": "れんらく", "note": "verb-suru"},
+        {"front": "案内", "back": "guidance; information", "reading": "あんない", "note": "daily noun"},
+        {"front": "急ぐ", "back": "to hurry", "reading": "いそぐ", "note": "verb"},
+        {"front": "間に合う", "back": "to be in time", "reading": "まにあう", "note": "verb"},
+        {"front": "便利", "back": "convenient", "reading": "べんり", "note": "na-adjective"},
+        {"front": "残念", "back": "regrettable", "reading": "ざんねん", "note": "na-adjective"},
+        {"front": "最近", "back": "recently", "reading": "さいきん", "note": "time"},
+        {"front": "最初", "back": "first; beginning", "reading": "さいしょ", "note": "time"},
+    ]
+    n4_grammar = [
+        {"front": "〜なければならない", "back": "must; have to", "reading": "", "note": "行かなければならない — must go"},
+        {"front": "〜てはいけない", "back": "must not", "reading": "", "note": "食べてはいけない — must not eat"},
+        {"front": "〜てもいい", "back": "may; allowed to", "reading": "", "note": "入ってもいい — may enter"},
+        {"front": "〜たことがある", "back": "have done before", "reading": "", "note": "日本に行ったことがある"},
+        {"front": "〜ようになる", "back": "come to; become able to", "reading": "", "note": "話せるようになる"},
+        {"front": "〜すぎる", "back": "too much", "reading": "", "note": "食べすぎる — eat too much"},
+    ]
+    con.execute(
+        "INSERT OR IGNORE INTO courses(id,title,level,kind,cards_json)"
+        " VALUES(?,?,?,?,?)",
+        ("n4-lesson-1", "N4 Lesson 1 · Daily Life", "N4", "vocab",
+         _json.dumps(n4_lesson1, ensure_ascii=False)))
+    con.execute(
+        "INSERT OR IGNORE INTO grammar_decks(id,title,level,kind,cards_json)"
+        " VALUES(?,?,?,?,?)",
+        ("n4-grammar-basics", "N4 Grammar Basics", "N4", "grammar",
+         _json.dumps(n4_grammar, ensure_ascii=False)))
 
 
 def materials_count() -> dict:

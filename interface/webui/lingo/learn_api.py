@@ -85,15 +85,23 @@ async def require_lingo_user(request: Request) -> dict:
         raise HTTPException(status_code=401, detail="Authentication required")
 
 
+def _allowed_levels(uid: str) -> list:
+    """Equal-or-lower JLPT only: N5 sees N5; N4 sees N5+N4."""
+    lvl = _user_level(uid)
+    idx = JLPT_ORDER.index(lvl) if lvl in JLPT_ORDER else 0
+    return JLPT_ORDER[:idx + 1]
+
+
 def attach_learn_routes(router, get_lingo_session, award_xp=None):
     """Register /learn/* routes on an existing APIRouter."""
 
     @router.get("/learn/new", response_model=LearnSession)
     async def learn_new(session: dict = Depends(get_lingo_session)):
-        """Unlearnt shared-pool items at user level (never blocks on LLM)."""
+        """Unlearnt shared-pool items at/below user level (never blocks on LLM)."""
         from fastapi import Query
         uid = session["user_id"]
         level = _user_level(uid)
+        allowed = _allowed_levels(uid)
         if spawn.pool_count(level) == 0:
             # Instant seed so first open never waits; LLM top-up in background.
             try:
@@ -102,11 +110,11 @@ def attach_learn_routes(router, get_lingo_session, award_xp=None):
                 pass
         if spawn.pool_count(level) < spawn.POOL_MIN:
             spawn.top_up_pool_background(level=level)
-        items = spawn.pool_take_unlearned(uid, n=spawn.LEARN_SESSION_N, level=level)
+        items = spawn.pool_take_unlearned(uid, n=spawn.LEARN_SESSION_N, levels=allowed)
         if not items:
             # Fall back to any level so users with skewed pools still study.
             items = spawn.pool_take_unlearned(uid, n=spawn.LEARN_SESSION_N)
-        unlearned_total = spawn.pool_count_unlearned(uid, level=level)
+        unlearned_total = spawn.pool_count_unlearned(uid, levels=allowed)
         return LearnSession(
             items=[LearnItem(**it) for it in items],
             pending_in_pool=max(0, unlearned_total - len(items)),
@@ -138,10 +146,11 @@ def attach_learn_routes(router, get_lingo_session, award_xp=None):
         srs = LingoSRS(uid)
         stats = srs.get_stats()
         level = _user_level(uid)
+        allowed = _allowed_levels(uid)
         return {
             "level": level,
             "levels": JLPT_ORDER,
-            "pool_size_at_level": spawn.pool_count_unlearned(uid, level=level),
+            "pool_size_at_level": spawn.pool_count_unlearned(uid, levels=allowed),
             "pool_size_total": spawn.pool_count(),
             "user_cards": stats.get("total_cards", 0),
             "reviews_today": stats.get("reviews_today", 0),
