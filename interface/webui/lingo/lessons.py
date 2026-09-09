@@ -57,59 +57,35 @@ def get_deck(deck_id: str) -> dict | None:
 
 
 # ---------------------------------------------------------------------------
-# Legacy lesson_pool for /lessons/words-phrases (router still uses this).
-# Prefer existing USER_SPACE_ROOT/_shared/agentic/lingo/lesson_pool.db so
-# prior data is not orphaned; fall back to package-local path.
+# Consolidated lesson_pool in materials.db (single global file).
 # ---------------------------------------------------------------------------
 import sqlite3 as _sqlite3
 import time as _time
 from pathlib import Path as _Path
 
 
-def _legacy_pool_db_path() -> _Path:
-    candidates = []
-    try:
-        from system.userspace import _user_state_root_value
-        shared = (
-            _Path(_user_state_root_value()).expanduser()
-            / "_shared" / "agentic" / "lingo" / "lesson_pool.db"
-        )
-        candidates.append(shared)
-    except Exception:
-        pass
-    candidates.append(_Path(__file__).parent / "lesson_pool.db")
-    for p in candidates:
-        if p.is_file():
-            return p
-    # Prefer shared path for new writes when userspace works
-    try:
-        from system.userspace import _user_state_root_value
-        p = (
-            _Path(_user_state_root_value()).expanduser()
-            / "_shared" / "agentic" / "lingo" / "lesson_pool.db"
-        )
-        p.parent.mkdir(parents=True, exist_ok=True)
-        return p
-    except Exception:
-        return _Path(__file__).parent / "lesson_pool.db"
+def _pool_db_path() -> _Path:
+    from .lingo_store import MATERIALS_DB, init_materials_db
+    init_materials_db(seed=True)
+    return MATERIALS_DB
 
 
-POOL_DB = _legacy_pool_db_path()
+POOL_DB = _Path(__file__).parent / "materials.db"
 POOL_MIN = 10
 POOL_TOPUP = 15
 POOL_SERVE_N = 10
 
 
 def _pool_conn():
-    path = _legacy_pool_db_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    con = _sqlite3.connect(path)
+    from .lingo_store import normalize_level
+    path = _pool_db_path()
+    con = _sqlite3.connect(str(path), timeout=30)
     con.execute(
         """CREATE TABLE IF NOT EXISTS lesson_pool (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             front TEXT NOT NULL, back TEXT NOT NULL,
             reading TEXT NOT NULL DEFAULT '',
-            level TEXT NOT NULL DEFAULT 'beginner',
+            level TEXT NOT NULL DEFAULT 'N5',
             used_count INTEGER NOT NULL DEFAULT 0,
             created_at REAL,
             UNIQUE(front, back))"""
@@ -118,16 +94,19 @@ def _pool_conn():
 
 
 def pool_count(level: str) -> int:
+    from .lingo_store import normalize_level
     con = _pool_conn()
     try:
         return con.execute(
-            "SELECT COUNT(*) FROM lesson_pool WHERE level = ?", (level,)
+            "SELECT COUNT(*) FROM lesson_pool WHERE level = ?", (normalize_level(level),)
         ).fetchone()[0]
     finally:
         con.close()
 
 
 def pool_add(words: list, level: str) -> int:
+    from .lingo_store import normalize_level
+    level = normalize_level(level)
     con = _pool_conn()
     try:
         added = 0
@@ -150,6 +129,8 @@ def pool_add(words: list, level: str) -> int:
 
 
 def pool_take(level: str, n: int = POOL_SERVE_N) -> list:
+    from .lingo_store import normalize_level
+    level = normalize_level(level)
     con = _pool_conn()
     try:
         rows = con.execute(

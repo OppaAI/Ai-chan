@@ -13,8 +13,34 @@ from pydantic import BaseModel, Field, field_validator
 
 from .srs import LingoSRS
 from . import spawn
+from .lingo_store import JLPT_ORDER, normalize_level, init_user_db
 
 log = logging.getLogger(__name__)
+
+# Seed pool so first-ever Learn open is instant (no LLM wait).
+_INSTANT_SEED = [
+    {"front": "ねこ", "back": "cat", "reading": "ねこ", "kind": "kanji"},
+    {"front": "水", "back": "water", "reading": "みず", "kind": "kanji"},
+    {"front": "ありがとう", "back": "thank you", "reading": "ありがとう", "kind": "phrase"},
+    {"front": "おはよう", "back": "good morning", "reading": "おはよう", "kind": "phrase"},
+    {"front": "すき", "back": "liking", "reading": "すき", "kind": "kanji"},
+]
+
+
+def _user_level(uid: str) -> str:
+    try:
+        import sqlite3
+        path = init_user_db(uid)
+        con = sqlite3.connect(str(path))
+        try:
+            row = con.execute("SELECT level FROM user_level WHERE id=1").fetchone()
+            if row and row[0]:
+                return normalize_level(row[0])
+        finally:
+            con.close()
+    except Exception:
+        pass
+    return "N5"
 
 
 class LearnItem(BaseModel):
@@ -64,12 +90,23 @@ def attach_learn_routes(router, get_lingo_session, award_xp=None):
 
     @router.get("/learn/new", response_model=LearnSession)
     async def learn_new(session: dict = Depends(get_lingo_session)):
-        """Unlearnt shared-pool items (no LLM wait). Caps at 10."""
+        """Unlearnt shared-pool items at user level (never blocks on LLM)."""
+        from fastapi import Query
         uid = session["user_id"]
-        if spawn.pool_count() < spawn.POOL_MIN:
-            spawn.top_up_pool_background(level="beginner")
-        items = spawn.pool_take_unlearned(uid, n=spawn.LEARN_SESSION_N)
-        unlearned_total = spawn.pool_count_unlearned(uid)
+        level = _user_level(uid)
+        if spawn.pool_count(level) == 0:
+            # Instant seed so first open never waits; LLM top-up in background.
+            try:
+                spawn.pool_add(_INSTANT_SEED, level=level)
+            except Exception:
+                pass
+        if spawn.pool_count(level) < spawn.POOL_MIN:
+            spawn.top_up_pool_background(level=level)
+        items = spawn.pool_take_unlearned(uid, n=spawn.LEARN_SESSION_N, level=level)
+        if not items:
+            # Fall back to any level so users with skewed pools still study.
+            items = spawn.pool_take_unlearned(uid, n=spawn.LEARN_SESSION_N)
+        unlearned_total = spawn.pool_count_unlearned(uid, level=level)
         return LearnSession(
             items=[LearnItem(**it) for it in items],
             pending_in_pool=max(0, unlearned_total - len(items)),
@@ -100,9 +137,12 @@ def attach_learn_routes(router, get_lingo_session, award_xp=None):
         uid = session["user_id"]
         srs = LingoSRS(uid)
         stats = srs.get_stats()
+        level = _user_level(uid)
         return {
-            "pool_size": spawn.pool_count(),
-            "pool_unlearned": spawn.pool_count_unlearned(uid),
+            "level": level,
+            "levels": JLPT_ORDER,
+            "pool_size_at_level": spawn.pool_count_unlearned(uid, level=level),
+            "pool_size_total": spawn.pool_count(),
             "user_cards": stats.get("total_cards", 0),
             "reviews_today": stats.get("reviews_today", 0),
             "learned_today": stats.get("learned_today", 0),

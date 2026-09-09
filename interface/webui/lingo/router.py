@@ -534,6 +534,11 @@ def _level_file(uid: str) -> Path:
     return p
 
 
+# JLPT track (N5 lowest/start) alongside legacy conversation difficulty.
+JLPT_LEVELS = ["N5", "N4", "N3", "N2", "N1"]
+_LEGACY_TO_JLPT = {"beginner": "N5", "intermediate": "N3", "advanced": "N1"}
+
+
 def get_last_level(uid: str) -> str:
     if uid in _last_levels:
         return _last_levels[uid]
@@ -544,13 +549,35 @@ def get_last_level(uid: str) -> str:
         try:
             data = json.loads(level_file.read_text())
             candidate = data.get("level", "beginner")
-            if candidate in ("beginner", "intermediate", "advanced"):
+            if candidate in ("beginner", "intermediate", "advanced") or candidate in JLPT_LEVELS:
                 level = candidate
         except Exception:
             log.warning(f"Failed to read level file for {uid}, defaulting to beginner", exc_info=True)
 
     _last_levels[uid] = level
     return level
+
+
+def get_jlpt_level(uid: str) -> str:
+    """JLPT track for Learn/Courses/Grammar (N5 default). Maps legacy track."""
+    # Prefer centralized per-user DB when available.
+    try:
+        from .lingo_store import init_user_db, normalize_level
+        import sqlite3
+        path = init_user_db(uid)
+        con = sqlite3.connect(str(path))
+        try:
+            row = con.execute("SELECT level FROM user_level WHERE id=1").fetchone()
+            if row and row[0]:
+                return normalize_level(row[0])
+        finally:
+            con.close()
+    except Exception:
+        pass
+    legacy = get_last_level(uid)
+    if legacy in JLPT_LEVELS:
+        return legacy
+    return _LEGACY_TO_JLPT.get(legacy, "N5")
 
 
 def update_last_level(uid: str, level: str):
@@ -560,6 +587,22 @@ def update_last_level(uid: str, level: str):
             _level_file(uid).write_text(json.dumps({"level": level}, indent=2))
         except Exception:
             log.warning(f"Failed to persist level for {uid}", exc_info=True)
+    # Keep centralized per-user DB in sync for JLPT levels.
+    if level in JLPT_LEVELS:
+        try:
+            from .lingo_store import init_user_db
+            import sqlite3
+            from datetime import datetime, timezone
+            path = init_user_db(uid)
+            con = sqlite3.connect(str(path))
+            try:
+                con.execute("UPDATE user_level SET level=?,updated_at=? WHERE id=1",
+                            (level, datetime.now(timezone.utc).isoformat()))
+                con.commit()
+            finally:
+                con.close()
+        except Exception:
+            log.warning(f"Failed to sync JLPT level for {uid}", exc_info=True)
 
 
 def _get_vocab_extractor() -> VocabExtractor:
@@ -1480,3 +1523,89 @@ async def review_start(session: dict = Depends(get_lingo_session)):
             context=card.context or ""
         )
     )
+
+
+# ============================================================================
+# JLPT level + Courses/Grammar (back the Android Learn/Courses/Grammar menu).
+# Lists return [] when empty (never 404); only unknown detail ids 404.
+# ============================================================================
+@router.get("/level")
+async def get_level(session: dict = Depends(get_lingo_session)):
+    uid = session["user_id"]
+    return {"level": get_jlpt_level(uid), "levels": JLPT_LEVELS}
+
+
+@router.post("/level")
+async def set_level(request: dict, session: dict = Depends(get_lingo_session)):
+    uid = session["user_id"]
+    level = str(request.get("level", "")).strip()
+    if level not in JLPT_LEVELS:
+        raise HTTPException(status_code=400, detail=f"Unknown level: {level}")
+    update_last_level(uid, level)
+    return {"level": level, "levels": JLPT_LEVELS}
+
+
+def _read_course_table(table: str) -> list:
+    try:
+        from .lingo_store import init_materials_db
+        import sqlite3
+        init_materials_db(seed=False)
+        from .lingo_store import MATERIALS_DB
+        con = sqlite3.connect(str(MATERIALS_DB))
+        try:
+            return con.execute(
+                f"SELECT id,title,level,kind,cards_json FROM {table} ORDER BY level,id"
+            ).fetchall()
+        finally:
+            con.close()
+    except Exception:
+        log.warning("Course table read failed", exc_info=True)
+        return []
+
+
+def _course_meta_rows(table: str) -> list:
+    out = []
+    for cid, title, level, kind, cards_json in _read_course_table(table):
+        try:
+            count = len(json.loads(cards_json or "[]"))
+        except Exception:
+            count = 0
+        out.append({"id": cid, "title": title, "level": level,
+                    "kind": kind, "card_count": count})
+    return out
+
+
+@router.get("/courses")
+async def list_courses(session: dict = Depends(get_lingo_session)):
+    return _course_meta_rows("courses")
+
+
+@router.get("/courses/{course_id}")
+async def get_course(course_id: str, session: dict = Depends(get_lingo_session)):
+    for cid, title, level, kind, cards_json in _read_course_table("courses"):
+        if cid == course_id:
+            try:
+                cards = json.loads(cards_json or "[]")
+            except Exception:
+                cards = []
+            return {"id": cid, "title": title, "level": level,
+                    "kind": kind, "cards": cards}
+    raise HTTPException(status_code=404, detail=f"Unknown course: {course_id}")
+
+
+@router.get("/grammar")
+async def list_grammar(session: dict = Depends(get_lingo_session)):
+    return _course_meta_rows("grammar_decks")
+
+
+@router.get("/grammar/{grammar_id}")
+async def get_grammar(grammar_id: str, session: dict = Depends(get_lingo_session)):
+    for cid, title, level, kind, cards_json in _read_course_table("grammar_decks"):
+        if cid == grammar_id:
+            try:
+                cards = json.loads(cards_json or "[]")
+            except Exception:
+                cards = []
+            return {"id": cid, "title": title, "level": level,
+                    "kind": kind, "cards": cards}
+    raise HTTPException(status_code=404, detail=f"Unknown grammar deck: {grammar_id}")

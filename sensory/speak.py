@@ -306,6 +306,10 @@ class AikoSpeak:
 
     def __init__(self, silent: bool = False) -> None:
         self._lock      = threading.Lock()
+        # Serializes ALL PortAudio/sounddevice calls (play/wait/stop).
+        # Concurrent sd.play + sd.stop from overlapping speak threads
+        # corrupts the PortAudio heap -> "double free or corruption (out)".
+        self._sd_lock   = threading.Lock()
         self._playing   = threading.Event()
         self._stop_flag = threading.Event()
         self._silent    = silent
@@ -631,18 +635,20 @@ class AikoSpeak:
             if rate != 48000:
                 data, rate = _resample_fallback(data, rate, 48000)
 
-            sd.play(data, rate, device=device)
-            sd.wait()  # Wait until playback finishes
-            if self._stop_flag.is_set():
-                sd.stop()
+            # PortAudio is not thread-safe: never overlap play/wait/stop
+            # across speak threads. Hold _sd_lock for the whole sequence so
+            # a concurrent stop() or next chunk can't free the stream mid-play
+            # (glibc "double free or corruption").
+            with self._sd_lock:
+                sd.play(data, rate, device=device)
+                sd.wait()  # Wait until playback finishes
+                if self._stop_flag.is_set():
+                    try:
+                        sd.stop()
+                    except Exception:
+                        pass
         except Exception as e:
             log.error(f"[speak] playback error: {e}")
-        finally:
-            try:
-                sd = self._load_sd()
-                sd.stop()
-            except Exception:
-                log.warning("speak: sd.stop() failed in playback")
 
     def _speak_thread(self, text: str) -> None:
         """Split into sentence chunks ≤300 chars, synthesize and play each."""
@@ -1021,10 +1027,12 @@ class AikoSpeak:
 
         # Skip ALSA probe entirely when audio was never initialized
         # (e.g. text-mode sessions): nothing is playing, so nothing to stop.
+        # Take _sd_lock so stop() can't race a thread inside sd.play/wait.
         if self._sd is not None:
             try:
                 sd = self._load_sd()
-                sd.stop()
+                with self._sd_lock:
+                    sd.stop()
             except Exception:
                 log.warning("speak: sd.stop() failed in stop_stream")
 

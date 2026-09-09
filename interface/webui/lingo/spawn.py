@@ -1,7 +1,8 @@
 """
 Shared Lingo vocab spawn pool + hourly scheduler handler.
 
-  * Content: interface/webui/lingo/vocab_pool.db (shared)
+  * Content: interface/webui/lingo/materials.db table vocab_pool (shared,
+    consolidated — replaces the old vocab_pool.db file).
   * Progress: USER_SPACE_ROOT/<uid>/agentic/lingo/vocab.db (per-user SRS)
 """
 from __future__ import annotations
@@ -16,7 +17,11 @@ from typing import Any, List, Optional
 
 log = logging.getLogger(__name__)
 
-POOL_DB = Path(__file__).parent / "vocab_pool.db"
+from .lingo_store import (
+    MATERIALS_DB, JLPT_ORDER, normalize_level, init_materials_db,
+)
+
+POOL_DB = MATERIALS_DB  # consolidated single global file
 SPAWN_BATCH = int(os.getenv("LINGO_SPAWN_BATCH", "20"))
 POOL_MIN = int(os.getenv("LINGO_POOL_MIN", "30"))
 LEARN_SESSION_N = 10
@@ -30,7 +35,7 @@ _inflight_lock = threading.Lock()
 
 
 def _conn() -> sqlite3.Connection:
-    POOL_DB.parent.mkdir(parents=True, exist_ok=True)
+    init_materials_db(seed=True)  # ensures tables + one-shot legacy migration
     con = sqlite3.connect(str(POOL_DB), timeout=30)
     con.execute(
         """CREATE TABLE IF NOT EXISTS vocab_pool (
@@ -39,7 +44,7 @@ def _conn() -> sqlite3.Connection:
             back TEXT NOT NULL,
             reading TEXT NOT NULL DEFAULT '',
             kind TEXT NOT NULL DEFAULT 'kanji',
-            level TEXT NOT NULL DEFAULT 'beginner',
+            level TEXT NOT NULL DEFAULT 'N5',
             used_count INTEGER NOT NULL DEFAULT 0,
             created_at REAL,
             UNIQUE(front, back)
@@ -75,7 +80,7 @@ def pool_count(level: Optional[str] = None) -> int:
     try:
         if level:
             return con.execute(
-                "SELECT COUNT(*) FROM vocab_pool WHERE level = ?", (level,)
+                "SELECT COUNT(*) FROM vocab_pool WHERE level = ?", (normalize_level(level),)
             ).fetchone()[0]
         return con.execute("SELECT COUNT(*) FROM vocab_pool").fetchone()[0]
     finally:
@@ -113,7 +118,7 @@ def pool_count_unlearned(uid: str, level: Optional[str] = None) -> int:
         if level:
             rows = con.execute(
                 "SELECT front, back, reading FROM vocab_pool WHERE level = ?",
-                (level,),
+                (normalize_level(level),),
             ).fetchall()
         else:
             rows = con.execute(
@@ -128,7 +133,8 @@ def pool_count_unlearned(uid: str, level: Optional[str] = None) -> int:
         con.close()
 
 
-def pool_add(items: list, level: str = "beginner") -> int:
+def pool_add(items: list, level: str = "N5") -> int:
+    level = normalize_level(level)
     con = _conn()
     added = 0
     try:
@@ -164,6 +170,8 @@ def pool_take_unlearned(
     level: Optional[str] = None,
 ) -> List[dict]:
     learned_keys = _learned_keys(uid)
+    if level:
+        level = normalize_level(level)
     con = _conn()
     try:
         if level:
@@ -247,7 +255,7 @@ def mark_learned(uid: str, items: List[dict]) -> int:
     return n
 
 
-def _llm_spawn_batch(count: int = SPAWN_BATCH, level: str = "beginner") -> List[dict]:
+def _llm_spawn_batch(count: int = SPAWN_BATCH, level: str = "N5") -> List[dict]:
     try:
         from interface.webui import auth
         if not auth.aiko_web_instance or not auth.aiko_web_instance._think:
@@ -294,7 +302,8 @@ def _llm_spawn_batch(count: int = SPAWN_BATCH, level: str = "beginner") -> List[
         return []
 
 
-def top_up_pool(level: str = "beginner", force: bool = False) -> int:
+def top_up_pool(level: str = "N5", force: bool = False) -> int:
+    level = normalize_level(level)
     with _pool_lock:
         if not force and pool_count(level) >= POOL_MIN:
             return 0
@@ -304,8 +313,9 @@ def top_up_pool(level: str = "beginner", force: bool = False) -> int:
         return pool_add(items, level=level)
 
 
-def top_up_pool_background(level: str = "beginner") -> None:
+def top_up_pool_background(level: str = "N5") -> None:
     """One in-flight top-up per level — avoids thread pile-up under concurrent Learn."""
+    level = normalize_level(level)
     with _inflight_lock:
         if level in _topup_inflight:
             return
@@ -322,9 +332,8 @@ def top_up_pool_background(level: str = "beginner") -> None:
 
 
 def handle_lingo_spawn_vocab(memorize: Any = None) -> str:
-    levels = ("beginner", "intermediate", "advanced")
     total = 0
-    for level in levels:
+    for level in JLPT_ORDER:
         try:
             total += top_up_pool(level=level, force=False)
         except Exception:
@@ -372,7 +381,13 @@ def register_lingo_spawn_handler(seed_jobs: bool = False, timezone: str | None =
 def warm_pools_on_startup() -> None:
     def _run():
         try:
-            top_up_pool(level="beginner", force=False)
+            # N5 first (lowest/start) so Learn opens instantly; rest follow.
+            top_up_pool(level="N5", force=False)
+            for level in ("N4", "N3", "N2", "N1"):
+                try:
+                    top_up_pool(level=level, force=False)
+                except Exception:
+                    log.warning("startup pool warm failed for %s", level, exc_info=True)
         except Exception:
             log.warning("startup pool warm failed", exc_info=True)
     threading.Thread(target=_run, daemon=True).start()

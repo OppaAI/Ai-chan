@@ -20,8 +20,19 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 MATERIALS_DB = Path(__file__).parent / "materials.db"
-MATERIALS_VERSION = "2026.09.01-n5seed"
+MATERIALS_VERSION = "2026.09.02-consolidated"
 USER_DB_REL = "agentic/lingo.db"
+
+# Old 3-track -> JLPT (N5 lowest/start).
+LEGACY_LEVEL_MAP = {"beginner": "N5", "intermediate": "N3", "advanced": "N1"}
+JLPT_ORDER = ["N5", "N4", "N3", "N2", "N1"]
+
+
+def normalize_level(level: str | None) -> str:
+    lvl = (level or "").strip()
+    if lvl in JLPT_ORDER:
+        return lvl
+    return LEGACY_LEVEL_MAP.get(lvl, "N5")
 
 
 def global_materials_db() -> Path:
@@ -70,11 +81,27 @@ def init_materials_db(seed: bool = True) -> Path:
             cards_json TEXT NOT NULL DEFAULT '[]')""")
         con.execute("""CREATE INDEX IF NOT EXISTS idx_jlpt_level_kind
             ON jlpt_cards(level, kind)""")
+        # Consolidated pools (single global file; replaces vocab_pool.db +
+        # lesson_pool.db). spawn.py / lessons.py read these tables.
+        con.execute("""CREATE TABLE IF NOT EXISTS vocab_pool (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            front TEXT NOT NULL, back TEXT NOT NULL,
+            reading TEXT NOT NULL DEFAULT '', kind TEXT NOT NULL DEFAULT 'kanji',
+            level TEXT NOT NULL DEFAULT 'N5', used_count INTEGER NOT NULL DEFAULT 0,
+            created_at REAL, UNIQUE(front, back))""")
+        con.execute("""CREATE TABLE IF NOT EXISTS lesson_pool (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            front TEXT NOT NULL, back TEXT NOT NULL,
+            reading TEXT NOT NULL DEFAULT '', level TEXT NOT NULL DEFAULT 'N5',
+            used_count INTEGER NOT NULL DEFAULT 0, created_at REAL,
+            UNIQUE(front, back))""")
         ver = con.execute("SELECT value FROM meta WHERE key='version'").fetchone()
         if seed and (ver is None or ver[0] != MATERIALS_VERSION):
             _seed_materials(con)
+            _migrate_legacy_pools(con)
             con.execute("INSERT OR REPLACE INTO meta(key,value) VALUES('version',?)",
                         (MATERIALS_VERSION,))
+        con.commit()
         con.commit()
     finally:
         con.close()
@@ -106,9 +133,58 @@ def materials_count() -> dict:
             "jlpt_cards": con.execute("SELECT COUNT(*) FROM jlpt_cards").fetchone()[0],
             "courses": con.execute("SELECT COUNT(*) FROM courses").fetchone()[0],
             "grammar_decks": con.execute("SELECT COUNT(*) FROM grammar_decks").fetchone()[0],
+            "vocab_pool": con.execute("SELECT COUNT(*) FROM vocab_pool").fetchone()[0],
+            "lesson_pool": con.execute("SELECT COUNT(*) FROM lesson_pool").fetchone()[0],
         }
     finally:
         con.close()
+
+
+def _migrate_legacy_pools(con: sqlite3.Connection) -> dict:
+    """One-shot copy of vocab_pool.db + lesson_pool.db into materials.db."""
+    moved = {"vocab_pool": 0, "lesson_pool": 0}
+    here = Path(__file__).parent
+    for src_name, table, has_kind in (
+        ("vocab_pool.db", "vocab_pool", True),
+        ("lesson_pool.db", "lesson_pool", False),
+    ):
+        src = here / src_name
+        if not src.exists():
+            continue
+        try:
+            old = sqlite3.connect(str(src))
+            try:
+                if has_kind:
+                    rows = old.execute(
+                        "SELECT front,back,reading,kind,level,used_count,created_at"
+                        " FROM vocab_pool").fetchall()
+                    for front, back, reading, kind, level, used, ts in rows:
+                        con.execute(
+                            "INSERT OR IGNORE INTO vocab_pool"
+                            "(front,back,reading,kind,level,used_count,created_at)"
+                            " VALUES(?,?,?,?,?,?,?)",
+                            (front, back, reading or "", kind or "kanji",
+                             normalize_level(level), used or 0, ts))
+                        if con.total_changes:
+                            moved["vocab_pool"] += 1
+                else:
+                    rows = old.execute(
+                        "SELECT front,back,reading,level,used_count,created_at"
+                        " FROM lesson_pool").fetchall()
+                    for front, back, reading, level, used, ts in rows:
+                        con.execute(
+                            "INSERT OR IGNORE INTO lesson_pool"
+                            "(front,back,reading,level,used_count,created_at)"
+                            " VALUES(?,?,?,?,?,?)",
+                            (front, back, reading or "", normalize_level(level),
+                             used or 0, ts))
+                        if con.total_changes:
+                            moved["lesson_pool"] += 1
+            finally:
+                old.close()
+        except Exception:
+            continue
+    return moved
 
 
 # --------------------------------------------------------------- per-user ---
@@ -214,4 +290,5 @@ def migrate_user_legacy(uid: str) -> dict:
 
 
 __all__ = ["global_materials_db", "user_lingo_db_path", "init_materials_db",
-           "init_user_db", "migrate_user_legacy", "materials_count", "MATERIALS_VERSION"]
+           "init_user_db", "migrate_user_legacy", "materials_count",
+           "MATERIALS_VERSION", "normalize_level", "JLPT_ORDER", "LEGACY_LEVEL_MAP"]
