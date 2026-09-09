@@ -1,33 +1,35 @@
-"""Curated JLPT bank import into materials.db from content/*.json."""
+"""Curated JLPT bank import into materials.db."""
 from __future__ import annotations
 
 import json
 import logging
 import sqlite3
 import time
-from pathlib import Path
+
+from .content_packs import BANK_CSV, GRAMMAR_JSON
 
 log = logging.getLogger(__name__)
-CONTENT_DIR = Path(__file__).parent / "content"
 
 
-def _load_json(name: str, default):
-    path = CONTENT_DIR / name
-    if not path.is_file():
-        log.warning("Missing content pack %s", path)
-        return default
-    try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except Exception:
-        log.warning("Failed to read %s", path, exc_info=True)
-        return default
-
-
-def _load_banks() -> dict[str, list]:
-    out = {}
-    for level in ("N5", "N4", "N3", "N2", "N1"):
-        items = _load_json(f"{level.lower()}.json", [])
-        out[level] = items if isinstance(items, list) else []
+def _parse_csv_banks() -> dict[str, list]:
+    out: dict[str, list] = {}
+    for level, blob in BANK_CSV.items():
+        items = []
+        for line in blob.strip().splitlines():
+            parts = line.split("|")
+            if len(parts) < 3:
+                continue
+            front, reading, back = parts[0], parts[1], parts[2]
+            kind = parts[3] if len(parts) > 3 else "kanji"
+            note = parts[4] if len(parts) > 4 else ""
+            items.append({
+                "front": front,
+                "reading": reading or front,
+                "back": back,
+                "kind": kind or "kanji",
+                "note": note,
+            })
+        out[level] = items
     return out
 
 
@@ -38,14 +40,15 @@ def _courses_from_banks(banks: dict) -> list[dict]:
         for i in range(0, len(items), chunk):
             part = items[i:i + chunk]
             n = i // chunk + 1
-            cards = []
-            for it in part:
-                cards.append({
-                    "front": str(it.get("front") or ""),
-                    "back": str(it.get("back") or ""),
-                    "reading": str(it.get("reading") or it.get("front") or ""),
-                    "note": str(it.get("note") or ""),
-                })
+            cards = [
+                {
+                    "front": it["front"],
+                    "back": it["back"],
+                    "reading": it["reading"],
+                    "note": it.get("note", ""),
+                }
+                for it in part
+            ]
             out.append({
                 "id": f"{level.lower()}-lesson-{n}",
                 "title": f"{level} Lesson {n}",
@@ -54,10 +57,6 @@ def _courses_from_banks(banks: dict) -> list[dict]:
                 "kind": "course",
                 "cards": cards,
             })
-    # Prefer explicit courses.json if present
-    explicit = _load_json("courses.json", None)
-    if explicit:
-        return explicit
     return out
 
 
@@ -74,14 +73,14 @@ def import_curated_into(con: sqlite3.Connection) -> dict[str, int]:
             pass
 
     kinds_ok = {"hiragana", "katakana", "kanji", "phrase", "sentence"}
-    banks = _load_banks()
+    banks = _parse_csv_banks()
     for level, items in banks.items():
         for i, it in enumerate(items, 1):
-            front = str(it.get("front") or "").strip()
-            back = str(it.get("back") or "").strip()
-            reading = str(it.get("reading") or front).strip()
-            kind = str(it.get("kind") or "kanji").strip().lower()
-            note = str(it.get("note") or "")
+            front = it["front"].strip()
+            back = it["back"].strip()
+            reading = (it.get("reading") or front).strip()
+            kind = (it.get("kind") or "kanji").strip().lower()
+            note = it.get("note") or ""
             if not front or not back:
                 continue
             cid = f"{level}-c-{i:04d}"
@@ -90,8 +89,11 @@ def import_curated_into(con: sqlite3.Connection) -> dict[str, int]:
                 con.execute(
                     "INSERT OR IGNORE INTO jlpt_cards"
                     "(id,level,kind,front,reading,back,note,source) VALUES(?,?,?,?,?,?,?,?)",
-                    (cid, level, "vocab" if kind == "kanji" else kind,
-                     front, reading, back, note, "curated"),
+                    (
+                        cid, level,
+                        "vocab" if kind == "kanji" else kind,
+                        front, reading, back, note, "curated",
+                    ),
                 )
                 if con.total_changes > before:
                     stats["jlpt_cards"] += 1
@@ -133,15 +135,18 @@ def import_curated_into(con: sqlite3.Connection) -> dict[str, int]:
             con.execute(
                 "INSERT OR REPLACE INTO courses(id,title,level,kind,cards_json)"
                 " VALUES(?,?,?,?,?)",
-                (c["id"], c.get("title") or c["id"], c.get("level") or "N5",
-                 c.get("kind") or "course",
-                 json.dumps(c.get("cards") or [], ensure_ascii=False)),
+                (c["id"], c["title"], c["level"], c["kind"],
+                 json.dumps(c["cards"], ensure_ascii=False)),
             )
             stats["courses"] += 1
         except sqlite3.Error:
             pass
 
-    for g in _load_json("grammar.json", []):
+    try:
+        grammar = json.loads(GRAMMAR_JSON)
+    except Exception:
+        grammar = []
+    for g in grammar:
         try:
             con.execute(
                 "INSERT OR REPLACE INTO grammar_decks(id,title,level,kind,cards_json)"
