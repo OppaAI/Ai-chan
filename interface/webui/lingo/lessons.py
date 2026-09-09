@@ -1,10 +1,8 @@
 """
 Lingo lesson decks (static curated content for Learn mode).
 
-Static kana decks stay here. AI / hourly-spawned mixed vocab lives in the
-SHARED package-local pool (see spawn.py → vocab_pool.db next to this file).
-Per-user learnt progress and SRS schedule live under
-USER_SPACE_ROOT/<uid>/agentic/lingo/vocab.db — not in the shared pool.
+Static kana decks stay here. Legacy words-phrases pool remains on the
+previous shared path when present, with package-local fallback.
 """
 from typing import Dict, List
 
@@ -59,21 +57,53 @@ def get_deck(deck_id: str) -> dict | None:
 
 
 # ---------------------------------------------------------------------------
-# Back-compat aliases used by older router helpers (_ensure_lesson_pool).
-# New code should import from .spawn instead.
+# Legacy lesson_pool for /lessons/words-phrases (router still uses this).
+# Prefer existing USER_SPACE_ROOT/_shared/agentic/lingo/lesson_pool.db so
+# prior data is not orphaned; fall back to package-local path.
 # ---------------------------------------------------------------------------
 import sqlite3 as _sqlite3
 import time as _time
 from pathlib import Path as _Path
 
-POOL_DB = _Path(__file__).parent / "lesson_pool.db"  # legacy name; spawn uses vocab_pool.db
+
+def _legacy_pool_db_path() -> _Path:
+    candidates = []
+    try:
+        from system.userspace import _user_state_root_value
+        shared = (
+            _Path(_user_state_root_value()).expanduser()
+            / "_shared" / "agentic" / "lingo" / "lesson_pool.db"
+        )
+        candidates.append(shared)
+    except Exception:
+        pass
+    candidates.append(_Path(__file__).parent / "lesson_pool.db")
+    for p in candidates:
+        if p.is_file():
+            return p
+    # Prefer shared path for new writes when userspace works
+    try:
+        from system.userspace import _user_state_root_value
+        p = (
+            _Path(_user_state_root_value()).expanduser()
+            / "_shared" / "agentic" / "lingo" / "lesson_pool.db"
+        )
+        p.parent.mkdir(parents=True, exist_ok=True)
+        return p
+    except Exception:
+        return _Path(__file__).parent / "lesson_pool.db"
+
+
+POOL_DB = _legacy_pool_db_path()
 POOL_MIN = 10
 POOL_TOPUP = 15
 POOL_SERVE_N = 10
 
 
 def _pool_conn():
-    con = _sqlite3.connect(POOL_DB)
+    path = _legacy_pool_db_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    con = _sqlite3.connect(path)
     con.execute(
         """CREATE TABLE IF NOT EXISTS lesson_pool (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
