@@ -1,11 +1,14 @@
-"""Learn / courses / grammar routes on the shared pool + per-user SRS."""
+"""Learn / courses / grammar routes on the shared pool + per-user SRS.
+
+Mutating routes require real auth (no owner fallback).
+"""
 from __future__ import annotations
 
 import logging
 from typing import List, Optional
 
-from fastapi import Depends, HTTPException
-from pydantic import BaseModel, Field
+from fastapi import Depends, HTTPException, Request
+from pydantic import BaseModel, Field, field_validator
 
 from .srs import LingoSRS
 from . import spawn
@@ -17,8 +20,8 @@ log = logging.getLogger(__name__)
 
 class LearnItem(BaseModel):
     pool_id: Optional[int] = None
-    front: str
-    back: str
+    front: str = ""
+    back: str = ""
     reading: str = ""
     kind: str = "kanji"
     level: str = "N5"
@@ -32,6 +35,13 @@ class LearnSession(BaseModel):
 
 class MarkLearnedRequest(BaseModel):
     items: List[LearnItem] = Field(default_factory=list)
+
+    @field_validator("items")
+    @classmethod
+    def _cap_items(cls, v: list) -> list:
+        if len(v) > spawn.LEARN_SESSION_N:
+            return v[: spawn.LEARN_SESSION_N]
+        return v
 
 
 class MarkLearnedResponse(BaseModel):
@@ -67,6 +77,19 @@ class DeckDetail(BaseModel):
     cards: List[DeckCard]
 
 
+async def require_lingo_user(request: Request) -> dict:
+    """Authenticated session only — no AIKO_USER_ID fallback."""
+    from interface.webui import auth
+    try:
+        session = await auth.require_session(request)
+        return await auth.require_accepted_session(session)
+    except HTTPException:
+        raise
+    except Exception as e:
+        log.warning("Lingo auth required failed: %s", e)
+        raise HTTPException(status_code=401, detail="Authentication required")
+
+
 def attach_learn_routes(router, get_lingo_session, award_xp=None):
     @router.get("/learn/new", response_model=LearnSession)
     async def learn_new(session: dict = Depends(get_lingo_session)):
@@ -75,16 +98,23 @@ def attach_learn_routes(router, get_lingo_session, award_xp=None):
         if spawn.pool_count(level) < spawn.POOL_MIN:
             spawn.top_up_user_level_background(uid)
         items = spawn.pool_take_unlearned(uid, n=spawn.LEARN_SESSION_N, level=level)
+        unlearned_total = spawn.pool_count_unlearned(uid, level=level)
         return LearnSession(
             items=[LearnItem(**it) for it in items],
             level=level,
-            pending_in_pool=max(0, spawn.pool_count(level) - len(items)),
+            pending_in_pool=max(0, unlearned_total - len(items)),
         )
 
     @router.post("/learn/mark", response_model=MarkLearnedResponse)
-    async def learn_mark(body: MarkLearnedRequest, session: dict = Depends(get_lingo_session)):
+    async def learn_mark(
+        body: MarkLearnedRequest,
+        session: dict = Depends(require_lingo_user),
+    ):
         uid = session["user_id"]
-        n = spawn.mark_learned(uid, [it.model_dump() for it in body.items])
+        payload = [{"pool_id": it.pool_id} for it in body.items if it.pool_id is not None]
+        if not payload:
+            raise HTTPException(status_code=400, detail="Each item needs a valid pool_id")
+        n = spawn.mark_learned(uid, payload)
         xp_total = 0
         if award_xp and n:
             try:
@@ -103,6 +133,7 @@ def attach_learn_routes(router, get_lingo_session, award_xp=None):
             "level": level,
             "levels": list(JLPT_LEVELS),
             "pool_size_at_level": spawn.pool_count(level),
+            "pool_unlearned_at_level": spawn.pool_count_unlearned(uid, level=level),
             "pool_size_total": spawn.pool_count(),
             "user_cards": stats.get("total_cards", 0),
             "reviews_today": stats.get("reviews_today", 0),
@@ -112,7 +143,10 @@ def attach_learn_routes(router, get_lingo_session, award_xp=None):
         }
 
     @router.post("/level")
-    async def set_level(body: SetLevelRequest, session: dict = Depends(get_lingo_session)):
+    async def set_level(
+        body: SetLevelRequest,
+        session: dict = Depends(require_lingo_user),
+    ):
         uid = session["user_id"]
         level = set_user_level(uid, body.level)
         return {"level": level}
