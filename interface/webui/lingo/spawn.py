@@ -156,9 +156,9 @@ def pool_add(items: list, level: str = "N5") -> int:
             try:
                 cur = con.execute(
                     "INSERT OR IGNORE INTO vocab_pool "
-                    "(front, back, reading, kind, level, created_at) "
-                    "VALUES (?, ?, ?, ?, ?, ?)",
-                    (front, back, reading, kind, level, time.time()),
+                    "(front, back, reading, kind, level, created_at, source) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    (front, back, reading, kind, level, time.time(), "spawn"),
                 )
                 if cur.rowcount:
                     added += 1
@@ -186,12 +186,12 @@ def pool_take_unlearned(
         if levels:
             q = (f"SELECT id, front, back, reading, kind FROM vocab_pool "
                  f"WHERE level IN ({','.join('?' * len(levels))}) "
-                 f"ORDER BY used_count ASC, RANDOM() LIMIT ?")
+                 f"ORDER BY CASE WHEN COALESCE(source,'spawn') IN ('openjlpt','curated') THEN 0 ELSE 1 END, used_count ASC, RANDOM() LIMIT ?")
             candidates = con.execute(q, (*levels, max(n * 5, 50))).fetchall()
         else:
             candidates = con.execute(
                 "SELECT id, front, back, reading, kind FROM vocab_pool "
-                "ORDER BY used_count ASC, RANDOM() LIMIT ?",
+                "ORDER BY CASE WHEN COALESCE(source,'spawn') IN ('openjlpt','curated') THEN 0 ELSE 1 END, used_count ASC, RANDOM() LIMIT ?",
                 (max(n * 5, 50),),
             ).fetchall()
         out = []
