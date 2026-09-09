@@ -21,7 +21,7 @@ from .lingo_store import (
     MATERIALS_DB, JLPT_ORDER, normalize_level, init_materials_db,
 )
 
-POOL_DB = MATERIALS_DB
+POOL_DB = MATERIALS_DB  # consolidated single global file
 SPAWN_BATCH = int(os.getenv("LINGO_SPAWN_BATCH", "20"))
 POOL_MIN = int(os.getenv("LINGO_POOL_MIN", "30"))
 LEARN_SESSION_N = 10
@@ -35,7 +35,7 @@ _inflight_lock = threading.Lock()
 
 
 def _conn() -> sqlite3.Connection:
-    init_materials_db(seed=True)
+    init_materials_db(seed=True)  # ensures tables + one-shot legacy migration
     con = sqlite3.connect(str(POOL_DB), timeout=30)
     con.execute(
         """CREATE TABLE IF NOT EXISTS vocab_pool (
@@ -47,22 +47,14 @@ def _conn() -> sqlite3.Connection:
             level TEXT NOT NULL DEFAULT 'N5',
             used_count INTEGER NOT NULL DEFAULT 0,
             created_at REAL,
-            source TEXT NOT NULL DEFAULT 'spawn',
             UNIQUE(front, back)
         )"""
     )
-    cols = {r[1] for r in con.execute("PRAGMA table_info(vocab_pool)").fetchall()}
-    if "source" not in cols:
-        try:
-            con.execute(
-                "ALTER TABLE vocab_pool ADD COLUMN source TEXT NOT NULL DEFAULT 'spawn'"
-            )
-        except Exception:
-            pass
     return con
 
 
 def pool_get(pool_id: int) -> Optional[dict]:
+    """Fetch one pool row by id, or None."""
     con = _conn()
     try:
         row = con.execute(
@@ -72,8 +64,12 @@ def pool_get(pool_id: int) -> Optional[dict]:
         if not row:
             return None
         return {
-            "pool_id": row[0], "front": row[1], "back": row[2],
-            "reading": row[3], "kind": row[4], "level": row[5],
+            "pool_id": row[0],
+            "front": row[1],
+            "back": row[2],
+            "reading": row[3],
+            "kind": row[4],
+            "level": row[5],
         }
     finally:
         con.close()
@@ -116,6 +112,7 @@ def _is_learned(front: str, back: str, reading: str, learned: set[tuple[str, str
 
 def pool_count_unlearned(uid: str, level: Optional[str] = None,
                           levels: Optional[list] = None) -> int:
+    """Count pool rows not yet in this user's SRS (same match rules as take)."""
     learned = _learned_keys(uid)
     if levels is not None:
         levels = [normalize_level(l) for l in levels]
@@ -130,7 +127,9 @@ def pool_count_unlearned(uid: str, level: Optional[str] = None,
                 (normalize_level(level),),
             ).fetchall()
         else:
-            rows = con.execute("SELECT front, back, reading FROM vocab_pool").fetchall()
+            rows = con.execute(
+                "SELECT front, back, reading FROM vocab_pool"
+            ).fetchall()
         n = 0
         for front, back, reading in rows:
             if not _is_learned(front or "", back or "", reading or "", learned):
@@ -187,14 +186,12 @@ def pool_take_unlearned(
         if levels:
             q = (f"SELECT id, front, back, reading, kind FROM vocab_pool "
                  f"WHERE level IN ({','.join('?' * len(levels))}) "
-                 f"ORDER BY CASE WHEN COALESCE(source,'spawn')='curated' THEN 0 ELSE 1 END, "
-                 f"used_count ASC, RANDOM() LIMIT ?")
+                 f"ORDER BY CASE WHEN COALESCE(source,'spawn') IN ('openjlpt','curated') THEN 0 ELSE 1 END, used_count ASC, RANDOM() LIMIT ?")
             candidates = con.execute(q, (*levels, max(n * 5, 50))).fetchall()
         else:
             candidates = con.execute(
                 "SELECT id, front, back, reading, kind FROM vocab_pool "
-                "ORDER BY CASE WHEN COALESCE(source,'spawn')='curated' THEN 0 ELSE 1 END, "
-                "used_count ASC, RANDOM() LIMIT ?",
+                "ORDER BY CASE WHEN COALESCE(source,'spawn') IN ('openjlpt','curated') THEN 0 ELSE 1 END, used_count ASC, RANDOM() LIMIT ?",
                 (max(n * 5, 50),),
             ).fetchall()
         out = []
@@ -204,8 +201,11 @@ def pool_take_unlearned(
             if _is_learned(front, back, reading or "", learned_keys):
                 continue
             out.append({
-                "pool_id": pid, "front": front, "back": back,
-                "reading": reading, "kind": kind,
+                "pool_id": pid,
+                "front": front,
+                "back": back,
+                "reading": reading,
+                "kind": kind,
             })
             taken_ids.append(pid)
             if len(out) >= n:
@@ -223,6 +223,7 @@ def pool_take_unlearned(
 
 
 def mark_learned(uid: str, items: List[dict]) -> int:
+    """Graduate pool items into user SRS. Resolves by pool_id only; counts new rows."""
     from .srs import LingoSRS, LingoVocabCard
     srs = LingoSRS(uid)
     n = 0
@@ -232,6 +233,7 @@ def mark_learned(uid: str, items: List[dict]) -> int:
             continue
         stored = pool_get(int(pool_id))
         if not stored:
+            log.warning("mark_learned: unknown pool_id %s", pool_id)
             continue
         front = stored["front"]
         back = stored["back"]
@@ -239,7 +241,7 @@ def mark_learned(uid: str, items: List[dict]) -> int:
         kind = stored["kind"] or "kanji"
         try:
             before = srs.get_stats().get("total_cards", 0)
-            srs.add_card(LingoVocabCard(
+            card = srs.add_card(LingoVocabCard(
                 kanji=front if kind in ("kanji", "phrase", "sentence") else "",
                 hiragana=reading,
                 meaning=back,
@@ -248,9 +250,15 @@ def mark_learned(uid: str, items: List[dict]) -> int:
                 source_context="hourly_spawn",
                 level=normalize_level(stored.get("level")),
             ))
+            # Only count if this is a newly inserted row (new id and total grew),
+            # or if add_card returned a card that was just created (review_count 0
+            # and created this call). Safest: compare totals.
             after = srs.get_stats().get("total_cards", 0)
             if after > before:
                 n += 1
+            elif card and getattr(card, "id", None) and getattr(card, "review_count", 0) == 0:
+                # Existing unreviewed card — do not re-award XP
+                pass
         except Exception:
             log.warning("mark_learned failed for pool_id=%s", pool_id, exc_info=True)
     return n
@@ -272,7 +280,7 @@ def _llm_spawn_batch(count: int = SPAWN_BATCH, level: str = "N5") -> List[dict]:
                     f"Roughly {per} of each kind: hiragana, katakana, kanji, phrase, sentence. "
                     "Each item needs natural Japanese, hiragana reading, and a short English meaning. "
                     "Output ONLY valid JSON: "
-                    '{\"items\":[{\"kind\":\"kanji\",\"japanese\":\"...\",\"hiragana\":\"...\",\"meaning\":\"...\"}]}'
+                    '{"items":[{"kind":"kanji","japanese":"...","hiragana":"...","meaning":"..."}]}'
                 )},
                 {"role": "user", "content": "Spawn a fresh mixed vocab batch."},
             ],
@@ -299,7 +307,7 @@ def _llm_spawn_batch(count: int = SPAWN_BATCH, level: str = "N5") -> List[dict]:
             out.append({"front": surf, "back": mean, "reading": hira, "kind": kind})
         return out
     except Exception:
-        log.warning("LLM spawn batch failed", exp_info=True)
+        log.warning("LLM spawn batch failed", exc_info=True)
         return []
 
 
@@ -315,17 +323,20 @@ def top_up_pool(level: str = "N5", force: bool = False) -> int:
 
 
 def top_up_pool_background(level: str = "N5") -> None:
+    """One in-flight top-up per level — avoids thread pile-up under concurrent Learn."""
     level = normalize_level(level)
     with _inflight_lock:
         if level in _topup_inflight:
             return
         _topup_inflight.add(level)
+
     def _run() -> None:
         try:
             top_up_pool(level=level)
         finally:
             with _inflight_lock:
                 _topup_inflight.discard(level)
+
     threading.Thread(target=_run, daemon=True).start()
 
 
@@ -335,7 +346,7 @@ def handle_lingo_spawn_vocab(memorize: Any = None) -> str:
         try:
             total += top_up_pool(level=level, force=False)
         except Exception:
-            log.warning("spawn failed for level %s", level, exp_info=True)
+            log.warning("spawn failed for level %s", level, exc_info=True)
     msg = f"Lingo spawn: added {total} items to shared pool"
     log.info(msg)
     return msg
@@ -362,7 +373,7 @@ def ensure_lingo_spawn_job(timezone: str | None = None, user_id: str | None = No
         )
         log.info("Seeded hourly lingo vocab spawn job")
     except Exception:
-        log.warning("ensure_lingo_spawn_job failed", exp_info=True)
+        log.warning("ensure_lingo_spawn_job failed", exc_info=True)
 
 
 def register_lingo_spawn_handler(seed_jobs: bool = False, timezone: str | None = None,
@@ -379,12 +390,13 @@ def register_lingo_spawn_handler(seed_jobs: bool = False, timezone: str | None =
 def warm_pools_on_startup() -> None:
     def _run():
         try:
+            # N5 first (lowest/start) so Learn opens instantly; rest follow.
             top_up_pool(level="N5", force=False)
             for level in ("N4", "N3", "N2", "N1"):
                 try:
                     top_up_pool(level=level, force=False)
                 except Exception:
-                    log.warning("startup pool warm failed for %s", level, exp_info=True)
+                    log.warning("startup pool warm failed for %s", level, exc_info=True)
         except Exception:
-            log.warning("startup pool warm failed", exp_info=True)
+            log.warning("startup pool warm failed", exc_info=True)
     threading.Thread(target=_run, daemon=True).start()
