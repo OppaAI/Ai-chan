@@ -1,28 +1,51 @@
-"""Curated JLPT bank import into materials.db."""
+"""Curated JLPT bank import into materials.db from content/*.json."""
 from __future__ import annotations
 
 import json
 import logging
 import sqlite3
 import time
-
-from .bank_data import BANKS
-from .bank_rest import GRAMMAR
+from pathlib import Path
 
 log = logging.getLogger(__name__)
+CONTENT_DIR = Path(__file__).parent / "content"
 
 
-def _courses_from_banks() -> list[dict]:
+def _load_json(name: str, default):
+    path = CONTENT_DIR / name
+    if not path.is_file():
+        log.warning("Missing content pack %s", path)
+        return default
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        log.warning("Failed to read %s", path, exc_info=True)
+        return default
+
+
+def _load_banks() -> dict[str, list]:
+    out = {}
+    for level in ("N5", "N4", "N3", "N2", "N1"):
+        items = _load_json(f"{level.lower()}.json", [])
+        out[level] = items if isinstance(items, list) else []
+    return out
+
+
+def _courses_from_banks(banks: dict) -> list[dict]:
     out = []
-    for level, items in BANKS.items():
+    for level, items in banks.items():
         chunk = 12
         for i in range(0, len(items), chunk):
             part = items[i:i + chunk]
             n = i // chunk + 1
-            cards = [
-                {"front": f, "back": b, "reading": r, "note": note}
-                for f, r, b, kind, note in part
-            ]
+            cards = []
+            for it in part:
+                cards.append({
+                    "front": str(it.get("front") or ""),
+                    "back": str(it.get("back") or ""),
+                    "reading": str(it.get("reading") or it.get("front") or ""),
+                    "note": str(it.get("note") or ""),
+                })
             out.append({
                 "id": f"{level.lower()}-lesson-{n}",
                 "title": f"{level} Lesson {n}",
@@ -31,6 +54,10 @@ def _courses_from_banks() -> list[dict]:
                 "kind": "course",
                 "cards": cards,
             })
+    # Prefer explicit courses.json if present
+    explicit = _load_json("courses.json", None)
+    if explicit:
+        return explicit
     return out
 
 
@@ -47,9 +74,14 @@ def import_curated_into(con: sqlite3.Connection) -> dict[str, int]:
             pass
 
     kinds_ok = {"hiragana", "katakana", "kanji", "phrase", "sentence"}
-    for level, items in BANKS.items():
-        for i, (front, reading, back, kind, note) in enumerate(items, 1):
-            front, back, reading = front.strip(), back.strip(), (reading or front).strip()
+    banks = _load_banks()
+    for level, items in banks.items():
+        for i, it in enumerate(items, 1):
+            front = str(it.get("front") or "").strip()
+            back = str(it.get("back") or "").strip()
+            reading = str(it.get("reading") or front).strip()
+            kind = str(it.get("kind") or "kanji").strip().lower()
+            note = str(it.get("note") or "")
             if not front or not back:
                 continue
             cid = f"{level}-c-{i:04d}"
@@ -96,24 +128,26 @@ def import_curated_into(con: sqlite3.Connection) -> dict[str, int]:
                 except sqlite3.Error:
                     pass
 
-    for c in _courses_from_banks():
+    for c in _courses_from_banks(banks):
         try:
             con.execute(
                 "INSERT OR REPLACE INTO courses(id,title,level,kind,cards_json)"
                 " VALUES(?,?,?,?,?)",
-                (c["id"], c["title"], c["level"], c["kind"],
-                 json.dumps(c["cards"], ensure_ascii=False)),
+                (c["id"], c.get("title") or c["id"], c.get("level") or "N5",
+                 c.get("kind") or "course",
+                 json.dumps(c.get("cards") or [], ensure_ascii=False)),
             )
             stats["courses"] += 1
         except sqlite3.Error:
             pass
 
-    for g in GRAMMAR:
+    for g in _load_json("grammar.json", []):
         try:
             con.execute(
                 "INSERT OR REPLACE INTO grammar_decks(id,title,level,kind,cards_json)"
                 " VALUES(?,?,?,?,?)",
-                (g["id"], g["title"], g["level"], g.get("kind") or "grammar",
+                (g["id"], g.get("title") or g["id"], g.get("level") or "N5",
+                 g.get("kind") or "grammar",
                  json.dumps(g.get("cards") or [], ensure_ascii=False)),
             )
             stats["grammar"] += 1
