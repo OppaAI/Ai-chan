@@ -20,7 +20,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 MATERIALS_DB = Path(__file__).parent / "materials.db"
-MATERIALS_VERSION = "2026.09.02-consolidated"
+MATERIALS_VERSION = "2026.09.03-courses"
 USER_DB_REL = "agentic/lingo.db"
 
 # Old 3-track -> JLPT (N5 lowest/start).
@@ -123,6 +123,48 @@ def _seed_materials(con: sqlite3.Connection) -> None:
     con.executemany(
         "INSERT OR IGNORE INTO jlpt_cards(id,level,kind,front,reading,back,note,source)"
         " VALUES(?,?,?,?,?,?,?,?)", kana + starter)
+    _seed_courses(con)
+
+
+def _seed_courses(con: sqlite3.Connection) -> None:
+    """Original N5 course + grammar decks (examples written for Aiko)."""
+    import json as _json
+    n5_lesson1 = [
+        {"front": "ねこ", "back": "cat", "reading": "ねこ", "note": "daily noun"},
+        {"front": "いぬ", "back": "dog", "reading": "いぬ", "note": "daily noun"},
+        {"front": "水", "back": "water", "reading": "みず", "note": "daily noun"},
+        {"front": "ごはん", "back": "cooked rice; meal", "reading": "ごはん", "note": "daily noun"},
+        {"front": "学校", "back": "school", "reading": "がっこう", "note": "place"},
+        {"front": "先生", "back": "teacher", "reading": "せんせい", "note": "person"},
+        {"front": "食べる", "back": "to eat", "reading": "たべる", "note": "verb"},
+        {"front": "飲む", "back": "to drink", "reading": "のむ", "note": "verb"},
+        {"front": "行く", "back": "to go", "reading": "いく", "note": "verb"},
+        {"front": "大きい", "back": "big", "reading": "おおきい", "note": "adjective"},
+        {"front": "小さい", "back": "small", "reading": "ちいさい", "note": "adjective"},
+        {"front": "今日", "back": "today", "reading": "きょう", "note": "time"},
+    ]
+    n5_grammar = [
+        {"front": "〜です", "back": "is/am/are (polite)", "reading": "", "note": "X は Y です — A is B"},
+        {"front": "〜ます", "back": "polite verb ending", "reading": "", "note": "食べます — eat (polite)"},
+        {"front": "〜か", "back": "question particle", "reading": "", "note": "ねこですか — Is it a cat?"},
+        {"front": "〜の", "back": "possessive / noun link", "reading": "", "note": "私の本 — my book"},
+        {"front": "〜に", "back": "to / at (time/place)", "reading": "", "note": "学校に行く — go to school"},
+        {"front": "〜へ", "back": "to (direction)", "reading": "", "note": "日本へ行く — go to Japan"},
+        {"front": "〜を", "back": "object particle", "reading": "", "note": "水を飲む — drink water"},
+        {"front": "〜が", "back": "subject particle", "reading": "", "note": "ねこがいる — there is a cat"},
+        {"front": "〜は", "back": "topic particle", "reading": "", "note": "私は学生です — I am a student"},
+        {"front": "〜も", "back": "also / too", "reading": "", "note": "私も行く — I go too"},
+    ]
+    con.execute(
+        "INSERT OR IGNORE INTO courses(id,title,level,kind,cards_json)"
+        " VALUES(?,?,?,?,?)",
+        ("n5-lesson-1", "N5 Lesson 1 · Daily Words", "N5", "vocab",
+         _json.dumps(n5_lesson1, ensure_ascii=False)))
+    con.execute(
+        "INSERT OR IGNORE INTO grammar_decks(id,title,level,kind,cards_json)"
+        " VALUES(?,?,?,?,?)",
+        ("n5-grammar-basics", "N5 Grammar Basics", "N5", "grammar",
+         _json.dumps(n5_grammar, ensure_ascii=False)))
 
 
 def materials_count() -> dict:

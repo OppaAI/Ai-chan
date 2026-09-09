@@ -1379,17 +1379,32 @@ def _ensure_lesson_pool(uid: str, level: str) -> None:
             log.warning("Lesson pool top-up insert failed", exc_info=True)
 
 
+def _word_of_day_file(uid: str) -> Path:
+    p = Path(f"data/word_of_day/{uid}.json")
+    p.parent.mkdir(parents=True, exist_ok=True)
+    return p
+
+
 @router.get("/word-of-day", response_model=WordOfDayResponse)
 async def get_word_of_day(session: dict = Depends(get_lingo_session)):
-    """Duolingo-style daily word: deterministic pick per calendar day.
+    """Duolingo-style daily word: fixed per user per calendar day.
 
-    Prefers words the user is struggling with (weak vocab), then due
-    cards, then the curated starter deck for brand-new users.
+    The pick is cached to data/word_of_day/{uid}.json, so every visit to
+    Stats on the same day returns the SAME word instantly (no LLM wait
+    after the first call of the day).
     """
     uid = session["user_id"]  # FIX #14: no silent fallback
+    today = date.today()
+    cache_file = _word_of_day_file(uid)
+    if cache_file.exists():
+        try:
+            cached = json.loads(cache_file.read_text())
+            if cached.get("date") == today.isoformat():
+                return WordOfDayResponse(**{k: v for k, v in cached.items() if k != "date"})
+        except Exception:
+            log.warning("Word-of-day cache unreadable, recomputing", exc_info=True)
     srs = LingoSRS(uid)
     pool = srs.get_weak_vocab(limit=50) or srs.get_due_cards(limit=50)
-    today = date.today()
     if pool:
         card = pool[today.toordinal() % len(pool)]
         cid, hira, mean, ctx = card.id, card.hiragana, card.meaning, card.context or ""
@@ -1402,7 +1417,7 @@ async def get_word_of_day(session: dict = Depends(get_lingo_session)):
         else:
             hira, mean, ctx = _WORD_OF_DAY_FALLBACK[today.toordinal() % len(_WORD_OF_DAY_FALLBACK)]
             cid = 0
-    return WordOfDayResponse(
+    resp = WordOfDayResponse(
         card_id=cid,
         hiragana=hira,
         meaning=mean,
@@ -1410,6 +1425,11 @@ async def get_word_of_day(session: dict = Depends(get_lingo_session)):
         audioUrl=get_cached_lingo_audio(hira, uid=uid),
         date=today.isoformat(),
     )
+    try:
+        _word_of_day_file(uid).write_text(json.dumps(resp.model_dump(), indent=2))
+    except Exception:
+        log.warning("Word-of-day cache write failed", exc_info=True)
+    return resp
 
 
 @router.get("/lessons", response_model=List[LessonDeckMeta])
@@ -1501,10 +1521,51 @@ async def add_xp(request: dict, session: dict = Depends(get_lingo_session)):
     return get_xp(uid)
 
 
+def _seed_starter_srs_cards(uid: str, srs) -> int:
+    """Insert up to 10 N5 starter cards from shared materials for new users."""
+    from .srs import LingoVocabCard
+    added = 0
+    try:
+        from .lingo_store import init_materials_db, MATERIALS_DB
+        import sqlite3
+        init_materials_db(seed=True)
+        con = sqlite3.connect(str(MATERIALS_DB))
+        try:
+            rows = con.execute(
+                "SELECT front,reading,back FROM jlpt_cards"
+                " WHERE level='N5' AND kind IN ('vocab','kanji') LIMIT 10"
+            ).fetchall()
+        finally:
+            con.close()
+        for front, reading, back in rows:
+            try:
+                srs.add_card(LingoVocabCard(
+                    kanji=front if re.search(r'[\u4e00-\u9fff]', front or "") else "",
+                    hiragana=reading or front,
+                    meaning=back,
+                    pos="starter",
+                    context="starter deck",
+                ))
+                added += 1
+            except Exception:
+                continue
+    except Exception:
+        log.warning("Starter SRS seed query failed", exc_info=True)
+    return added
+
+
 @router.post("/conversation/review/start", response_model=ReviewSessionResponse)
 async def review_start(session: dict = Depends(get_lingo_session)):
     uid = session["user_id"]  # FIX #14: no silent fallback
     srs = LingoSRS(uid)
+    # Day-one bootstrap: brand-new users have zero cards, which used to
+    # 400 "No cards due" -> the app showed a dead-end "caught up" screen.
+    # Seed starter N5 cards from shared materials so Practice works instantly.
+    try:
+        if srs.get_stats().get("total_cards", 0) == 0:
+            _seed_starter_srs_cards(uid, srs)
+    except Exception:
+        log.warning("Starter SRS seed failed", exc_info=True)
     due_cards = srs.get_due_cards(limit=1)
     if not due_cards:
         raise HTTPException(status_code=400, detail="No cards due for review")
