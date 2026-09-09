@@ -252,7 +252,7 @@ def mark_learned(uid: str, items: List[dict]) -> int:
             if after > before:
                 n += 1
         except Exception:
-            log.warning("mark_learned failed for pool_id=%s", pool_id, exp_info=True)
+            log.warning("mark_learned failed for pool_id=%s", pool_id, exc_info=True)
     return n
 
 
