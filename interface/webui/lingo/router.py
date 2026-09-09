@@ -108,7 +108,7 @@ from .srs import LingoSRS, ReviewGrade, init_srs_db
 from .vocab import VocabExtractor
 
 log = logging.getLogger(__name__)
-router = APIRouter(prefix="/api/english", tags=["lingo"])
+router = APIRouter(prefix="/api/nihongo", tags=["lingo"])
 
 # ============================================================================
 # Static Files & Audio (thread-safe for race-condition fix)

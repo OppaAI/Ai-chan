@@ -1,14 +1,11 @@
 """
 Lingo lesson decks (static curated content for Learn mode).
 
-Unlike SRS cards (auto-extracted from conversation into the per-user DB),
-these decks are fixed study material: kana charts, starter words, daily
-phrases, and N5 kanji. Served read-only via GET /lessons and
-GET /lessons/{deck_id} — no SRS writes, no auth side effects.
+Static kana decks stay here. Legacy words-phrases pool remains on the
+previous shared path when present, with package-local fallback.
 """
 from typing import Dict, List
 
-# Each card: (front, back, reading). Reading feeds the app's speak button.
 _DECKS: Dict[str, dict] = {}
 
 
@@ -47,19 +44,7 @@ _kana_deck("katakana", "Katakana", "46 basic characters", [
 ])
 
 
-# ============================================================================
-# Pregenerated LLM word/phrase pool (SQLite-backed)
-# ============================================================================
-# The Words & Phrases deck is LLM-generated but NOT generated live per
-# request: a background-topped pool keeps N fresh items ready per level so
-# opens are instant and repeat visits rotate stock. Served items graduate
-# into the user's SRS queue (router does the insert at serve time).
-import sqlite3 as _sqlite3
-import time as _time
-from pathlib import Path as _Path
-
 def list_decks() -> List[dict]:
-    """Deck metadata without cards (for the lesson picker)."""
     return [
         {"id": d["id"], "title": d["title"], "subtitle": d["subtitle"],
          "kind": d["kind"], "card_count": len(d["cards"])}
@@ -68,18 +53,57 @@ def list_decks() -> List[dict]:
 
 
 def get_deck(deck_id: str) -> dict | None:
-    """Full deck with cards, or None for unknown ids."""
     return _DECKS.get(deck_id)
 
 
-POOL_DB = _Path(__file__).parent / "lesson_pool.db"
-POOL_MIN = 10      # top up when a level's pool drops below this
-POOL_TOPUP = 15    # fresh items generated per top-up
-POOL_SERVE_N = 10  # cards per deck open
+# ---------------------------------------------------------------------------
+# Legacy lesson_pool for /lessons/words-phrases (router still uses this).
+# Prefer existing USER_SPACE_ROOT/_shared/agentic/lingo/lesson_pool.db so
+# prior data is not orphaned; fall back to package-local path.
+# ---------------------------------------------------------------------------
+import sqlite3 as _sqlite3
+import time as _time
+from pathlib import Path as _Path
+
+
+def _legacy_pool_db_path() -> _Path:
+    candidates = []
+    try:
+        from system.userspace import _user_state_root_value
+        shared = (
+            _Path(_user_state_root_value()).expanduser()
+            / "_shared" / "agentic" / "lingo" / "lesson_pool.db"
+        )
+        candidates.append(shared)
+    except Exception:
+        pass
+    candidates.append(_Path(__file__).parent / "lesson_pool.db")
+    for p in candidates:
+        if p.is_file():
+            return p
+    # Prefer shared path for new writes when userspace works
+    try:
+        from system.userspace import _user_state_root_value
+        p = (
+            _Path(_user_state_root_value()).expanduser()
+            / "_shared" / "agentic" / "lingo" / "lesson_pool.db"
+        )
+        p.parent.mkdir(parents=True, exist_ok=True)
+        return p
+    except Exception:
+        return _Path(__file__).parent / "lesson_pool.db"
+
+
+POOL_DB = _legacy_pool_db_path()
+POOL_MIN = 10
+POOL_TOPUP = 15
+POOL_SERVE_N = 10
 
 
 def _pool_conn():
-    con = _sqlite3.connect(POOL_DB)
+    path = _legacy_pool_db_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    con = _sqlite3.connect(path)
     con.execute(
         """CREATE TABLE IF NOT EXISTS lesson_pool (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -104,7 +128,6 @@ def pool_count(level: str) -> int:
 
 
 def pool_add(words: list, level: str) -> int:
-    """Insert pregenerated words; duplicates ignored. Returns rows added."""
     con = _pool_conn()
     try:
         added = 0
@@ -127,7 +150,6 @@ def pool_add(words: list, level: str) -> int:
 
 
 def pool_take(level: str, n: int = POOL_SERVE_N) -> list:
-    """Take the least-used words for a level and bump their use counts."""
     con = _pool_conn()
     try:
         rows = con.execute(
