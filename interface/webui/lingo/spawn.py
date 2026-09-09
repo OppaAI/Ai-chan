@@ -268,7 +268,7 @@ def handle_lingo_spawn_vocab(memorize: Any = None) -> str:
     for level in levels:
         # One batch per level keeps intermediate/advanced stocked too
         try:
-            total += top_up_pool(level=level, force=True)
+            total += top_up_pool(level=level, force=False)
         except Exception:
             log.warning("spawn failed for level %s", level, exc_info=True)
     msg = f"Lingo spawn: added {total} items to shared pool"
