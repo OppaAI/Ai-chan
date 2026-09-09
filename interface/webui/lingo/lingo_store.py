@@ -118,7 +118,7 @@ def _seed_materials(con: sqlite3.Connection) -> None:
         stats = import_openjlpt_into(con)
         log.info("OpenJLPT seed: %s", stats)
         print(f"[lingo] OpenJLPT import: {stats}")
-        if stats.get("vocab_pool", 0) > 0:
+        if stats.get("vocab_pool", 0) > 0 and not stats.get("fetch_limited"):
             return
     except sqlite3.Error:
         raise
