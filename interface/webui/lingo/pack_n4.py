@@ -57,11 +57,11 @@ CSV = """約束|やくそく|promise|kanji|noun
 雑誌|ざっし|magazine|kanji|noun
 番組|ばんぐみ|TV program|kanji|noun
 空港|くうこう|airport|kanji|place
-ホテル|ホテル|hotel|kanji|katakana
-レストラン|レストラン|restaurant|kanji|katakana
-スーパー|スーパー|supermarket|kanji|katakana
-アルバイト|アルバイト|part-time job|kanji|katakana
-テスト|テスト|test|kanji|katakana
+ホテル|ホテル|hotel|katakana|kanji
+レストラン|レストラン|restaurant|katakana|kanji
+スーパー|スーパー|supermarket|katakana|kanji
+アルバイト|アルバイト|part-time job|katakana|kanji
+テスト|テスト|test|katakana|kanji
 残念|ざんねん|regrettable|kanji|na-adj
 心配|しんぱい|worry|kanji|noun
 安心|あんしん|relief|kanji|noun

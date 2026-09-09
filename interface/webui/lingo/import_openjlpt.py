@@ -74,50 +74,33 @@ def import_openjlpt_into(con: sqlite3.Connection) -> dict[str, int]:
         return stats
     cols = {r[1] for r in con.execute("PRAGMA table_info(vocab_pool)").fetchall()}
     if "source" not in cols:
-        try:
-            con.execute(
-                "ALTER TABLE vocab_pool ADD COLUMN source TEXT NOT NULL DEFAULT 'spawn'"
-            )
-            cols.add("source")
-        except sqlite3.Error:
-            pass
+        con.execute(
+            "ALTER TABLE vocab_pool ADD COLUMN source TEXT NOT NULL DEFAULT 'spawn'"
+        )
+        cols.add("source")
     banks = _vocab()
     for level, items in banks.items():
         for i, it in enumerate(items, 1):
             front, back = it["front"], it["back"]
             reading, kind, note = it["reading"], it["kind"], it["note"]
             cid = f"oj-{level.lower()}-v-{i:04d}"
-            try:
-                before = con.total_changes
-                con.execute(
-                    "INSERT OR IGNORE INTO jlpt_cards"
-                    "(id,level,kind,front,reading,back,note,source) VALUES(?,?,?,?,?,?,?,?)",
-                    (cid, level, "vocab" if kind == "kanji" else kind,
-                     front, reading, back, note, SRC),
-                )
-                if con.total_changes > before:
-                    stats["jlpt_cards"] += 1
-            except sqlite3.Error:
-                pass
-            try:
-                if "source" in cols:
-                    cur = con.execute(
-                        "INSERT OR IGNORE INTO vocab_pool"
-                        "(front,back,reading,kind,level,used_count,created_at,source)"
-                        " VALUES(?,?,?,?,?,0,?,?)",
-                        (front, back, reading, kind, level, time.time(), SRC),
-                    )
-                else:
-                    cur = con.execute(
-                        "INSERT OR IGNORE INTO vocab_pool"
-                        "(front,back,reading,kind,level,used_count,created_at)"
-                        " VALUES(?,?,?,?,?,0,?)",
-                        (front, back, reading, kind, level, time.time()),
-                    )
-                if cur.rowcount:
-                    stats["vocab_pool"] += 1
-            except sqlite3.Error:
-                pass
+            before = con.total_changes
+            con.execute(
+                "INSERT OR IGNORE INTO jlpt_cards"
+                "(id,level,kind,front,reading,back,note,source) VALUES(?,?,?,?,?,?,?,?)",
+                (cid, level, "vocab" if kind == "kanji" else kind,
+                 front, reading, back, note, SRC),
+            )
+            if con.total_changes > before:
+                stats["jlpt_cards"] += 1
+            cur = con.execute(
+                "INSERT OR IGNORE INTO vocab_pool"
+                "(front,back,reading,kind,level,used_count,created_at,source)"
+                " VALUES(?,?,?,?,?,0,?,?)",
+                (front, back, reading, kind, level, time.time(), SRC),
+            )
+            if cur.rowcount:
+                stats["vocab_pool"] += 1
     chunk = 12
     for level, items in banks.items():
         for i in range(0, len(items), chunk):
@@ -126,17 +109,14 @@ def import_openjlpt_into(con: sqlite3.Connection) -> dict[str, int]:
             cards = [{"front": x["front"], "back": x["back"],
                       "reading": x["reading"], "note": x.get("note", "")}
                      for x in part]
-            try:
-                con.execute(
-                    "INSERT OR REPLACE INTO courses(id,title,level,kind,cards_json)"
-                    " VALUES(?,?,?,?,?)",
-                    (f"openjlpt-{level.lower()}-lesson-{n}",
-                     f"{level} Lesson {n} (OpenJLPT)", level, "course",
-                     json.dumps(cards, ensure_ascii=False)),
-                )
-                stats["courses"] += 1
-            except sqlite3.Error:
-                pass
+            con.execute(
+                "INSERT OR REPLACE INTO courses(id,title,level,kind,cards_json)"
+                " VALUES(?,?,?,?,?)",
+                (f"openjlpt-{level.lower()}-lesson-{n}",
+                 f"{level} Lesson {n} (OpenJLPT)", level, "course",
+                 json.dumps(cards, ensure_ascii=False)),
+            )
+            stats["courses"] += 1
     for level in LEVELS:
         p = CONTENT / f"grammar-{level.lower()}.csv"
         if not p.is_file():
@@ -157,16 +137,13 @@ def import_openjlpt_into(con: sqlite3.Connection) -> dict[str, int]:
                 )
                 cards.append({"front": pat, "back": mean, "reading": "", "note": note})
         if cards:
-            try:
-                con.execute(
-                    "INSERT OR REPLACE INTO grammar_decks"
-                    "(id,title,level,kind,cards_json) VALUES(?,?,?,?,?)",
-                    (f"openjlpt-grammar-{level.lower()}",
-                     f"{level} Grammar (OpenJLPT)", level, "grammar",
-                     json.dumps(cards, ensure_ascii=False)),
-                )
-                stats["grammar"] += 1
-            except sqlite3.Error:
-                pass
+            con.execute(
+                "INSERT OR REPLACE INTO grammar_decks"
+                "(id,title,level,kind,cards_json) VALUES(?,?,?,?,?)",
+                (f"openjlpt-grammar-{level.lower()}",
+                 f"{level} Grammar (OpenJLPT)", level, "grammar",
+                 json.dumps(cards, ensure_ascii=False)),
+            )
+            stats["grammar"] += 1
     log.info("OpenJLPT import: %s", stats)
     return stats

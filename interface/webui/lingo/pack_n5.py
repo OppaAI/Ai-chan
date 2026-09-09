@@ -12,7 +12,7 @@ CSV = """私|わたし|I; me|kanji|pronoun
 水|みず|water|kanji|noun
 お茶|おちゃ|tea|kanji|noun
 ご飯|ごはん|cooked rice; meal|kanji|noun
-パン|パン|bread|kanji|katakana
+パン|パン|bread|katakana|katakana
 魚|さかな|fish|kanji|noun
 肉|にく|meat|kanji|noun
 野菜|やさい|vegetable|kanji|noun
@@ -85,16 +85,16 @@ CSV = """私|わたし|I; me|kanji|pronoun
 遅い|おそい|late; slow|kanji|i-adj
 多い|おおい|many|kanji|i-adj
 少ない|すくない|few|kanji|i-adj
-ありがとう|ありがとう|thank you|kanji|phrase
-すみません|すみません|excuse me; sorry|kanji|phrase
-おはよう|おはよう|good morning|kanji|phrase
-こんにちは|こんにちは|hello|kanji|phrase
-こんばんは|こんばんは|good evening|kanji|phrase
-さようなら|さようなら|goodbye|kanji|phrase
-はい|はい|yes|kanji|phrase
-いいえ|いいえ|no|kanji|phrase
-お願いします|おねがいします|please|kanji|phrase
-大丈夫|だいじょうぶ|all right; OK|kanji|phrase
+ありがとう|ありがとう|thank you|phrase|phrase
+すみません|すみません|excuse me; sorry|phrase|phrase
+おはよう|おはよう|good morning|phrase|phrase
+こんにちは|こんにちは|hello|phrase|phrase
+こんばんは|こんばんは|good evening|phrase|phrase
+さようなら|さようなら|goodbye|phrase|phrase
+はい|はい|yes|phrase|phrase
+いいえ|いいえ|no|phrase|phrase
+お願いします|おねがいします|please|phrase|phrase
+大丈夫|だいじょうぶ|all right; OK|phrase|phrase
 猫|ねこ|cat|kanji|noun
 犬|いぬ|dog|kanji|noun
 雨|あめ|rain|kanji|noun

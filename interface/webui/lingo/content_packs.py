@@ -127,14 +127,20 @@ GRAMMAR_JSON = r"""[
     "level": "N1",
     "kind": "grammar",
     "cards": [
-      {"front": "〜極まる", "back": "extremely…", "reading": "きわまる", "note": ""},
-      {"front": "〜ずにはおかない", "back": "bound to…", "reading": "", "note": ""},
-      {"front": "〜ないではいられない", "back": "cannot help doing", "reading": "", "note": ""},
-      {"front": "〜とはいえ", "back": "though; nevertheless", "reading": "", "note": ""},
-      {"front": "〜ならでは", "back": "unique to…", "reading": "", "note": ""},
-      {"front": "〜をよそに", "back": "ignoring; despite", "reading": "", "note": ""},
-      {"front": "〜を皮切りに", "back": "starting with", "reading": "をかわきりに", "note": ""},
-      {"front": "〜に即して", "back": "in accordance with", "reading": "にそくして", "note": ""}
+      {"front": "〜極まる", "back": "extremely…", "reading": "〜きわまる", "note": ""},
+      {"front": "〜ずにはおかない", "back": "bound to…", "reading": "〜ずにはおかない", "note": ""},
+      {"front": "〜ないではいられない", "back": "cannot help doing", "reading": "〜ないではいられない", "note": ""},
+      {"front": "〜んばかりに", "back": "as if about to", "reading": "〜んばかりに", "note": ""},
+      {"front": "〜ともなく", "back": "without really…", "reading": "〜ともなく", "note": ""},
+      {"front": "〜とはいえ", "back": "though; nevertheless", "reading": "〜とはいえ", "note": ""},
+      {"front": "〜ならでは", "back": "unique to…", "reading": "〜ならでは", "note": ""},
+      {"front": "〜にして", "back": "even for…; only after", "reading": "〜にして", "note": ""},
+      {"front": "〜をもって", "back": "with; by means of", "reading": "〜をもって", "note": ""},
+      {"front": "〜をよそに", "back": "ignoring; despite", "reading": "〜をよそに", "note": ""},
+      {"front": "〜を皮切りに", "back": "starting with", "reading": "〜をかわきりに", "note": ""},
+      {"front": "〜を機に", "back": "taking the opportunity", "reading": "〜をきに", "note": ""},
+      {"front": "〜に即して", "back": "in accordance with", "reading": "〜にそくして", "note": ""},
+      {"front": "〜に則って", "back": "in line with (rules)", "reading": "〜にのっとって", "note": ""}
     ]
   }
 ]"""

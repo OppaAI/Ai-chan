@@ -64,13 +64,9 @@ def import_curated_into(con: sqlite3.Connection) -> dict[str, int]:
     stats = {"jlpt_cards": 0, "vocab_pool": 0, "courses": 0, "grammar": 0}
     cols = {r[1] for r in con.execute("PRAGMA table_info(vocab_pool)").fetchall()}
     if "source" not in cols:
-        try:
-            con.execute(
-                "ALTER TABLE vocab_pool ADD COLUMN source TEXT NOT NULL DEFAULT 'spawn'"
-            )
-            cols.add("source")
-        except sqlite3.Error:
-            pass
+        con.execute(
+            "ALTER TABLE vocab_pool ADD COLUMN source TEXT NOT NULL DEFAULT 'spawn'"
+        )
 
     kinds_ok = {"hiragana", "katakana", "kanji", "phrase", "sentence"}
     banks = _parse_csv_banks()
@@ -84,80 +80,49 @@ def import_curated_into(con: sqlite3.Connection) -> dict[str, int]:
             if not front or not back:
                 continue
             cid = f"{level}-c-{i:04d}"
-            try:
-                before = con.total_changes
-                con.execute(
-                    "INSERT OR IGNORE INTO jlpt_cards"
-                    "(id,level,kind,front,reading,back,note,source) VALUES(?,?,?,?,?,?,?,?)",
-                    (
-                        cid, level,
-                        "vocab" if kind == "kanji" else kind,
-                        front, reading, back, note, "curated",
-                    ),
-                )
-                if con.total_changes > before:
-                    stats["jlpt_cards"] += 1
-            except sqlite3.Error:
-                pass
+            before = con.total_changes
+            con.execute(
+                "INSERT OR IGNORE INTO jlpt_cards"
+                "(id,level,kind,front,reading,back,note,source) VALUES(?,?,?,?,?,?,?,?)",
+                (
+                    cid, level,
+                    "vocab" if kind == "kanji" else kind,
+                    front, reading, back, note, "curated",
+                ),
+            )
+            if con.total_changes > before:
+                stats["jlpt_cards"] += 1
             pool_kind = kind if kind in kinds_ok else "kanji"
-            try:
-                if "source" in cols:
-                    cur = con.execute(
-                        "INSERT OR IGNORE INTO vocab_pool"
-                        "(front,back,reading,kind,level,used_count,created_at,source)"
-                        " VALUES(?,?,?,?,?,0,?,?)",
-                        (front, back, reading, pool_kind, level, time.time(), "curated"),
-                    )
-                else:
-                    cur = con.execute(
-                        "INSERT OR IGNORE INTO vocab_pool"
-                        "(front,back,reading,kind,level,used_count,created_at)"
-                        " VALUES(?,?,?,?,?,0,?)",
-                        (front, back, reading, pool_kind, level, time.time()),
-                    )
-                if cur.rowcount:
-                    stats["vocab_pool"] += 1
-            except sqlite3.Error:
-                try:
-                    cur = con.execute(
-                        "INSERT OR IGNORE INTO vocab_pool"
-                        "(front,back,reading,kind,level,used_count,created_at)"
-                        " VALUES(?,?,?,?,?,0,?)",
-                        (front, back, reading, pool_kind, level, time.time()),
-                    )
-                    if cur.rowcount:
-                        stats["vocab_pool"] += 1
-                except sqlite3.Error:
-                    pass
+            cur = con.execute(
+                "INSERT INTO vocab_pool"
+                "(front,back,reading,kind,level,used_count,created_at,source)"
+                " VALUES(?,?,?,?,?,0,?,?)"
+                " ON CONFLICT(front,back) DO UPDATE SET"
+                " level=excluded.level, source='curated'",
+                (front, back, reading, pool_kind, level, time.time(), "curated"),
+            )
+            if cur.rowcount:
+                stats["vocab_pool"] += 1
 
     for c in _courses_from_banks(banks):
-        try:
-            con.execute(
-                "INSERT OR REPLACE INTO courses(id,title,level,kind,cards_json)"
-                " VALUES(?,?,?,?,?)",
-                (c["id"], c["title"], c["level"], c["kind"],
-                 json.dumps(c["cards"], ensure_ascii=False)),
-            )
-            stats["courses"] += 1
-        except sqlite3.Error:
-            pass
+        con.execute(
+            "INSERT OR REPLACE INTO courses(id,title,level,kind,cards_json)"
+            " VALUES(?,?,?,?,?)",
+            (c["id"], c["title"], c["level"], c["kind"],
+             json.dumps(c["cards"], ensure_ascii=False)),
+        )
+        stats["courses"] += 1
 
-    try:
-        grammar = json.loads(GRAMMAR_JSON)
-    except Exception:
-        grammar = []
+    grammar = json.loads(GRAMMAR_JSON)
     for g in grammar:
-        try:
-            con.execute(
-                "INSERT OR REPLACE INTO grammar_decks(id,title,level,kind,cards_json)"
-                " VALUES(?,?,?,?,?)",
-                (g["id"], g.get("title") or g["id"], g.get("level") or "N5",
-                 g.get("kind") or "grammar",
-                 json.dumps(g.get("cards") or [], ensure_ascii=False)),
-            )
-            stats["grammar"] += 1
-        except sqlite3.Error:
-            pass
+        con.execute(
+            "INSERT OR REPLACE INTO grammar_decks(id,title,level,kind,cards_json)"
+            " VALUES(?,?,?,?,?)",
+            (g["id"], g.get("title") or g["id"], g.get("level") or "N5",
+             g.get("kind") or "grammar",
+             json.dumps(g.get("cards") or [], ensure_ascii=False)),
+        )
+        stats["grammar"] += 1
 
     log.info("Curated import: %s", stats)
     return stats

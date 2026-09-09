@@ -23,7 +23,7 @@ from pathlib import Path
 log = logging.getLogger(__name__)
 
 MATERIALS_DB = Path(__file__).parent / "materials.db"
-MATERIALS_VERSION = "2026.09.09-openjlpt"
+MATERIALS_VERSION = "2026.09.09-openjlpt-v2"
 USER_DB_REL = "agentic/lingo.db"
 
 LEGACY_LEVEL_MAP = {"beginner": "N5", "intermediate": "N3", "advanced": "N1"}
@@ -64,6 +64,7 @@ def _connect(path: Path) -> sqlite3.Connection:
 def init_materials_db(seed: bool = True) -> Path:
     con = _connect(MATERIALS_DB)
     try:
+        con.execute("BEGIN")
         con.execute("""CREATE TABLE IF NOT EXISTS meta (
             key TEXT PRIMARY KEY, value TEXT)""")
         con.execute("""CREATE TABLE IF NOT EXISTS jlpt_cards (
@@ -102,6 +103,9 @@ def init_materials_db(seed: bool = True) -> Path:
                 (MATERIALS_VERSION,),
             )
         con.commit()
+    except Exception:
+        con.rollback()
+        raise
     finally:
         con.close()
     return MATERIALS_DB
@@ -116,21 +120,15 @@ def _seed_materials(con: sqlite3.Connection) -> None:
         print(f"[lingo] OpenJLPT import: {stats}")
         if stats.get("vocab_pool", 0) > 0:
             return
+    except sqlite3.Error:
+        raise
     except Exception:
         log.warning("OpenJLPT seed failed", exc_info=True)
         print("[lingo] OpenJLPT seed failed; trying curated packs")
-    try:
-        from .import_bank import import_curated_into
-        stats = import_curated_into(con)
-        log.info("curated fallback seed: %s", stats)
-        print(f"[lingo] curated import: {stats}")
-    except Exception as e:
-        log.warning("curated import failed: %s", e)
-        con.execute(
-            "INSERT OR IGNORE INTO jlpt_cards"
-            "(id,level,kind,front,reading,back,note,source) VALUES(?,?,?,?,?,?,?,?)",
-            ("N5-v-0001", "N5", "vocab", "ねこ", "ねこ", "cat", "daily noun", "seed"),
-        )
+    from .import_bank import import_curated_into
+    stats = import_curated_into(con)
+    log.info("curated fallback seed: %s", stats)
+    print(f"[lingo] curated import: {stats}")
 
 
 def materials_count() -> dict:

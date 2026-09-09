@@ -10,11 +10,11 @@ CSV = """抽象的|ちゅうしょうてき|abstract|kanji|na-adj
 推論|すいろん|inference|kanji|noun
 演繹|えんえき|deduction|kanji|noun
 帰納|きのう|induction|kanji|noun
-パラダイム|パラダイム|paradigm|kanji|katakana
-レトリック|レトリック|rhetoric|kanji|katakana
-イデオロギー|イデオロギー|ideology|kanji|katakana
-コンセンサス|コンセンサス|consensus|kanji|katakana
-ディスコース|ディスコース|discourse|kanji|katakana
+パラダイム|パラダイム|paradigm|katakana|katakana
+レトリック|レトリック|rhetoric|katakana|katakana
+イデオロギー|イデオロギー|ideology|katakana|katakana
+コンセンサス|コンセンサス|consensus|katakana|katakana
+ディスコース|ディスコース|discourse|katakana|katakana
 言説|げんせつ|discourse|kanji|noun
 表象|ひょうしょう|representation|kanji|noun
 認識|にんしき|cognition; recognition|kanji|noun
@@ -115,18 +115,4 @@ CSV = """抽象的|ちゅうしょうてき|abstract|kanji|na-adj
 矜持を失う|きょうじをうしなう|to lose one's pride|kanji|phrase
 気概|きがい|spirit; backbone|kanji|noun
 気骨|きこつ|backbone; grit|kanji|noun
-気骨のある|きこつのある|spirited; principled|kanji|phrase
-〜極まる|〜きわまる|extremely…|kanji|grammar
-〜ずにはおかない|〜ずにはおかない|bound to…|kanji|grammar
-〜ないではいられない|〜ないではいられない|cannot help doing|kanji|grammar
-〜んばかりに|〜んばかりに|as if about to|kanji|grammar
-〜ともなく|〜ともなく|without really…|kanji|grammar
-〜とはいえ|〜とはいえ|though; nevertheless|kanji|grammar
-〜ならでは|〜ならでは|unique to…|kanji|grammar
-〜にして|〜にして|even for…; only after|kanji|grammar
-〜をもって|〜をもって|with; by means of|kanji|grammar
-〜をよそに|〜をよそに|ignoring; despite|kanji|grammar
-〜を皮切りに|〜をかわきりに|starting with|kanji|grammar
-〜を機に|〜をきに|taking the opportunity|kanji|grammar
-〜に即して|〜にそくして|in accordance with|kanji|grammar
-〜に則って|〜にのっとって|in line with (rules)|kanji|grammar"""
+気骨のある|きこつのある|spirited; principled|kanji|phrase"""
