@@ -141,22 +141,11 @@
   "greenhouse_source": {
     "enabled": true,
     "board_tokens": [
-      "openai",
       "anthropic",
       "databricks",
-      "snowflake",
-      "shopify",
       "hootsuite",
-      "clio",
-      "visier",
-      "trulioo",
-      "amazon",
-      "microsoft",
-      "salesforce",
       "coinbase",
       "stripe",
-      "figma",
-      "notion",
       "asana",
       "mongodb",
       "datadog"
@@ -165,16 +154,10 @@
   },
   "max_greenhouse_posts": 10,
   "lever_source": {
-    "enabled": true,
-    "company_tokens": [
-      "https://jobs.lever.co/shopify",
-      "https://jobs.lever.co/hootsuite",
-      "https://jobs.lever.co/clio",
-      "https://jobs.lever.co/visier",
-      "https://jobs.lever.co/amazon",
-      "https://jobs.lever.co/datadog"
-    ],
-    "max_posts": 10
+    "enabled": false,
+    "company_tokens": [],
+    "max_posts": 10,
+    "note": "Disabled 2026-09-09: api.lever.co/v0/postings returns 404/Document-not-found even for real Lever customers; re-enable only with tokens verified against that endpoint."
   },
   "ashby_source": {
     "enabled": true,

@@ -429,8 +429,29 @@ def _rss_link(entry: ET.Element) -> str:
     return link_el.attrib.get("href", "").strip() if link_el is not None else ""
 
 
+# Query params that identify the tracker, not the posting. Stripped from
+# dedupe keys; every other param is significant (e.g. CivicJobs identifies
+# postings by ?id= — an earlier version dropped the whole query string, which
+# collapsed ALL CivicJobs postings into one key and silently suppressed the
+# entire feed after the first sighting).
+_TRACKING_QUERY_PARAMS = frozenset({
+    "utm_source", "utm_medium", "utm_campaign", "utm_term", "utm_content",
+    "utm_id", "fbclid", "gclid", "gclsrc", "mc_cid", "mc_eid", "igshid",
+    "vero_id", "mkt_tok", "wickedid", "yclid", "msclkid", "ttclid",
+})
+
+
 def _dedupe_key(link: str, guid: str) -> tuple[str, str]:
-    return (link or guid).split("?", 1)[0].rstrip("/").casefold(), guid.casefold()
+    raw = (link or guid or "").strip()
+    base = raw.split("#", 1)[0].strip()
+    if "?" in base:
+        head, qs = base.split("?", 1)
+        kept = [
+            part for part in qs.split("&")
+            if part and part.split("=", 1)[0].strip().casefold() not in _TRACKING_QUERY_PARAMS
+        ]
+        base = head + ("?" + "&".join(kept) if kept else "")
+    return base.rstrip("/").casefold(), (guid or "").strip().casefold()
 
 
 # ── Cross-run dedup ledger ────────────────────────────────────────────────
@@ -456,6 +477,7 @@ def _dedup_load() -> dict[str, str]:
 
 def _dedup_save(ledger: dict[str, str]) -> None:
     try:
+        _dedup_ledger_path().parent.mkdir(parents=True, exist_ok=True)
         _dedup_ledger_path().write_text(
             json.dumps(ledger, ensure_ascii=False, indent=2) + "\n",
             encoding="utf-8",
@@ -995,6 +1017,7 @@ def fetch_today_jobs_from_greenhouse(
     filter_keywords: bool = True,
     filter_date: bool = True,
     board_tokens: list[str] | None = None,
+    filter_dedup: bool = True,
 ) -> list[dict]:
     """
     Fetch recent job postings from configured Greenhouse Job Board API boards.
@@ -1005,6 +1028,9 @@ def fetch_today_jobs_from_greenhouse(
     	filter_date (bool): Whether to retain only postings within the configured date range.
         board_tokens (list[str] | None): Explicit board tokens to fetch. When provided,
             configuration and environment token resolution is bypassed.
+        filter_dedup (bool): Whether to exclude postings already recorded in the
+            deduplication ledger (same cross-run ledger the RSS fetcher uses,
+            so nightly re-runs don't re-draft the same board postings).
     
     Returns:
     	list[dict]: Normalized, deduplicated Greenhouse job postings.
@@ -1020,6 +1046,10 @@ def fetch_today_jobs_from_greenhouse(
     kept: list[dict] = []
     seen_ids: set[str] = set()
     dropped_location = 0
+
+    days = _cfg(config, "dedup_days", "JOB_HUNT_DEDUP_DAYS", 3, "int")
+    now_iso = local_now().isoformat()
+    ledger = _dedup_prune(_dedup_load(), days) if filter_dedup else {}
 
     log.info("[job_hunt] fetch_today_jobs_from_greenhouse: boards=%d, keywords=%d, max_days=%d, filter_date=%s, location_filter=%s",
              len(tokens), len(keywords), max_days, filter_date, loc_filter.get("enabled"))
@@ -1053,6 +1083,8 @@ def fetch_today_jobs_from_greenhouse(
             link_key, guid_key = _dedupe_key(link, guid)
             if link_key in seen_ids or guid_key in seen_ids:
                 continue
+            if filter_dedup and _dedup_is_known(ledger, link_key, guid_key):
+                continue
             seen_ids.update({link_key, guid_key})
             location = job.get("location") if isinstance(job.get("location"), dict) else {}
             posting = {
@@ -1076,6 +1108,13 @@ def fetch_today_jobs_from_greenhouse(
             kept.append(posting)
     if dropped_location:
         log.info("[job_hunt] fetch_today_jobs_from_greenhouse: location filter dropped %d postings", dropped_location)
+    if filter_dedup:
+        for posting in kept:
+            lk, gk = _dedupe_key(posting.get("url", ""), posting.get("guid", ""))
+            for probe in (lk, gk):
+                if probe:
+                    ledger[probe] = now_iso
+        _dedup_save(ledger)
     return kept
 
 
@@ -1118,6 +1157,7 @@ def fetch_today_jobs_from_lever(
     filter_keywords: bool = True,
     filter_date: bool = True,
     company_tokens: list[str] | None = None,
+    filter_dedup: bool = True,
 ) -> list[dict]:
     """
     Fetch configured Lever job postings and normalize their relevant details.
@@ -1126,6 +1166,8 @@ def fetch_today_jobs_from_lever(
         config (dict[str, Any] | None): Optional job-hunt configuration.
         filter_keywords (bool): Whether to keep postings matching configured job keywords.
         filter_date (bool): Whether to keep postings within the configured date range.
+        filter_dedup (bool): Whether to exclude postings already recorded in the
+            deduplication ledger (same cross-run ledger the RSS fetcher uses).
     
     Returns:
         list[dict]: Normalized Lever postings that pass the enabled filters.
@@ -1138,6 +1180,10 @@ def fetch_today_jobs_from_lever(
     max_days = _cfg(config, "date_range_days", "JOB_HUNT_DATE_RANGE_DAYS", 1, "int")
     base_url = str(source_cfg.get("base_url") or "https://api.lever.co/v0/postings").rstrip("/")
     kept: list[dict] = []
+    seen_ids: set[str] = set()
+    days = _cfg(config, "dedup_days", "JOB_HUNT_DEDUP_DAYS", 3, "int")
+    now_iso = local_now().isoformat()
+    ledger = _dedup_prune(_dedup_load(), days) if filter_dedup else {}
     for token in tokens:
         url = f"{base_url}/{token}?mode=json"
         try:
@@ -1159,12 +1205,27 @@ def fetch_today_jobs_from_lever(
             if not _matches_job_keywords(f"{title} {text}", keywords):
                 continue
             cats = job.get("categories") if isinstance(job.get("categories"), dict) else {}
+            link = str(job.get("hostedUrl") or job.get("applyUrl") or "").strip()
+            guid = f"lever:{token}:{job.get('id') or job.get('hostedUrl')}"
+            link_key, guid_key = _dedupe_key(link, guid)
+            if link_key in seen_ids or guid_key in seen_ids:
+                continue
+            if filter_dedup and _dedup_is_known(ledger, link_key, guid_key):
+                continue
+            seen_ids.update({link_key, guid_key})
             kept.append({
-                "title": title or "Untitled role", "organization": token, "url": str(job.get("hostedUrl") or job.get("applyUrl") or "").strip(),
-                "guid": f"lever:{token}:{job.get('id') or job.get('hostedUrl')}", "summary": text, "location": str(cats.get("location") or "").strip(),
+                "title": title or "Untitled role", "organization": token, "url": link,
+                "guid": guid, "summary": text, "location": str(cats.get("location") or "").strip(),
                 "employment_type": str(cats.get("commitment") or "").strip(), "salary": "", "experience": str(cats.get("level") or "").strip(),
                 "close_date": "", "posted_date": posted.isoformat() if posted else "", "source_feed": url, "source": "lever",
             })
+    if filter_dedup:
+        for posting in kept:
+            lk, gk = _dedupe_key(posting.get("url", ""), posting.get("guid", ""))
+            for probe in (lk, gk):
+                if probe:
+                    ledger[probe] = now_iso
+        _dedup_save(ledger)
     return kept
 
 
@@ -1173,17 +1234,21 @@ def fetch_today_jobs_from_ashby(
     filter_keywords: bool = True,
     filter_date: bool = True,
     company_tokens: list[str] | None = None,
+    filter_dedup: bool = True,
 ) -> list[dict]:
     """
     Fetch configured Ashby job-board postings that match the selected filters.
     
     Parameters:
-        config (dict[str, Any] | None): Optional job-hunt configuration.
-        filter_keywords (bool): Whether to apply configured job keywords.
-        filter_date (bool): Whether to keep postings within the configured date range.
+    	config (dict[str, Any] | None): Optional job-hunt configuration.
+    	filter_keywords (bool): Whether to apply configured job keywords.
+    	filter_date (bool): Whether to keep postings within the configured date range.
+        filter_dedup (bool): Whether to exclude postings already recorded in the
+            deduplication ledger (same cross-run ledger the RSS fetcher uses,
+            so nightly re-runs don't re-draft the same board postings).
     
     Returns:
-        list[dict]: Normalized Ashby job postings.
+    	list[dict]: Normalized Ashby job postings.
     """
     config = config or _job_config()
     source_cfg = config.get("ashby_source") if isinstance(config.get("ashby_source"), dict) else {}
@@ -1194,7 +1259,11 @@ def fetch_today_jobs_from_ashby(
     max_days = _cfg(config, "date_range_days", "JOB_HUNT_DATE_RANGE_DAYS", 1, "int")
     base_url = str(source_cfg.get("base_url") or "https://api.ashbyhq.com/posting-api/job-board").rstrip("/")
     kept: list[dict] = []
+    seen_ids: set[str] = set()
     dropped_location = 0
+    days = _cfg(config, "dedup_days", "JOB_HUNT_DEDUP_DAYS", 3, "int")
+    now_iso = local_now().isoformat()
+    ledger = _dedup_prune(_dedup_load(), days) if filter_dedup else {}
     for token in tokens:
         url = f"{base_url}/{token}?includeCompensation=true"
         try:
@@ -1216,9 +1285,17 @@ def fetch_today_jobs_from_ashby(
             if not _matches_job_keywords(f"{title} {summary}", keywords):
                 continue
             comp = job.get("compensation") if isinstance(job.get("compensation"), dict) else {}
+            link = str(job.get("jobUrl") or job.get("applyUrl") or "").strip()
+            guid = f"ashby:{token}:{job.get('id') or job.get('jobUrl')}"
+            link_key, guid_key = _dedupe_key(link, guid)
+            if link_key in seen_ids or guid_key in seen_ids:
+                continue
+            if filter_dedup and _dedup_is_known(ledger, link_key, guid_key):
+                continue
+            seen_ids.update({link_key, guid_key})
             posting = {
-                "title": title or "Untitled role", "organization": token, "url": str(job.get("jobUrl") or job.get("applyUrl") or "").strip(),
-                "guid": f"ashby:{token}:{job.get('id') or job.get('jobUrl')}", "summary": summary, "location": str(job.get("locationName") or "").strip(),
+                "title": title or "Untitled role", "organization": token, "url": link,
+                "guid": guid, "summary": summary, "location": str(job.get("locationName") or "").strip(),
                 "address": job.get("address") if isinstance(job.get("address"), dict) else {},
                 "employment_type": str(job.get("employmentType") or "").strip(),
                 "is_remote": bool(job.get("isRemote") or job.get("workplaceType") == "Remote"),
@@ -1231,6 +1308,13 @@ def fetch_today_jobs_from_ashby(
             kept.append(posting)
     if dropped_location:
         log.info("[job_hunt] fetch_today_jobs_from_ashby: location filter dropped %d postings", dropped_location)
+    if filter_dedup:
+        for posting in kept:
+            lk, gk = _dedupe_key(posting.get("url", ""), posting.get("guid", ""))
+            for probe in (lk, gk):
+                if probe:
+                    ledger[probe] = now_iso
+        _dedup_save(ledger)
     return kept
 
 
@@ -1275,6 +1359,8 @@ def _read_email_messages(max_results: int, folder: str = "inbox", unread: bool =
             result = spec.handler(**kwargs)
 
         if not isinstance(result, dict) or not result.get("ok"):
+            log.warning("Lane D email: read_email MCP returned not-ok: %s",
+                        str(result)[:200] if isinstance(result, dict) else type(result).__name__)
             return []
         messages = result.get("messages") or []
         seen = set()
@@ -2769,6 +2855,25 @@ def _fetch_email_branch(date_str: str, config: dict[str, Any], can_reuse: bool) 
     return postings, source_info, source_failures
 
 
+def _merge_dedupe_postings(postings: list[dict]) -> list[dict]:
+    """Drop exact URL/guid repeats across sources within a single run.
+
+    The same role is often cross-posted to two boards; without this the run
+    drafts it twice.
+    """
+    seen: set[str] = set()
+    merged: list[dict] = []
+    for p in postings:
+        if not isinstance(p, dict):
+            continue
+        lk, gk = _dedupe_key(str(p.get("url") or ""), str(p.get("guid") or ""))
+        if (lk and lk in seen) or (gk and gk in seen):
+            continue
+        seen.update({lk, gk} - {""})
+        merged.append(p)
+    return merged
+
+
 def fetch_rss_and_email_into_state(plan_json: str, *, state=None) -> str:
     """
     Fetch job listings from configured RSS, API, and email sources.
@@ -2854,6 +2959,10 @@ def fetch_rss_and_email_into_state(plan_json: str, *, state=None) -> str:
                     source_failures.append(failure)
 
     keywords = [kw.casefold() for kw in _cfg(config, "job_keywords", "JOB_KEYWORDS", [], "list")]
+    # Merge-duplicate: the same posting can surface from two sources (e.g. a
+    # role cross-posted to two boards). Drop exact URL/guid repeats here so
+    # one job is never drafted twice in a single run.
+    all_postings = _merge_dedupe_postings(all_postings)
     # Source tasks complete in configuration order, not relevance order. Rank
     # the combined result before the global cap so the first broad feed cannot
     # crowd out IT jobs discovered by later feeds or email digests.
@@ -2995,6 +3104,39 @@ def draft_single_job(
     return json.dumps({"success": True, "draft": draft})
 
 
+def _existing_draft_keys() -> set[str]:
+    """Dedupe keys of every draft already on disk (pending AND rejected).
+
+    Scans <job_post_social_root>/{date, rejected/date}/.../draft.json for
+    posting url/guid keys. Makes save_single_job_draft idempotent: re-runs
+    (double-fired scheduler, retries, manual re-runs) can never stack a
+    second directory for the same posting.
+    """
+    keys: set[str] = set()
+    try:
+        from agentic.toolkit.social import job_post_social_root
+        root = job_post_social_root()
+    except Exception:
+        return keys
+    for pattern in ("*/*/*/draft.json", "rejected/*/*/*/draft.json"):
+        try:
+            paths = sorted(root.glob(pattern))
+        except Exception:
+            continue
+        for p in paths:
+            try:
+                meta = json.loads(p.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                continue
+            posting = meta.get("posting") or {}
+            url = str(posting.get("url") or "").strip()
+            guid = str(posting.get("guid") or "").strip()
+            if url or guid:
+                lk, gk = _dedupe_key(url, guid)
+                keys.update({lk, gk} - {""})
+    return keys
+
+
 def save_single_job_draft(auto_post: str = "false", *, state=None) -> str:
     """Save the most recently drafted job to disk."""
     if state is None:
@@ -3005,6 +3147,22 @@ def save_single_job_draft(auto_post: str = "false", *, state=None) -> str:
         return json.dumps({"success": False, "reason": "no_drafts"})
 
     draft = drafts_list[-1]
+
+    text = draft.get("text", "").strip()
+    if not text:
+        # Never persist zero-byte noise: a draft with no post text helps
+        # nobody and clutters review. Caller treats failure as retryable.
+        return json.dumps({"success": False, "reason": "empty_draft_text"})
+
+    # Idempotency: skip when a draft for the same posting already exists.
+    posting = draft.get("posting") or {}
+    new_lk, new_gk = _dedupe_key(
+        str(posting.get("url") or ""), str(posting.get("guid") or ""))
+    if (new_lk or new_gk) and ({new_lk, new_gk} - {""}) & _existing_draft_keys():
+        log.info("[job_hunt] save_single_job_draft: draft already exists, skipping (%s)",
+                 new_lk or new_gk)
+        return json.dumps({"success": True, "deduped": True, "reason": "draft_exists"})
+
     from agentic.toolkit.social import job_post_social_root
 
     date_str = local_now().strftime("%Y-%m-%d")
