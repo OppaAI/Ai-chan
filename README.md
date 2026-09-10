@@ -337,3 +337,22 @@ If you find this project useful, consider buying me a coffee ☕
 - Lane D creates one Threads teaser-list draft per night at 23:00 for tech jobs available today, using only the configured CivicJobs.ca Lower Mainland RSS and Job Bank Canada filtered RSS feeds, filtered by TECH_JOB_KEYWORDS.
 - Bluesky, Mastodon, and YouTube are one-way posting tools only, not two-way adapters.
 - Nightly reflection remains native GitHub/Hugo publishing rather than MCP.
+
+
+## Third-Party Data
+
+This project uses the JLPT vocabulary and kanji dataset from
+[OpenJLPT](https://github.com/evanclan/OpenJLPT) (© evanclan),
+licensed under CC BY-SA 4.0: https://creativecommons.org/licenses/by-sa/4.0/
+
+Used unmodified, as distributed.
+
+OpenJLPT itself is built from:
+- JLPT level lists by Jonathan Waller (https://www.tanos.co.uk/jlpt/) — CC BY
+- KANJIDIC2 (Electronic Dictionary Research and Development Group,
+  https://www.edrdg.org/wiki/KANJIDIC_Project.html) — CC BY-SA 4.0
+- Example sentences from Tatoeba (https://tatoeba.org) — CC-licensed
+
+See OpenJLPT's own NOTICE.md for the complete field-by-field source list.
+
+This work (the dataset as included here) remains licensed under CC BY-SA 4.0.
