@@ -182,6 +182,24 @@ def check_tts_rate_limit(uid: str) -> bool:
         return True
 
 
+def _clean_tts_text(text: str) -> str:
+    """Speech-ready Japanese: strip what a voice must never read aloud.
+
+    - 〜/～ pattern markers (grammar cards like 〜です speak as です),
+    - （…） glosses containing Latin (e.g. 〜が（but） speaks as が),
+    - bare / separators become a pause 、so alternatives don't read as
+      "slash" (e.g. がいます / があります),
+    - then the long-standing rules: Latin chars, emptied () parens.
+    """
+    clean_text = re.sub(r'[〜～~]', '', text or '')
+    clean_text = re.sub(r'（[^（）]*[a-zA-Z][^（）]*）', '', clean_text)
+    clean_text = re.sub(r'\s*/\s*', '、', clean_text)
+    clean_text = re.sub(r'[a-zA-Z]', '', clean_text)
+    clean_text = re.sub(r'\(\s*\)', '', clean_text)
+    clean_text = re.sub(r'\s{2,}', ' ', clean_text).strip()
+    return clean_text
+
+
 def get_cached_lingo_audio(text: str, uid: Optional[str] = None) -> Optional[str]:
     """
     Returns a cached or freshly synthesized audio URL, or None if the text
@@ -193,9 +211,7 @@ def get_cached_lingo_audio(text: str, uid: Optional[str] = None) -> Optional[str
     """
     if not is_valid_text(text):
         return None
-    clean_text = re.sub(r'[a-zA-Z]', '', text)
-    clean_text = re.sub(r'\(\s*\)', '', clean_text)
-    clean_text = re.sub(r'\s{2,}', ' ', clean_text).strip()
+    clean_text = _clean_tts_text(text)
     if not is_valid_text(clean_text):
         return None
 
@@ -635,9 +651,7 @@ def generate_lingo_audio(text: str) -> Optional[str]:
     from interface.webui import auth
     if not is_valid_text(text):
         return None
-    clean_text = re.sub(r'[a-zA-Z]', '', text)
-    clean_text = re.sub(r'\(\s*\)', '', clean_text)
-    clean_text = re.sub(r'\s{2,}', ' ', clean_text).strip()
+    clean_text = _clean_tts_text(text)
     if not is_valid_text(clean_text):
         return None
     if not auth.aiko_web_instance or not auth.aiko_web_instance._speak:
@@ -1175,9 +1189,7 @@ def _get_tts_audio_after_rate_check(text: str) -> Optional[str]:
     """
     if not is_valid_text(text):
         return None
-    clean_text = re.sub(r'[a-zA-Z]', '', text)
-    clean_text = re.sub(r'\(\s*\)', '', clean_text)
-    clean_text = re.sub(r'\s{2,}', ' ', clean_text).strip()
+    clean_text = _clean_tts_text(text)
     if not is_valid_text(clean_text):
         return None
 

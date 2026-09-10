@@ -1302,6 +1302,11 @@ def fetch_today_jobs_from_ashby(
                 "salary": str(comp.get("compensationTierSummary") or comp.get("summary") or "").strip(),
                 "experience": "", "close_date": "", "posted_date": posted.isoformat() if posted else "", "source_feed": url, "source": "ashby",
             }
+            if loc_filter.get("enabled") and not _posting_location_text(posting).strip():
+                # Canada-only hunt: an Ashby posting with no location data at
+                # all must not leak through on the "no data = pass" rule.
+                dropped_location += 1
+                continue
             if not _passes_location_filter(posting, loc_filter):
                 dropped_location += 1
                 continue

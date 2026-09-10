@@ -148,17 +148,15 @@
       "stripe",
       "asana",
       "mongodb",
-      "datadog"
+      "datadog",
+      "figma",
+      "instacart",
+      "roblox",
+      "riotgames"
     ],
     "max_posts": 10
   },
   "max_greenhouse_posts": 10,
-  "lever_source": {
-    "enabled": false,
-    "company_tokens": [],
-    "max_posts": 10,
-    "note": "Disabled 2026-09-09: api.lever.co/v0/postings returns 404/Document-not-found even for real Lever customers; re-enable only with tokens verified against that endpoint."
-  },
   "ashby_source": {
     "enabled": true,
     "company_tokens": [
@@ -169,6 +167,5 @@
     ],
     "max_posts": 10
   },
-  "max_lever_posts": 10,
   "max_ashby_posts": 10
 }

@@ -81,6 +81,7 @@ from __future__ import annotations
 import json
 import os
 import threading
+import time
 import uuid
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -2184,6 +2185,16 @@ class ScheduleRunner:
         from agentic.graph_engine import PlanGraph, PlanNode, execute_graph, get_playbook_by_id
 
         graph_id = graph_def.get("graph_id") or graph_def.get("id", "")
+
+        # Lane D runs long and drafts to disk: guard the SCHEDULED path so a
+        # duplicate fire minutes later (stale-cache re-fire, overlapping
+        # loops) can't stack a second full set of drafts. Manual/agent runs
+        # via run_job_post_playbook don't pass through here and are unaffected.
+        # Fail-open: any error in the guard itself must never block the run.
+        if graph_id == "gen_job_post" and self._job_post_run_cooldown_active():
+            log.info("Schedule graph gen_job_post skipped — a run finished <45min ago")
+            return
+
         playbook = get_playbook_by_id(graph_id) or {}
 
         # Resolve PlanGraph from the shared workflow registry (job_hunt, aurora, …)
@@ -2238,8 +2249,43 @@ class ScheduleRunner:
                 "Schedule graph %s completed — ok=%s, nodes=%d",
                 graph.id, all(r.ok for r in result.results), len(result.results),
             )
+            if graph.id == "gen_job_post" and all(r.ok for r in result.results):
+                self._record_job_post_run()
         except Exception as e:
             log.error("Schedule graph %s failed: %s", graph_def.get("id", "?"), e)
+
+    # ── Lane D once-per-night guard ──────────────────────────────────
+    _JOB_POST_COOLDOWN_SECONDS = 45 * 60
+
+    @staticmethod
+    def _job_post_marker_path() -> Path | None:
+        try:
+            from system.userspace import user_state_dir
+
+            d = Path(user_state_dir()) / "agentic" / "workflows" / "job_hunt"
+            d.mkdir(parents=True, exist_ok=True)
+            return d / ".last_graph_run.json"
+        except Exception:
+            return None
+
+    def _job_post_run_cooldown_active(self) -> bool:
+        """True if a successful gen_job_post graph run finished recently."""
+        try:
+            path = self._job_post_marker_path()
+            if path is None or not path.is_file():
+                return False
+            finished = float((json.loads(path.read_text(encoding="utf-8")) or {}).get("finished_at", 0))
+            return (time.time() - finished) < self._JOB_POST_COOLDOWN_SECONDS
+        except Exception:
+            return False
+
+    def _record_job_post_run(self) -> None:
+        try:
+            path = self._job_post_marker_path()
+            if path is not None:
+                path.write_text(json.dumps({"finished_at": time.time()}) + "\n", encoding="utf-8")
+        except Exception:
+            pass
 
 
 def start_scheduler(

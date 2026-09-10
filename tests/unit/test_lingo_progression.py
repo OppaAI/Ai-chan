@@ -119,3 +119,11 @@ def test_get_xp_starts_at_zero():
     assert data["xp"] == 0
     assert data["level"] == 1
     assert data["next_level_xp"] == 100
+
+
+def test_clean_tts_text_skips_pattern_markers():
+    assert router._clean_tts_text("〜です") == "です"
+    assert router._clean_tts_text("〜ます") == "ます"
+    assert router._clean_tts_text("〜が（but）") == "が"
+    assert router._clean_tts_text("〜たことがある") == "たことがある"
+    assert router._clean_tts_text("ねこ") == "ねこ"
