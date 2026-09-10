@@ -87,7 +87,8 @@ def init_materials_db(seed: bool = True) -> Path:
             front TEXT NOT NULL, back TEXT NOT NULL,
             reading TEXT NOT NULL DEFAULT '', kind TEXT NOT NULL DEFAULT 'kanji',
             level TEXT NOT NULL DEFAULT 'N5', used_count INTEGER NOT NULL DEFAULT 0,
-            created_at REAL, UNIQUE(front, back))""")
+            created_at REAL, source TEXT NOT NULL DEFAULT 'spawn',
+            UNIQUE(front, back))""")
         con.execute("""CREATE TABLE IF NOT EXISTS lesson_pool (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             front TEXT NOT NULL, back TEXT NOT NULL,
@@ -229,6 +230,11 @@ def init_user_db(uid: str) -> Path:
             level TEXT PRIMARY KEY, pool_left INTEGER NOT NULL DEFAULT 0,
             due INTEGER NOT NULL DEFAULT 0, grammar_pass INTEGER NOT NULL DEFAULT 0,
             unlocked INTEGER NOT NULL DEFAULT 0)""")
+        con.execute("""CREATE TABLE IF NOT EXISTS lesson_progress (
+            track TEXT NOT NULL, level TEXT NOT NULL,
+            current INTEGER NOT NULL DEFAULT 1,
+            updated_at TEXT NOT NULL DEFAULT '',
+            PRIMARY KEY (track, level))""")
         con.execute("INSERT OR IGNORE INTO user_level(id,level) VALUES(1,'N5')")
         con.execute("INSERT OR IGNORE INTO streaks(id) VALUES(1)")
         con.commit()
@@ -241,3 +247,42 @@ def migrate_user_legacy(uid: str) -> dict:
     summary = {"level": None, "xp": 0, "streak": None, "cards": 0}
     init_user_db(uid)
     return summary
+
+
+# ---------------------------------------------------------------------------
+# Lesson/test progression: one lesson at a time per (track, level).
+# `current` is 1-based; current > lessons_total means every lesson passed and
+# the level final test is unlocked.
+# ---------------------------------------------------------------------------
+VALID_TRACKS = ("vocab", "grammar")
+
+
+def get_lesson_progress(uid: str, track: str, level: str) -> int:
+    path = init_user_db(uid)
+    con = sqlite3.connect(str(path))
+    try:
+        row = con.execute(
+            "SELECT current FROM lesson_progress WHERE track=? AND level=?",
+            (track, normalize_level(level)),
+        ).fetchone()
+        return max(1, int(row[0])) if row else 1
+    finally:
+        con.close()
+
+
+def set_lesson_progress(uid: str, track: str, level: str, current: int) -> int:
+    path = init_user_db(uid)
+    con = sqlite3.connect(str(path))
+    try:
+        con.execute(
+            "INSERT INTO lesson_progress(track, level, current, updated_at)"
+            " VALUES(?,?,?,?)"
+            " ON CONFLICT(track, level) DO UPDATE SET current=excluded.current,"
+            " updated_at=excluded.updated_at",
+            (track, normalize_level(level), max(1, int(current)),
+             datetime.now(timezone.utc).isoformat()),
+        )
+        con.commit()
+        return max(1, int(current))
+    finally:
+        con.close()

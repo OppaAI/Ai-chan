@@ -83,6 +83,7 @@ import os
 import json
 import uuid
 import logging
+import random
 import re
 import time
 import html
@@ -103,6 +104,8 @@ from .models import (
     ReviewCard, ReviewSessionResponse, ReviewResponseRequest, UpdatedCard,
     ReviewResponseData, StatsResponse, XPResponse, WordOfDayResponse,
     LessonCard, LessonDeck, LessonDeckMeta,
+    LessonProgress, TestQuestion, TestSubmitRequest, TestItemResult,
+    TestSubmitResponse,
 )
 from .srs import LingoSRS, ReviewGrade, init_srs_db
 from .vocab import VocabExtractor
@@ -475,18 +478,21 @@ def record_practice(uid: str):
 
 
 def get_xp(uid: str) -> dict:
+    """XP bands of 100: level 1 = 0-99 XP, level 2 = 100-199, ... capped at 10.
+
+    Brand-new users start at 0 (matching _award_xp, which also starts from
+    0), so the very first award never makes the displayed total drop.
+    """
     xp_file = Path(f"data/xp/{uid}.json")
     xp_file.parent.mkdir(parents=True, exist_ok=True)
+    xp = 0
     if xp_file.exists():
         try:
-            data = json.loads(xp_file.read_text())
-            xp = data.get("xp", 347)
-            level = min(10, (xp // 100) + 1)
-            next_level = (level + 1) * 100
-            return {"xp": xp, "level": level, "next_level_xp": next_level}
+            xp = int(json.loads(xp_file.read_text()).get("xp", 0))
         except Exception:
-            pass
-    return {"xp": 347, "level": 1, "next_level_xp": 200}
+            xp = 0
+    level = min(10, (max(0, xp) // 100) + 1)
+    return {"xp": max(0, xp), "level": level, "next_level_xp": level * 100}
 
 
 # FIX #17: pulled out of the /xp/add handler so it can be shared with
@@ -665,15 +671,30 @@ async def translate(request: TranslateRequest, session: dict = Depends(get_lingo
     uid = session["user_id"]  # FIX #14: no silent fallback
     token = set_current_user_id(uid)
     try:
-        system_prompt = (
-            "You are a Japanese translation expert. "
-            "Output ONLY valid JSON. Your response must be a JSON object with a single 'translations' key. "
-            "That key must contain an array of objects, each with 'register' and 'text' keys."
-        )
+        # Auto-direction: Japanese input -> a single natural English
+        # translation (registers make no sense for English output).
+        # Anything else (English, Chinese, French, ...) -> Japanese in
+        # 3-5 registers as before.
+        ja_input = is_japanese_text(request.text)
         escaped_text = html.escape(request.text)
-        user_prompt = (
-            f"Translate the following English text to Japanese in 3-5 different registers: {escaped_text}"
-        )
+        if ja_input:
+            system_prompt = (
+                "You are a Japanese-to-English translation expert. "
+                "Output ONLY valid JSON. Your response must be a JSON object with a single 'translations' key. "
+                "That key must contain an array with EXACTLY ONE object with 'register' ('English') and 'text' keys."
+            )
+            user_prompt = (
+                f"Translate the following Japanese text to natural English: {escaped_text}"
+            )
+        else:
+            system_prompt = (
+                "You are a Japanese translation expert. "
+                "Output ONLY valid JSON. Your response must be a JSON object with a single 'translations' key. "
+                "That key must contain an array of objects, each with 'register' and 'text' keys."
+            )
+            user_prompt = (
+                f"Translate the following text to Japanese in 3-5 different registers: {escaped_text}"
+            )
         response = think._client.chat.completions.create(
             model=think._llm_model,
             messages=[
@@ -1205,12 +1226,15 @@ async def review_respond(request: ReviewResponseRequest, session: dict = Depends
     record_practice(uid)
     _award_xp(uid, _REVIEW_XP_BY_GRADE.get(grade, 5))
 
+    # Toast the word that was JUST reviewed (updated_card carries its
+    # hiragana/meaning). The old code toasted get_due_cards()[0], which after
+    # grading is the NEXT due card -- i.e. the wrong word.
     toast = None
     if grade == ReviewGrade.EASY:
-        preview_cards = srs.get_due_cards(limit=1)
-        if preview_cards:
-            c = preview_cards[0]
-            toast = Toast(type="info", message=f"🌟 {c.hiragana} = {c.meaning}")
+        toast = Toast(
+            type="info",
+            message=f"🌟 {updated_card.hiragana} = {updated_card.meaning}",
+        )
 
     due_cards = srs.get_due_cards(limit=1)
     next_card = None
@@ -1220,7 +1244,8 @@ async def review_respond(request: ReviewResponseRequest, session: dict = Depends
             card_id=c.id,
             hiragana=c.hiragana,
             meaning=c.meaning,
-            context=c.context or ""
+            context=c.context or "",
+            kanji=c.kanji or None,
         )
 
     return ReviewResponseData(
@@ -1250,7 +1275,8 @@ async def get_stats(session: dict = Depends(get_lingo_session)):
     # just whatever's next in due-date order.
     weak_cards = srs.get_weak_vocab(limit=6)
     weak_vocab = [
-        ReviewCard(card_id=c.id, hiragana=c.hiragana, meaning=c.meaning, context=c.context or "")
+        ReviewCard(card_id=c.id, hiragana=c.hiragana, meaning=c.meaning,
+                   context=c.context or "", kanji=c.kanji or None)
         for c in weak_cards
     ]
 
@@ -1279,7 +1305,8 @@ async def get_weak_vocab(session: dict = Depends(get_lingo_session)):
     srs = LingoSRS(uid)
     weak_cards = srs.get_weak_vocab(limit=10)
     return [
-        ReviewCard(card_id=c.id, hiragana=c.hiragana, meaning=c.meaning, context=c.context or "")
+        ReviewCard(card_id=c.id, hiragana=c.hiragana, meaning=c.meaning,
+                   context=c.context or "", kanji=c.kanji or None)
         for c in weak_cards
     ]
 
@@ -1408,16 +1435,21 @@ async def get_word_of_day(session: dict = Depends(get_lingo_session)):
         except Exception:
             log.warning("Word-of-day cache unreadable, recomputing", exc_info=True)
     srs = LingoSRS(uid)
-    pool = srs.get_weak_vocab(limit=50) or srs.get_due_cards(limit=50)
+    pool = (srs.get_weak_vocab(limit=50) or srs.get_due_cards(limit=50)
+            or srs.get_random_cards(limit=50))
     if pool:
         card = pool[today.toordinal() % len(pool)]
         cid, hira, mean, ctx = card.id, card.hiragana, card.meaning, card.context or ""
+        kanji = card.kanji or None
     else:
         # No learned words yet: ask the LLM for a fresh one (also stocked
         # into SRS above) before falling back to the static starter deck.
+        kanji = None
         fresh = _llm_random_words(uid, 1)
         if fresh:
             hira, mean, ctx, cid = fresh[0]["reading"], fresh[0]["back"], "", 0
+            if re.search(r'[\u4e00-\u9fff]', fresh[0]["front"]):
+                kanji = fresh[0]["front"]
         else:
             hira, mean, ctx = _WORD_OF_DAY_FALLBACK[today.toordinal() % len(_WORD_OF_DAY_FALLBACK)]
             cid = 0
@@ -1427,6 +1459,7 @@ async def get_word_of_day(session: dict = Depends(get_lingo_session)):
         meaning=mean,
         context=ctx,
         audioUrl=get_cached_lingo_audio(hira, uid=uid),
+        kanji=kanji,
         date=today.isoformat(),
     )
     try:
@@ -1595,10 +1628,29 @@ def _session_cards(uid: str, n: int) -> list:
                         WHERE level IN ({','.join('?' * len(allowed))})""", allowed).fetchall()
             except Exception:
                 pass
+            # Grammar points study like vocab: front=pattern, back=meaning.
+            grows = []
+            try:
+                grows = con.execute(
+                    "SELECT cards_json, level FROM grammar_decks").fetchall()
+            except Exception:
+                pass
         finally:
             con.close()
         cands = [(f, r, b, k, normalize_level(l)) for f, r, b, k, l in mat]
         cands += [(f, rd or f, b, k, normalize_level(l)) for f, b, rd, k, l in prow]
+        for cards_json, glevel in grows:
+            if normalize_level(glevel) not in allowed:
+                continue
+            try:
+                gc = json.loads(cards_json or "[]")
+            except Exception:
+                continue
+            for c in gc:
+                gf, gb = c.get("front", ""), c.get("back", "")
+                if gf and gb:
+                    cands.append((gf, c.get("reading", "") or gf, gb,
+                                  "grammar", normalize_level(glevel)))
         _random.shuffle(cands)
         for front, reading, back, kind, level in cands:
             if len(picked) >= n:
@@ -1630,6 +1682,7 @@ def _to_review_card(c) -> "ReviewCard":
         hiragana=c.hiragana or "",
         meaning=c.meaning or "",
         context=c.context or "",
+        kanji=getattr(c, "kanji", None) or None,
     )
 
 
@@ -1736,11 +1789,17 @@ def _read_course_table(table: str) -> list:
         from .lingo_store import MATERIALS_DB
         con = sqlite3.connect(str(MATERIALS_DB))
         try:
-            return con.execute(
+            rows = con.execute(
                 f"SELECT id,title,level,kind,cards_json FROM {table} ORDER BY level,id"
             ).fetchall()
         finally:
             con.close()
+        # Legacy curated lesson dups ("N5 Lesson 1 · Daily Words" etc.)
+        # duplicate the Words & Phrases pool slot-for-slot; the ordered
+        # progression below hides them so Lesson 1 is always the OpenJLPT one.
+        if table == "courses":
+            rows = [r for r in rows if r[0] not in _LEGACY_COURSE_IDS]
+        return rows
     except Exception:
         log.warning("Course table read failed", exc_info=True)
         return []
@@ -1758,6 +1817,335 @@ def _course_meta_rows(table: str, allowed: list | None = None) -> list:
         out.append({"id": cid, "title": title, "level": level,
                     "kind": kind, "card_count": count})
     return out
+
+
+# ============================================================================
+# Lesson-at-a-time progression + typing tests + level finals.
+#
+# Vocab and grammar share one engine (`track` = "vocab" | "grammar"):
+#  - GET  /{courses,grammar}/current        -> current lesson + progress
+#  - GET  /{courses,grammar}/{id}/test      -> shuffled typing questions
+#  - POST /{courses,grammar}/{id}/test/submit -> grade; 100% advances
+#  - GET  /{courses,grammar}/final/test     -> up-to-100 sampled questions
+#  - POST /{courses,grammar}/final/submit   -> 100% auto-levels-up JLPT
+# ============================================================================
+# Legacy curated lesson rows that duplicate the Words & Phrases pool
+# ("N5 Lesson 1 · Daily Words", "N4 Lesson 1 · Daily Life"). Hidden from the
+# ordered progression so Lesson 1 is always the OpenJLPT lesson.
+_LEGACY_COURSE_IDS = frozenset({"n5-lesson-1", "n4-lesson-1"})
+
+_TRACK_TABLES = {"vocab": "courses", "grammar": "grammar_decks"}
+FINAL_TEST_N = 100
+
+
+def _deck_sort_key(cid: str):
+    """Numeric-aware ordering: lesson 2 < lesson 10; `*basics*` decks first."""
+    m = re.search(r"(\d+)\s*$", cid)
+    num = int(m.group(1)) if m else None
+    basics_first = 0 if "basics" in cid else 1
+    return (basics_first, num if num is not None else 10 ** 9, cid)
+
+
+def _ordered_track_decks(track: str, level: str) -> list:
+    """All decks for one track+level in study order, cards parsed."""
+    table = _TRACK_TABLES[track]
+    decks = []
+    for cid, title, lvl, kind, cards_json in _read_course_table(table):
+        if lvl != level:
+            continue
+        try:
+            cards = json.loads(cards_json or "[]")
+        except Exception:
+            cards = []
+        cards = [c for c in cards if c.get("front") and c.get("back")]
+        decks.append({"id": cid, "title": title, "level": lvl,
+                      "kind": kind, "cards": cards})
+    decks.sort(key=lambda d: _deck_sort_key(d["id"]))
+    return decks
+
+
+def _track_progress(uid: str, track: str) -> LessonProgress:
+    from .lingo_store import get_lesson_progress
+    level = get_jlpt_level(uid)
+    decks = _ordered_track_decks(track, level)
+    total = len(decks)
+    current = get_lesson_progress(uid, track, level)
+    current = max(1, min(current, total + 1)) if total else 1
+    return LessonProgress(level=level, track=track, current_lesson=current,
+                          lessons_total=total,
+                          final_unlocked=bool(total) and current > total)
+
+
+def _normalize_test_answer(s: str) -> str:
+    s = (s or "").strip().lower()
+    s = re.sub(r"\s+", "", s)
+    s = re.sub(r"^[〜～~\-·]+", "", s)
+    return s
+
+
+def _accepted_test_answers(card: dict) -> list:
+    """front/reading plus grammar-tolerant variants (drop 〜, drop （…）)."""
+    outs: set = set()
+    for raw in (card.get("front", ""), card.get("reading", "")):
+        if not raw or not str(raw).strip():
+            continue
+        outs.add(_normalize_test_answer(str(raw)))
+        v = re.sub(r"^[〜～~\-·\s]+", "", str(raw))
+        v = re.sub(r"[（\(][^）\)]*[）\)]", "", v).strip()
+        if v:
+            outs.add(_normalize_test_answer(v))
+    return sorted(o for o in outs if o)
+
+
+def _stock_lesson_cards(uid: str, track: str, level: str, cards: list) -> None:
+    """Tested cards enter the SRS queue so Review/Practice pick them up."""
+    try:
+        srs = LingoSRS(uid)
+        for c in cards:
+            front = str(c.get("front", ""))
+            back = str(c.get("back", ""))
+            reading = str(c.get("reading", "") or front)
+            if not front or not back:
+                continue
+            try:
+                srs.add_card(LingoVocabCard(
+                    kanji=front if re.search(r'[\u4e00-\u9fff]', front) else "",
+                    hiragana=reading,
+                    meaning=back,
+                    pos="grammar" if track == "grammar" else "lesson",
+                    context=f"{track} lesson",
+                    level=level,
+                ))
+            except Exception:
+                continue
+    except Exception:
+        log.warning("Lesson SRS stocking failed", exc_info=True)
+
+
+def _grade_and_advance(uid: str, track: str, level: str, cards_by_qid: dict,
+                       answers: list, *, is_final: bool,
+                       lesson_pos: int = 0, lessons_total: int = 0) -> TestSubmitResponse:
+    results: list = []
+    correct = 0
+    for qid, card in cards_by_qid.items():
+        given = next((a.answer for a in answers if a.qid == qid), "")
+        accepted = _accepted_test_answers(card)
+        ok = bool(accepted) and _normalize_test_answer(given) in accepted
+        correct += 1 if ok else 0
+        results.append(TestItemResult(
+            qid=qid, prompt=str(card.get("back", "")),
+            expected=accepted[:4], given=given or "", correct=ok))
+    total = len(cards_by_qid)
+    passed = total > 0 and correct == total
+
+    _stock_lesson_cards(uid, track, level, list(cards_by_qid.values()))
+
+    xp = 0
+    if correct:
+        xp = correct * 2
+        try:
+            _award_xp(uid, xp)
+        except Exception:
+            log.warning("Test XP award failed", exc_info=True)
+    record_practice(uid)
+
+    new_level = None
+    if passed:
+        from .lingo_store import get_lesson_progress, set_lesson_progress
+        if is_final:
+            idx = JLPT_LEVELS.index(level) if level in JLPT_LEVELS else 0
+            if idx + 1 < len(JLPT_LEVELS):
+                new_level = JLPT_LEVELS[idx + 1]
+                update_last_level(uid, new_level)
+        elif lesson_pos >= get_lesson_progress(uid, track, level):
+            # Only ever move forward: re-taking an old lesson never rewinds.
+            set_lesson_progress(uid, track, level, lesson_pos + 1)
+
+    progress = _track_progress(uid, track if new_level is None else track)
+    if new_level is not None:
+        # Progress was just moved to the next level -- report that level.
+        progress = LessonProgress(level=new_level, track=track,
+                                  current_lesson=1,
+                                  lessons_total=len(_ordered_track_decks(track, new_level)),
+                                  final_unlocked=False)
+    return TestSubmitResponse(correct=correct, total=total, passed=passed,
+                              xp=xp, results=results, progress=progress,
+                              new_level=new_level)
+
+
+def _require_final_unlocked(uid: str, track: str) -> None:
+    """Final tests only count once every lesson at the level is passed."""
+    prog = _track_progress(uid, track)
+    if prog.lessons_total > 0 and not prog.final_unlocked:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Finish lesson {prog.current_lesson} first -- the final unlocks after all lessons pass.",
+        )
+
+
+def _current_lesson_payload(uid: str, track: str) -> dict:
+    progress = _track_progress(uid, track)
+    lesson = None
+    if not progress.final_unlocked:
+        decks = _ordered_track_decks(track, progress.level)
+        pos = progress.current_lesson - 1
+        if 0 <= pos < len(decks):
+            d = decks[pos]
+            lesson = {"id": d["id"], "title": d["title"], "level": d["level"],
+                      "kind": d["kind"], "cards": d["cards"],
+                      "lesson": progress.current_lesson,
+                      "lessons_total": progress.lessons_total}
+    return {"progress": progress.model_dump(), "lesson": lesson}
+
+
+def _lesson_test_payload(track: str, level: str, deck_id: str) -> dict:
+    decks = _ordered_track_decks(track, level)
+    deck = next((d for d in decks if d["id"] == deck_id), None)
+    if deck is None:
+        raise HTTPException(status_code=404, detail=f"Unknown deck: {deck_id}")
+    order = list(range(len(deck["cards"])))
+    random.shuffle(order)
+    questions = [{"qid": f"c{i}", "prompt": deck["cards"][i].get("back", "")}
+                 for i in order]
+    return {"deck_id": deck_id, "title": deck["title"], "level": level,
+            "questions": questions}
+
+
+def _final_test_payload(track: str, level: str, n: int) -> dict:
+    seen: dict = {}
+    for d in _ordered_track_decks(track, level):
+        for i, c in enumerate(d["cards"]):
+            key = (str(c.get("front", "")), str(c.get("back", "")))
+            if key[0] and key[1] and key not in seen:
+                seen[key] = (d["id"], i)
+    keys = list(seen)
+    random.shuffle(keys)
+    picked = keys[:max(1, min(n, FINAL_TEST_N))]
+    if not picked:
+        raise HTTPException(status_code=400, detail="No cards available for final test")
+    decks_by_id = {d["id"]: d for d in _ordered_track_decks(track, level)}
+    questions = []
+    for k in picked:
+        deck_id, i = seen[k]
+        card = decks_by_id[deck_id]["cards"][i]
+        questions.append({"qid": f"{deck_id}#{i}", "prompt": card.get("back", "")})
+    return {"level": level, "questions": questions, "total_at_level": len(seen)}
+
+
+def _cards_by_qid_for_submit(track: str, level: str, answers: list,
+                             *, is_final: bool, deck_id: str = "") -> dict:
+    decks = _ordered_track_decks(track, level)
+    if is_final:
+        decks_by_id = {d["id"]: d for d in decks}
+        out = {}
+        for a in answers:
+            if "#" not in a.qid:
+                continue
+            did, _, idx = a.qid.partition("#")
+            try:
+                out[a.qid] = decks_by_id[did]["cards"][int(idx)]
+            except (KeyError, ValueError, IndexError):
+                continue
+        # Grade the FULL final set, not just answered qids: rebuild from the
+        # level pool so skipped questions count as wrong.
+        return out
+    deck = next((d for d in decks if d["id"] == deck_id), None)
+    if deck is None:
+        raise HTTPException(status_code=404, detail=f"Unknown deck: {deck_id}")
+    return {f"c{i}": deck["cards"][i] for i in range(len(deck["cards"]))}
+
+
+@router.get("/courses/current")
+async def courses_current(session: dict = Depends(get_lingo_session)):
+    return _current_lesson_payload(session["user_id"], "vocab")
+
+
+@router.post("/courses/final/submit", response_model=TestSubmitResponse)
+async def courses_final_submit(body: TestSubmitRequest,
+                               session: dict = Depends(get_lingo_session)):
+    uid = session["user_id"]
+    _require_final_unlocked(uid, "vocab")
+    level = get_jlpt_level(uid)
+    cards = _cards_by_qid_for_submit("vocab", level, body.answers, is_final=True)
+    if not cards:
+        raise HTTPException(status_code=400, detail="Nothing to grade")
+    return _grade_and_advance(uid, "vocab", level, cards, body.answers,
+                              is_final=True)
+
+
+@router.get("/courses/final/test")
+async def courses_final_test(n: int = FINAL_TEST_N,
+                             session: dict = Depends(get_lingo_session)):
+    uid = session["user_id"]
+    return _final_test_payload("vocab", get_jlpt_level(uid), n)
+
+
+@router.get("/courses/{course_id}/test")
+async def course_test(course_id: str, session: dict = Depends(get_lingo_session)):
+    uid = session["user_id"]
+    return _lesson_test_payload("vocab", get_jlpt_level(uid), course_id)
+
+
+@router.post("/courses/{course_id}/test/submit", response_model=TestSubmitResponse)
+async def course_test_submit(course_id: str, body: TestSubmitRequest,
+                             session: dict = Depends(get_lingo_session)):
+    uid = session["user_id"]
+    level = get_jlpt_level(uid)
+    cards = _cards_by_qid_for_submit("vocab", level, body.answers,
+                                     is_final=False, deck_id=course_id)
+    if not cards:
+        raise HTTPException(status_code=400, detail="Nothing to grade")
+    progress = _track_progress(uid, "vocab")
+    decks = _ordered_track_decks("vocab", level)
+    pos = next((i + 1 for i, d in enumerate(decks) if d["id"] == course_id), 0)
+    return _grade_and_advance(uid, "vocab", level, cards, body.answers,
+                              is_final=False, lesson_pos=pos,
+                              lessons_total=len(decks))
+
+
+@router.get("/grammar/current")
+async def grammar_current(session: dict = Depends(get_lingo_session)):
+    return _current_lesson_payload(session["user_id"], "grammar")
+
+
+@router.post("/grammar/final/submit", response_model=TestSubmitResponse)
+async def grammar_final_submit(body: TestSubmitRequest,
+                               session: dict = Depends(get_lingo_session)):
+    uid = session["user_id"]
+    _require_final_unlocked(uid, "grammar")
+    level = get_jlpt_level(uid)
+    cards = _cards_by_qid_for_submit("grammar", level, body.answers, is_final=True)
+    if not cards:
+        raise HTTPException(status_code=400, detail="Nothing to grade")
+    return _grade_and_advance(uid, "grammar", level, cards, body.answers,
+                              is_final=True)
+@router.get("/grammar/final/test")
+async def grammar_final_test(n: int = FINAL_TEST_N,
+                             session: dict = Depends(get_lingo_session)):
+    uid = session["user_id"]
+    return _final_test_payload("grammar", get_jlpt_level(uid), n)
+
+
+@router.get("/grammar/{grammar_id}/test")
+async def grammar_test(grammar_id: str, session: dict = Depends(get_lingo_session)):
+    uid = session["user_id"]
+    return _lesson_test_payload("grammar", get_jlpt_level(uid), grammar_id)
+
+
+@router.post("/grammar/{grammar_id}/test/submit", response_model=TestSubmitResponse)
+async def grammar_test_submit(grammar_id: str, body: TestSubmitRequest,
+                              session: dict = Depends(get_lingo_session)):
+    uid = session["user_id"]
+    level = get_jlpt_level(uid)
+    cards = _cards_by_qid_for_submit("grammar", level, body.answers,
+                                     is_final=False, deck_id=grammar_id)
+    if not cards:
+        raise HTTPException(status_code=400, detail="Nothing to grade")
+    decks = _ordered_track_decks("grammar", level)
+    pos = next((i + 1 for i, d in enumerate(decks) if d["id"] == grammar_id), 0)
+    return _grade_and_advance(uid, "grammar", level, cards, body.answers,
+                              is_final=False, lesson_pos=pos,
+                              lessons_total=len(decks))
 
 
 @router.get("/courses")

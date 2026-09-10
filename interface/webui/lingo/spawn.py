@@ -47,6 +47,7 @@ def _conn() -> sqlite3.Connection:
             level TEXT NOT NULL DEFAULT 'N5',
             used_count INTEGER NOT NULL DEFAULT 0,
             created_at REAL,
+            source TEXT NOT NULL DEFAULT 'spawn',
             UNIQUE(front, back)
         )"""
     )

@@ -62,6 +62,9 @@ class ReviewCard(BaseModel):
     hiragana: str
     meaning: str
     context: str
+    # Kanji surface form when the SRS card has one; older responses omit
+    # it, so it stays optional for backward compatibility.
+    kanji: Optional[str] = None
 
 
 class ReviewSessionResponse(BaseModel):
@@ -141,4 +144,53 @@ class WordOfDayResponse(BaseModel):
     meaning: str
     context: str = ""
     audioUrl: Optional[str] = None
-    date: str
+    kanji: Optional[str] = None
+    # Defaults to "" so day-cache hits (which persist the full payload
+    # including date, then rebuild without it) never 500 on a missing field.
+    date: str = ""
+
+
+# ============================================================================
+# Lesson / Test progression (one lesson at a time + per-lesson typing test +
+# level final). Shared by the vocab (courses) and grammar tracks.
+# ============================================================================
+class LessonProgress(BaseModel):
+    level: str
+    track: str  # "vocab" | "grammar"
+    current_lesson: int  # 1-based index into the ordered deck list
+    lessons_total: int
+    final_unlocked: bool = False
+
+
+class TestQuestion(BaseModel):
+    qid: str  # stable id within the test, e.g. "c3"
+    prompt: str  # English meaning shown to the learner
+    hint: str = ""  # optional reading hint (empty for real tests)
+
+
+class TestAnswer(BaseModel):
+    qid: str
+    answer: str = ""
+
+
+class TestSubmitRequest(BaseModel):
+    answers: List[TestAnswer] = []
+
+
+class TestItemResult(BaseModel):
+    qid: str
+    prompt: str
+    expected: List[str] = []
+    given: str = ""
+    correct: bool = False
+
+
+class TestSubmitResponse(BaseModel):
+    correct: int
+    total: int
+    passed: bool
+    xp: int = 0
+    results: List[TestItemResult] = []
+    progress: Optional[LessonProgress] = None
+    # Set on a passed FINAL test: the level the user was moved to.
+    new_level: Optional[str] = None

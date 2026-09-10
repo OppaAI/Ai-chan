@@ -37,15 +37,19 @@ class VocabExtractor:
     # Function words and verb-ending fragments that the regex segmenter
     # splits off as bare hiragana runs. Carding them produced the
     # meaningless "[hiragana: は]" style quiz questions.
+    # NOTE: です / ます / ところ are ALSO curated entries in
+    # _HIRAGANA_MEANINGS and are matched inside hiragana runs by
+    # _scan_hiragana_run, so they must not be skipped here -- otherwise the
+    # single-token path and the run-scan path disagree about them.
     _FUNCTION_WORDS = frozenset({
         "は", "が", "を", "に", "へ", "と", "で", "も", "の", "ね", "よ",
         "か", "な", "や", "わ", "ぞ", "ぜ", "さ", "て", "って", "たら",
         "れば", "ても", "でも", "から", "まで", "より", "だけ", "しか",
         "ばかり", "けれど", "けれども", "けど", "のに", "ので", "ため",
         "みたい", "とか", "など", "なんて", "ながら", "たり", "だり",
-        "そうだ", "ようだ", "らしい", "べき", "はず", "わけ", "ところ",
+        "そうだ", "ようだ", "らしい", "べき", "はず", "わけ",
         "まま", "ごと", "たび", "ごろ", "ころ", "あたり", "について",
-        "によって", "に対して", "として", "ない", "ます", "です",
+        "によって", "に対して", "として", "ない",
     })
 
     """

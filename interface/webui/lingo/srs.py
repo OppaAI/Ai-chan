@@ -281,7 +281,8 @@ class LingoSRS:
         c.execute("SELECT COUNT(*) FROM lingo_vocab_cards WHERE user_id=?", (self.user_id,))
         total = c.fetchone()[0]
         today = datetime.utcnow().date().isoformat()
-        c.execute("SELECT COUNT(DISTINCT card_id) FROM lingo_review_logs WHERE user_id=? AND DATE(review_date)=?",
+        # Cards first created today (SQLite DATE() parses the ISO timestamp).
+        c.execute("SELECT COUNT(*) FROM lingo_vocab_cards WHERE user_id=? AND DATE(created_at)=?",
                   (self.user_id, today))
         learned_today = c.fetchone()[0]
         c.execute("SELECT COUNT(*) FROM lingo_review_logs WHERE user_id=? AND DATE(review_date)=?",

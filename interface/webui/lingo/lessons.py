@@ -112,6 +112,9 @@ def pool_add(words: list, level: str) -> int:
         added = 0
         for w in words:
             try:
+                # total_changes is cumulative on the connection -- diff it to
+                # tell a real insert apart from an IGNORED duplicate.
+                before = con.total_changes
                 con.execute(
                     "INSERT OR IGNORE INTO lesson_pool "
                     "(front, back, reading, level, created_at) "
@@ -119,7 +122,8 @@ def pool_add(words: list, level: str) -> int:
                     (w["front"], w["back"], w.get("reading", ""),
                      level, _time.time()),
                 )
-                added += con.total_changes and 1 or 0
+                if con.total_changes > before:
+                    added += 1
             except Exception:
                 continue
         con.commit()

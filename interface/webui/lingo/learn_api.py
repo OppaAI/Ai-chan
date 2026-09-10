@@ -132,13 +132,15 @@ def attach_learn_routes(router, get_lingo_session, award_xp=None):
         if not payload:
             raise HTTPException(status_code=400, detail="Each item needs a valid pool_id")
         n = spawn.mark_learned(uid, payload)
-        xp_total = 0
+        # _award_xp() returns the new TOTAL; the response field is the amount
+        # EARNED by this action, so report n*5 (the practice/mark endpoint
+        # already reports deltas the same way).
         if award_xp and n:
             try:
-                xp_total = award_xp(uid, n * 5)
+                award_xp(uid, n * 5)
             except Exception:
                 log.warning("XP award on learn_mark failed", exc_info=True)
-        return MarkLearnedResponse(learned=n, xp=xp_total)
+        return MarkLearnedResponse(learned=n, xp=n * 5)
 
     @router.get("/learn/status")
     async def learn_status(session: dict = Depends(get_lingo_session)):

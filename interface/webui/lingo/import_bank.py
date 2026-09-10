@@ -105,6 +105,11 @@ def import_curated_into(con: sqlite3.Connection) -> dict[str, int]:
                 stats["vocab_pool"] += 1
 
     for c in _courses_from_banks(banks):
+        # Retired: the curated "Daily Words/Life" lesson-1 rows duplicated the
+        # Words & Phrases pool slot-for-slot and collided with the OpenJLPT
+        # Lesson 1 progression (removed from materials.db; never recreate).
+        if c["id"] in ("n5-lesson-1", "n4-lesson-1"):
+            continue
         con.execute(
             "INSERT OR REPLACE INTO courses(id,title,level,kind,cards_json)"
             " VALUES(?,?,?,?,?)",
