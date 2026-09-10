@@ -1305,6 +1305,36 @@ class AikoListen:
         except Exception:
             return text
 
+    def transcribe_pcm(self, audio: np.ndarray, sample_rate: int = SAMPLE_RATE) -> str:
+        """Public one-shot transcription of mono float32 PCM audio.
+
+        Used by the phone-app STT endpoint. Boots ASR on first call
+        (ensure_ready is idempotent); resamples to 16kHz when needed.
+        Returns "" when ASR is unavailable or the audio holds no speech.
+        """
+        import numpy as _np
+
+        pcm = _np.asarray(audio, dtype=_np.float32).ravel()
+        if pcm.size == 0:
+            return ""
+        if sample_rate != SAMPLE_RATE and sample_rate > 0:
+            try:
+                src = _np.linspace(0.0, 1.0, pcm.size)
+                dst = _np.linspace(0.0, 1.0, int(pcm.size * SAMPLE_RATE / sample_rate))
+                pcm = _np.interp(dst, src, pcm).astype(_np.float32)
+            except Exception:
+                pass
+        self.ensure_ready()
+        if self._model is None:
+            try:
+                self.load_asr()
+            except Exception:
+                log.warning("listen: transcribe_pcm ASR load failed")
+                return ""
+            if self._model is None:
+                return ""
+        return self._transcribe(pcm)
+
     # ── warmup ────────────────────────────────────────────────────────────────
 
     def _warmup(self) -> None:

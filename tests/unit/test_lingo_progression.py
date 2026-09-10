@@ -127,3 +127,29 @@ def test_clean_tts_text_skips_pattern_markers():
     assert router._clean_tts_text("〜が（but）") == "が"
     assert router._clean_tts_text("〜たことがある") == "たことがある"
     assert router._clean_tts_text("ねこ") == "ねこ"
+
+
+class _FakeURL:
+    def __init__(self, base):
+        self._base = base
+
+    def __str__(self):
+        return self._base
+
+
+class _FakeRequest:
+    def __init__(self, base):
+        self.base_url = _FakeURL(base)
+
+
+def test_public_base_url_prefers_live_request():
+    assert router._public_base_url(_FakeRequest("https://phone.tailnet:8787/")) == \
+        "https://phone.tailnet:8787"
+
+
+def test_public_base_url_skips_localhost(monkeypatch):
+    monkeypatch.setenv("AIKO_PUBLIC_BASE_URL", "")
+    import interface.webui.auth as auth_mod
+    monkeypatch.setattr(auth_mod, "REDIRECT_BASE", "https://env-host.ts.net", raising=False)
+    assert router._public_base_url(_FakeRequest("http://localhost:8787/")) == \
+        "https://env-host.ts.net"

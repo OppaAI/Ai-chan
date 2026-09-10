@@ -92,7 +92,7 @@ from pathlib import Path
 from typing import Optional, List, Dict
 from collections import defaultdict
 from datetime import datetime, date, timedelta  # FIX #2: timedelta import
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request, UploadFile, File
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
@@ -122,7 +122,40 @@ STATIC_DIR = Path(__file__).parent / "static"
 # URLs written there 404 and the app's Play button silently fails.
 AUDIO_DIR = Path(__file__).parent.parent / "static" / "lingo_audio"
 AUDIO_DIR.mkdir(parents=True, exist_ok=True)
-AUDIO_BASE_URL = "https://aiko.ide-chroma.ts.net/lingo_audio"
+
+# No hardcoded server address: audio URLs are built from the live request
+# (see _public_base_url) so the app works on any hostname, Tailnet IP, or
+# funnel URL with zero config. Env override when the request host can't be
+# trusted (reverse proxy without forwarded headers):
+#   AIKO_PUBLIC_BASE_URL=https://aiko.example.ts.net
+_LEGACY_PUBLIC_BASE = "https://aiko.ide-chroma.ts.net"
+
+
+def _public_base_url(request: "Request | None" = None) -> str:
+    """Public origin for absolute audio URLs, e.g. https://host:port.
+
+    Prefers the request's own base URL (correct on Tailnet hostnames and
+    IPs), unless it points at localhost (reverse-proxy/funnel setups) —
+    then falls back to AIKO_PUBLIC_BASE_URL, auth.REDIRECT_BASE, and only
+    lastly the legacy default.
+    """
+    if request is not None:
+        try:
+            base = str(request.base_url).rstrip("/")
+            if base and "localhost" not in base and "127.0.0.1" not in base:
+                return base
+        except Exception:
+            pass
+    env = (os.getenv("AIKO_PUBLIC_BASE_URL") or "").strip().rstrip("/")
+    if env:
+        return env
+    try:
+        from interface.webui import auth
+        if getattr(auth, "REDIRECT_BASE", ""):
+            return str(auth.REDIRECT_BASE).rstrip("/")
+    except Exception:
+        pass
+    return _LEGACY_PUBLIC_BASE
 
 init_srs_db()
 
@@ -200,7 +233,8 @@ def _clean_tts_text(text: str) -> str:
     return clean_text
 
 
-def get_cached_lingo_audio(text: str, uid: Optional[str] = None) -> Optional[str]:
+def get_cached_lingo_audio(text: str, uid: Optional[str] = None,
+                         base_url: Optional[str] = None) -> Optional[str]:
     """
     Returns a cached or freshly synthesized audio URL, or None if the text
     was invalid or synthesis failed. Rate limiting is applied only to
@@ -208,14 +242,20 @@ def get_cached_lingo_audio(text: str, uid: Optional[str] = None) -> Optional[str
     that need to distinguish "rate limited" from "synthesis failed" (e.g.
     the /tts endpoint) should call check_tts_rate_limit() themselves before
     calling this function -- see FIX #13.
+
+    base_url pins the URL host (endpoints pass the live request's origin);
+    the cache key includes it so a hostname URL is never served to an IP
+    client or vice versa.
     """
     if not is_valid_text(text):
         return None
     clean_text = _clean_tts_text(text)
     if not is_valid_text(clean_text):
         return None
+    base = (base_url or _public_base_url()).rstrip("/")
+    cache_key = f"{clean_text}\x00{base}"
 
-    cached = _audio_cache_get(clean_text)
+    cached = _audio_cache_get(cache_key)
     if cached is not None:
         return cached
 
@@ -225,9 +265,9 @@ def get_cached_lingo_audio(text: str, uid: Optional[str] = None) -> Optional[str
         log.warning(f"TTS rate limit hit for user {uid}")
         return None
 
-    url = generate_lingo_audio(clean_text)
+    url = generate_lingo_audio(clean_text, base_url=base)
     if url:
-        _audio_cache_set(clean_text, url)
+        _audio_cache_set(cache_key, url)
     return url
 
 
@@ -647,7 +687,7 @@ def _get_vocab_extractor() -> VocabExtractor:
 # ============================================================================
 # Audio Generation (thread-safe)
 # ============================================================================
-def generate_lingo_audio(text: str) -> Optional[str]:
+def generate_lingo_audio(text: str, base_url: Optional[str] = None) -> Optional[str]:
     from interface.webui import auth
     if not is_valid_text(text):
         return None
@@ -666,8 +706,8 @@ def generate_lingo_audio(text: str) -> Optional[str]:
         temp_path = filepath.with_suffix('.tmp')
         temp_path.write_bytes(wav_bytes)
         temp_path.replace(filepath)
-        base_url = getattr(auth, "REDIRECT_BASE", "https://aiko.ide-chroma.ts.net").rstrip("/")
-        return f"{base_url}/lingo_audio/{filename}"
+        base = (base_url or _public_base_url()).rstrip("/")
+        return f"{base}/lingo_audio/{filename}"
     except Exception as e:
         log.error(f"Failed to generate audio for Lingo: {e}")
         return None
@@ -738,7 +778,7 @@ async def translate(request: TranslateRequest, session: dict = Depends(get_lingo
 
 
 @router.post("/conversation/start")
-async def conversation_start(request: StartRequest, session: dict = Depends(get_lingo_session)):
+async def conversation_start(request: StartRequest, http_request: Request, session: dict = Depends(get_lingo_session)):
     from interface.webui import auth
     if not auth.aiko_web_instance or not auth.aiko_web_instance._think:
         raise HTTPException(status_code=503, detail="Aiko's brain is not ready")
@@ -846,7 +886,8 @@ async def conversation_start(request: StartRequest, session: dict = Depends(get_
                     candidate = en_match.group(1).strip()
                     if len(candidate.split()) >= 2:
                         data["english"] = candidate
-            audio_url = get_cached_lingo_audio(data.get("japanese") or "...", uid=uid)
+            audio_url = get_cached_lingo_audio(data.get("japanese") or "...", uid=uid,
+                                           base_url=_public_base_url(http_request))
             yield json.dumps({
                 "type": "final",
                 "isCorrect": True,
@@ -897,7 +938,8 @@ def _build_respond_messages(think, request: "RespondRequest") -> list:
     return messages
 
 
-async def _finalize_respond_turn(uid: str, data: dict, source_text: str) -> dict:
+async def _finalize_respond_turn(uid: str, data: dict, source_text: str,
+                                 base_url: Optional[str] = None) -> dict:
     """
     Shared post-processing for a parsed tutor turn: mistake formatting,
     vocab extraction/SRS insertion, audio synthesis, streak/XP bookkeeping,
@@ -933,7 +975,7 @@ async def _finalize_respond_turn(uid: str, data: dict, source_text: str) -> dict
             card.level = user_jlpt
             srs.add_card(card)
 
-    audio_url = get_cached_lingo_audio(audio_text, uid=uid)
+    audio_url = get_cached_lingo_audio(audio_text, uid=uid, base_url=base_url)
 
     # ===== TOASTS & XP (Duolingo-style) =====
     record_practice(uid)
@@ -965,7 +1007,8 @@ async def _finalize_respond_turn(uid: str, data: dict, source_text: str) -> dict
 
 
 @router.post("/conversation/respond", response_model=ConversationResponse)
-async def conversation_respond(request: RespondRequest, session: dict = Depends(get_lingo_session)):
+async def conversation_respond(request: RespondRequest, http_request: Request,
+                             session: dict = Depends(get_lingo_session)):
     """
     FIX #12: non-streaming counterpart to /conversation/respond_stream.
     The Android interface already declared this endpoint
@@ -990,7 +1033,8 @@ async def conversation_respond(request: RespondRequest, session: dict = Depends(
         )
         flat_content = (response.choices[0].message.content or "").replace("**", "").replace("`", "")
         data = _parse_dialogue_tags(flat_content)
-        result = await _finalize_respond_turn(uid, data, request.text)
+        result = await _finalize_respond_turn(uid, data, request.text,
+                                                base_url=_public_base_url(http_request))
         return ConversationResponse(
             japaneseText=result["japanese"],
             englishTranslation=result["english"],
@@ -1009,7 +1053,8 @@ async def conversation_respond(request: RespondRequest, session: dict = Depends(
 
 
 @router.post("/conversation/respond_stream")
-async def conversation_respond_stream(request: RespondRequest, session: dict = Depends(get_lingo_session)):
+async def conversation_respond_stream(request: RespondRequest, http_request: Request,
+                                    session: dict = Depends(get_lingo_session)):
     from interface.webui import auth
     if not auth.aiko_web_instance or not auth.aiko_web_instance._think:
         raise HTTPException(status_code=503, detail="Aiko's brain is not ready")
@@ -1092,7 +1137,8 @@ async def conversation_respond_stream(request: RespondRequest, session: dict = D
 
             flat_content = full_content.replace("**", "").replace("`", "")
             data = _parse_dialogue_tags(flat_content)
-            result = await _finalize_respond_turn(uid, data, request.text)
+            result = await _finalize_respond_turn(uid, data, request.text,
+                                                base_url=_public_base_url(http_request))
             yield json.dumps({"type": "final", **result}) + "\n"
         except Exception as e:
             log.exception("Lingo respond stream failed")
@@ -1107,7 +1153,7 @@ async def conversation_respond_stream(request: RespondRequest, session: dict = D
 
 
 @router.post("/conversation/hint", response_model=ConversationResponse)
-async def conversation_hint(session: dict = Depends(get_lingo_session)):
+async def conversation_hint(http_request: Request, session: dict = Depends(get_lingo_session)):
     from interface.webui import auth
     if not auth.aiko_web_instance or not auth.aiko_web_instance._think:
         raise HTTPException(status_code=503, detail="Aiko's brain is not ready")
@@ -1133,7 +1179,8 @@ async def conversation_hint(session: dict = Depends(get_lingo_session)):
         data = parse_lingo_json(response.choices[0].message.content)
         jp = data.get("japanese") or data.get("japaneseText") or ""
         en = data.get("english") or data.get("englishTranslation") or "Translation unavailable"
-        audio_url = get_cached_lingo_audio(str(jp), uid=uid)
+        audio_url = get_cached_lingo_audio(str(jp), uid=uid,
+                                         base_url=_public_base_url(http_request))
         level = get_last_level(uid)
         explanation = "This is a good beginner sentence because it uses only simple present tense."
         if level == "intermediate":
@@ -1153,7 +1200,7 @@ async def conversation_hint(session: dict = Depends(get_lingo_session)):
 
 
 @router.get("/tts")
-async def get_tts(text: str, session: dict = Depends(get_lingo_session)):
+async def get_tts(text: str, request: Request, session: dict = Depends(get_lingo_session)):
     if not text or len(text) > 200:
         raise HTTPException(
             status_code=400,
@@ -1175,13 +1222,13 @@ async def get_tts(text: str, session: dict = Depends(get_lingo_session)):
     # rate check inside get_cached_lingo_audio() by passing uid=None only
     # after a cache-miss check would be redundant here; a cache hit is
     # still free and correct either way.
-    url = _get_tts_audio_after_rate_check(text)
+    url = _get_tts_audio_after_rate_check(text, base_url=_public_base_url(request))
     if not url:
         raise HTTPException(status_code=503, detail="TTS generation failed. Please try again.")
     return {"audioUrl": url}
 
 
-def _get_tts_audio_after_rate_check(text: str) -> Optional[str]:
+def _get_tts_audio_after_rate_check(text: str, base_url: Optional[str] = None) -> Optional[str]:
     """
     Same cache-then-synthesize flow as get_cached_lingo_audio(), but without
     re-checking the rate limit -- the /tts endpoint already consumed a slot
@@ -1192,20 +1239,83 @@ def _get_tts_audio_after_rate_check(text: str) -> Optional[str]:
     clean_text = _clean_tts_text(text)
     if not is_valid_text(clean_text):
         return None
+    base = (base_url or _public_base_url()).rstrip("/")
+    cache_key = f"{clean_text}\x00{base}"
 
-    cached = _audio_cache_get(clean_text)
+    cached = _audio_cache_get(cache_key)
     if cached is not None:
         return cached
 
-    url = generate_lingo_audio(clean_text)
+    url = generate_lingo_audio(clean_text, base_url=base)
     if url:
-        _audio_cache_set(clean_text, url)
+        _audio_cache_set(cache_key, url)
     return url
 
 
 @router.post("/conversation/stop")
 async def conversation_stop(session: dict = Depends(get_lingo_session)):
     return {"success": True}
+
+
+# Max upload: ~60s of 16kHz mono 16-bit PCM + WAV header.
+_STT_MAX_BYTES = 2 * 1024 * 1024
+_STT_MAX_SECONDS = 30
+
+
+@router.post("/stt")
+async def speech_to_text(audio: UploadFile = File(...),
+                         session: dict = Depends(get_lingo_session)):
+    """Private voice input: transcribe a short WAV clip with on-device ASR.
+
+    The phone app records (16kHz mono PCM, WAV container) and posts it here;
+    nothing ever leaves the Tailnet — no cloud STT involved. Returns
+    {"text": "..."}; empty text means no speech was recognized.
+    """
+    from starlette.concurrency import run_in_threadpool
+
+    raw = await audio.read()
+    if not raw or len(raw) > _STT_MAX_BYTES:
+        raise HTTPException(status_code=400, detail="Audio must be 1 byte – 2 MB")
+
+    try:
+        import io
+        import wave
+        import numpy as np
+
+        with wave.open(io.BytesIO(raw), "rb") as w:
+            n_channels = w.getnchannels()
+            sampwidth = w.getsampwidth()
+            framerate = w.getframerate()
+            n_frames = w.getnframes()
+            if n_frames <= 0 or n_frames > 16000 * _STT_MAX_SECONDS * 2:
+                raise ValueError("bad frame count")
+            frames = w.readframes(n_frames)
+        if sampwidth == 2:
+            pcm = np.frombuffer(frames, dtype=np.int16).astype(np.float32) / 32768.0
+        elif sampwidth == 1:
+            pcm = (np.frombuffer(frames, dtype=np.uint8).astype(np.float32) - 128.0) / 128.0
+        else:
+            raise ValueError(f"unsupported sample width: {sampwidth}")
+        if n_channels > 1:
+            pcm = pcm.reshape(-1, n_channels).mean(axis=1).astype(np.float32)
+        max_len = 16000 * _STT_MAX_SECONDS
+        if pcm.size > max_len:
+            pcm = pcm[:max_len]
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Unusable WAV upload: {e}")
+
+    from interface.webui import auth
+    listener = getattr(auth.aiko_web_instance, "_listen", None) if auth.aiko_web_instance else None
+    if listener is None:
+        raise HTTPException(status_code=503, detail="On-device ASR is not running")
+    try:
+        text = await run_in_threadpool(listener.transcribe_pcm, pcm, framerate)
+    except Exception as e:
+        log.error(f"Lingo STT failed: {e}")
+        raise HTTPException(status_code=503, detail="Transcription failed")
+    return {"text": text or ""}
 
 
 # ============================================================================
@@ -1429,7 +1539,7 @@ def _word_of_day_file(uid: str) -> Path:
 
 
 @router.get("/word-of-day", response_model=WordOfDayResponse)
-async def get_word_of_day(session: dict = Depends(get_lingo_session)):
+async def get_word_of_day(http_request: Request, session: dict = Depends(get_lingo_session)):
     """Duolingo-style daily word: fixed per user per calendar day.
 
     The pick is cached to data/word_of_day/{uid}.json, so every visit to
@@ -1470,7 +1580,8 @@ async def get_word_of_day(session: dict = Depends(get_lingo_session)):
         hiragana=hira,
         meaning=mean,
         context=ctx,
-        audioUrl=get_cached_lingo_audio(hira, uid=uid),
+        audioUrl=get_cached_lingo_audio(hira, uid=uid,
+                                      base_url=_public_base_url(http_request)),
         kanji=kanji,
         date=today.isoformat(),
     )
