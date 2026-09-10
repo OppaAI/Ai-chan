@@ -22,7 +22,7 @@ BUGFIX PASS (carried over from lingo.py):
      in models.py's StartRequest.
   5. get_streak()/record_practice() only tracked practice in an
      in-memory dict that's wiped on restart and never wrote to disk.
-     Rewritten to persist to data/streaks/{uid}.json with real
+     Rewritten to persist to <USER_SPACE_ROOT>/<uid>/streaks/{uid}.json with real
      day-over-day accumulation.
   6. review_start() reported `cards_due=stats["reviews_today"]` (reviews
      completed today) instead of the actual due-card count. Fixed to use
@@ -33,7 +33,7 @@ BUGFIX PASS (carried over from lingo.py):
      limiter, and /tts now returns a real 429 when it's hit instead of a
      silently-swallowed failure (see FIX #13 below).
   9. `_last_levels` was in-memory-only, so a restart silently reset every
-     user to "beginner". Now persisted to data/levels/{uid}.json.
+     user to "beginner". Now persisted to <USER_SPACE_ROOT>/<uid>/levels/{uid}.json.
   10. VocabExtractor was constructed with no arguments, so its LLM
       fallback was always a no-op. Now constructed with the tutor's own
       LLM client/model via _get_vocab_extractor().
@@ -96,7 +96,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, UploadFile, File
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
-from system.userspace import set_current_user_id, reset_current_user_id
+from system.userspace import set_current_user_id, reset_current_user_id, user_state_path
 
 from .models import (
     TranslateRequest, StartRequest, DialogueHistoryEntry, RespondRequest,
@@ -456,7 +456,7 @@ _streak_lock = threading.Lock()
 
 
 def _streak_file(uid: str) -> Path:
-    p = Path(f"data/streaks/{uid}.json")
+    p = user_state_path(f"streaks/{uid}.json")
     p.parent.mkdir(parents=True, exist_ok=True)
     return p
 
@@ -539,7 +539,7 @@ def get_xp(uid: str) -> dict:
     Brand-new users start at 0 (matching _award_xp, which also starts from
     0), so the very first award never makes the displayed total drop.
     """
-    xp_file = Path(f"data/xp/{uid}.json")
+    xp_file = user_state_path(f"xp/{uid}.json")
     xp_file.parent.mkdir(parents=True, exist_ok=True)
     xp = 0
     if xp_file.exists():
@@ -556,7 +556,7 @@ def get_xp(uid: str) -> dict:
 # read-modify-write logic in two places.
 def _award_xp(uid: str, amount: int) -> int:
     """Add `amount` XP for a user and persist it, returning the new total."""
-    xp_file = Path(f"data/xp/{uid}.json")
+    xp_file = user_state_path(f"xp/{uid}.json")
     xp_file.parent.mkdir(parents=True, exist_ok=True)
     if xp_file.exists():
         try:
@@ -591,7 +591,7 @@ _level_lock = threading.Lock()
 
 
 def _level_file(uid: str) -> Path:
-    p = Path(f"data/levels/{uid}.json")
+    p = user_state_path(f"levels/{uid}.json")
     p.parent.mkdir(parents=True, exist_ok=True)
     return p
 
@@ -1533,7 +1533,7 @@ def _ensure_lesson_pool(uid: str, level: str) -> None:
 
 
 def _word_of_day_file(uid: str) -> Path:
-    p = Path(f"data/word_of_day/{uid}.json")
+    p = user_state_path(f"word_of_day/{uid}.json")
     p.parent.mkdir(parents=True, exist_ok=True)
     return p
 
@@ -1542,7 +1542,7 @@ def _word_of_day_file(uid: str) -> Path:
 async def get_word_of_day(http_request: Request, session: dict = Depends(get_lingo_session)):
     """Duolingo-style daily word: fixed per user per calendar day.
 
-    The pick is cached to data/word_of_day/{uid}.json, so every visit to
+    The pick is cached to <USER_SPACE_ROOT>/<uid>/word_of_day/{uid}.json, so every visit to
     Stats on the same day returns the SAME word instantly (no LLM wait
     after the first call of the day).
     """
