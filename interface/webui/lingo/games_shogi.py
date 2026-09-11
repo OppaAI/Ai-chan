@@ -256,10 +256,10 @@ async def legal_moves(session: dict = Depends(_require_user)):
     }
 
 
-@router.post("/resign")
+@router.post("/resign", response_model=GameState)
 async def resign(session: dict = Depends(_require_user)):
     uid = session["user_id"]
-    game = _games.pop(uid, None)
-    if not game:
-        return {"status": "no_game", "message": "No active game"}
-    return {"status": "resigned", "message": "You resigned. Aiko wins this one~"}
+    if uid not in _games:
+        raise HTTPException(status_code=404, detail="No active game")
+    _games[uid]["status"] = "resigned"
+    return _state_response(uid)
