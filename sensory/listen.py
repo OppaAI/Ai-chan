@@ -140,25 +140,51 @@ log = _logging.getLogger(__name__)
 _ort = None               # onnxruntime module, once loaded
 sherpa_onnx = None        # sherpa_onnx module, once loaded
 hf_hub_download = None    # huggingface_hub downloader, once loaded
+_RUNTIME_ERROR: RuntimeError | None = None  # cached native-lib failure (fail fast, no re-import storms)
 
 
 def _ensure_runtime() -> None:
-    """Import the voice runtime on first model load. Idempotent."""
-    global _ort, sherpa_onnx, hf_hub_download
+    """Import the voice runtime on first model load. Idempotent.
+
+    Raises RuntimeError (not raw ImportError) when the native libs are
+    broken — e.g. a sherpa-onnx wheel built against a different
+    libonnxruntime soname than the installed onnxruntime(-gpu). The
+    failure is cached so concurrent/repeat callers fail fast instead of
+    each dumping a traceback out of their own thread.
+    """
+    global _ort, sherpa_onnx, hf_hub_download, _RUNTIME_ERROR
     if sherpa_onnx is not None and hf_hub_download is not None:
         return
-    import sherpa_onnx as _sh  # load first so its bundled libonnxruntime.so wins the soname race
-    from huggingface_hub import hf_hub_download as _hfd
-    import onnxruntime as _ort_mod  # now just reuses sherpa_onnx's already-loaded onnxruntime
-    if hasattr(_ort_mod, "set_default_logger_severity"):
-        _ort_mod.set_default_logger_severity(3)
-    _logging.getLogger("sherpa_onnx").setLevel(_logging.ERROR)
-    _ort, sherpa_onnx, hf_hub_download = _ort_mod, _sh, _hfd
+    with _RUNTIME_LOCK:
+        if sherpa_onnx is not None and hf_hub_download is not None:
+            return
+        if _RUNTIME_ERROR is not None:
+            raise _RUNTIME_ERROR
+        try:
+            import sherpa_onnx as _sh  # load first so its bundled libonnxruntime.so wins the soname race
+            from huggingface_hub import hf_hub_download as _hfd
+            import onnxruntime as _ort_mod  # now just reuses sherpa_onnx's already-loaded onnxruntime
+        except (ImportError, OSError) as e:
+            _RUNTIME_ERROR = RuntimeError(
+                "voice runtime unavailable (sherpa-onnx/onnxruntime import failed: "
+                f"{e}). On Jetson this is usually a wheel mismatch: reinstall a "
+                "consistent pair with `uv pip install --force-reinstall "
+                "sherpa-onnx onnxruntime-gpu`, or run text-only "
+                "(`python main.py --text`). Voice stays disabled until the "
+                "import works."
+            )
+            raise _RUNTIME_ERROR from e
+        if hasattr(_ort_mod, "set_default_logger_severity"):
+            _ort_mod.set_default_logger_severity(3)
+        _logging.getLogger("sherpa_onnx").setLevel(_logging.ERROR)
+        _ort, sherpa_onnx, hf_hub_download = _ort_mod, _sh, _hfd
 
 
 import threading
 import time
 import warnings
+
+_RUNTIME_LOCK = threading.Lock()
 
 try:
     from rapidfuzz import fuzz as _fuzz
@@ -578,6 +604,7 @@ class AikoListen:
         # not at app startup — keeps boot fast and RAM low in text mode.
         self._ensure_lock = threading.Lock()
         self._ready       = False
+        self._voice_error: str | None = None  # set when voice boot fails; voice stays off, text chat continues
         self._warmup_done = threading.Event()
         self._warmup_thread: threading.Thread | None = None
 
@@ -620,16 +647,33 @@ class AikoListen:
         at startup — the first mic arm (WebUI broadcast or CLI listen call)
         triggers this instead, overlapping model load with the browser's
         permission/arming UX. Subsequent calls are no-ops.
+
+        Never raises: a failed boot (e.g. broken sherpa-onnx native libs)
+        is logged once, recorded on self._voice_error, and voice features
+        stay disabled while text chat continues. _warmup_done is always set
+        on this path so join_warmup() can never hang.
         """
-        if self._ready:
+        if self._ready or self._voice_error is not None:
             return
         with self._ensure_lock:
-            if self._ready:
+            if self._ready or self._voice_error is not None:
                 return
-            self.load_asr()
-            self.load_vad()
-            self.join_warmup()
-            self.start_barge_in_monitor()
+            try:
+                self.load_asr()
+                self.load_vad()
+            except Exception as e:
+                self._voice_error = str(e)
+                self._model = None
+                self._vad_model = None
+                # No warmup thread was started — release joiners explicitly.
+                self._warmup_done.set()
+                log.warning("listen: voice boot failed, continuing text-only: %s", e)
+                return
+            try:
+                self.join_warmup()
+                self.start_barge_in_monitor()
+            except Exception as e:
+                log.warning("listen: voice post-boot step failed: %s", e)
             self._ready = True
 
     def load_asr(self) -> None:
@@ -992,6 +1036,19 @@ class AikoListen:
         # Lazy voice boot: first call pays the model-load cost here (or it
         # already ran earlier via a mic-arm kick from the WebUI).
         self.ensure_ready()
+        if self._vad_model is None:
+            # Voice boot failed (see self._voice_error) — _record() needs the
+            # VAD, so there is nothing to capture. Return empty like a
+            # silence timeout instead of crashing the caller's thread.
+            _cb(status_callback, "__IDLE__")
+            return "", {
+                "verified": None,
+                "speaker_score": None,
+                "woke": None,
+                "listen_started_at": time.monotonic(),
+                "recording_stopped_at": time.monotonic(),
+                "voice_error": self._voice_error,
+            }
         _cb(status_callback, "__LISTENING__")
         listen_started_at = time.monotonic()
         audio, woke_acoustic = self._record(
