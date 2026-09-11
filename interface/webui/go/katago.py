@@ -95,7 +95,6 @@ def _shutdown() -> None:
     _ready = False
     _board_size = None
     proc = _proc
-    _proc = None
     if proc is None:
         return
     try:
@@ -108,14 +107,18 @@ def _shutdown() -> None:
         pass
     try:
         proc.wait(timeout=5)
-    except Exception:
-        pass
-    for stream in (proc.stdin, proc.stdout, proc.stderr):
-        if stream is not None:
-            try:
-                stream.close()
-            except Exception:
-                pass
+    except subprocess.TimeoutExpired:
+        # Keep the Popen reachable until the killed child is definitely reaped.
+        proc.wait()
+    finally:
+        for stream in (proc.stdin, proc.stdout, proc.stderr):
+            if stream is not None:
+                try:
+                    stream.close()
+                except Exception:
+                    pass
+    if _proc is proc:
+        _proc = None
 
 
 def _ensure_engine() -> Optional[subprocess.Popen]:
