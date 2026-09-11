@@ -55,14 +55,9 @@ except Exception:
     import logging
     logging.getLogger(__name__).warning("lingo spawn handler not registered", exc_info=True)
 
-# Mount Shogi game API on the main FastAPI app when Lingo loads.
-try:
-    from interface.webui import auth as _auth
-    from .games_shogi import router as _shogi_router
-    _auth.app.include_router(_shogi_router)
-except Exception:
-    import logging
-    logging.getLogger(__name__).warning("Shogi games router not mounted", exc_info=True)
+# NOTE: Shogi used to live here (games_shogi.py + yaneuraou.py).
+# It moved to interface/webui/shogi/ — see that package + auth.py.
+# This module no longer mounts the Shogi router.
 
 __all__ = [
     "router",

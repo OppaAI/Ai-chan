@@ -3,10 +3,11 @@ Optional YaneuraOu USI bridge.
 
 Aiko asks the engine for the best move; she does not embed search herself.
 
-Setup:
+Setup (YAML preferred, env override wins):
   1. Build/download YaneuraOu: https://github.com/yaneurao/YaneuraOu
-  2. export YANEURAOU_PATH=/path/to/YaneuraOu-byoyomi)
-  3. Optional: YANEURAOU_MOVETIME_MS=800  (default 800)
+  2. config/android_app.yaml: YANEURAOU_PATH=/path/to/YaneuraOu-byoyomi
+     (or export YANEURAOU_PATH=/path/to/YaneuraOu-byoyomi)
+  3. Optional: YANEURAOU_MOVETIME_MS=800 in config/android_app.yaml (default 800)
 
 If the binary is missing or errors, callers should fall back to another AI.
 """

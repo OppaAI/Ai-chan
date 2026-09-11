@@ -10,3 +10,4 @@ configs:
 - system.yaml  # identity, timezone, scheduler, logging
 - sensory.yaml  # ASR, VAD, TTS
 - interface.yaml  # ports, WebUI, rendering
+- android_app.yaml  # YaneuraOu path, lingo spawn, Android companions

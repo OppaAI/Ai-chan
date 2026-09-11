@@ -1,0 +1,21 @@
+# Android app + game config
+#
+# Settings for the Android companions (Aiko-Lingo / Aiko-Shogi) and the
+# server-side game + lingo-spawn tunables they depend on.
+# Loaded via config/index.yaml -> system/config.py -> os.environ.
+# Real process env vars still win over these values.
+#
+# YaneuraOu engine is optional: when YANEURAOU_PATH points at an executable
+# binary, /api/games/shogi uses it for strong moves; otherwise Aiko falls
+# back to casual random moves (python-shogi).
+
+# -- YaneuraOu (Shogi engine, USI) --
+YANEURAOU_PATH: ""  # e.g. "/home/aiko/jetson/YaneuraOu/source/YaneuraOu-by-gcc" on Jetson Orin Nano; blank = search PATH, fallback to random moves.
+YANEURAOU_MOVETIME_MS: "800"  # Engine search time per move (ms); clamped 50-30000.
+
+# -- Lingo vocab spawn pool (server side, used by Aiko-Lingo Learn) --
+LINGO_SPAWN_BATCH: "20"  # LLM-spawned vocab items per top-up batch.
+LINGO_POOL_MIN: "30"  # Minimum pooled items per JLPT level before top-up triggers.
+
+# -- Public base URL (Android audio URLs, TTS callbacks) --
+AIKO_PUBLIC_BASE_URL: ""  # e.g. "https://aiko.ide-chroma.ts.net"; blank = use live request host, then auth REDIRECT_BASE.

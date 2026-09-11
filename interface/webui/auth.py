@@ -108,6 +108,13 @@ try:
 except Exception as e:
     log.warning(f"Could not mount Lingo router: {e}")
 
+# Shogi game API (moved out of lingo/ into interface/webui/shogi/)
+try:
+    from interface.webui.shogi import router as shogi_router
+    app.include_router(shogi_router)
+except Exception as e:
+    log.warning(f"Could not mount Shogi router: {e}")
+
 # Codebase Figure Studio (sharp silhouette — brain/eyes/ears/mouth/legs)
 try:
     from interface.webui.studio.codebase.backend.api import app as codebase_studio_app

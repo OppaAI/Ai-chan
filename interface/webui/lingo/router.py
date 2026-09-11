@@ -127,7 +127,8 @@ AUDIO_DIR.mkdir(parents=True, exist_ok=True)
 # (see _public_base_url) so the app works on any hostname, Tailnet IP, or
 # funnel URL with zero config. Env override when the request host can't be
 # trusted (reverse proxy without forwarded headers):
-#   AIKO_PUBLIC_BASE_URL=https://aiko.example.ts.net
+#   config/android_app.yaml: AIKO_PUBLIC_BASE_URL=https://aiko.example.ts.net
+#   (or export AIKO_PUBLIC_BASE_URL=https://aiko.example.ts.net)
 _LEGACY_PUBLIC_BASE = "https://aiko.ide-chroma.ts.net"
 
 

@@ -12,13 +12,15 @@ Endpoints (mounted at /api/games/shogi):
 
 Board state is SFEN (Shogi FEN). Moves use USI, e.g. "7g7f", "B*5e".
 
-AI: Aiko asks YaneuraOu (USI) for the best move when YANEURAOU_PATH is set;
+AI: Aiko asks YaneuraOu (USI) for the best move when YANEURAOU_PATH
+(config/android_app.yaml, or env) is set;
 otherwise falls back to a random legal move.
 """
 from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import random
 from typing import Optional
 
@@ -52,16 +54,30 @@ class GameState(BaseModel):
 
 
 async def _require_user(request: Request) -> dict:
-    """Real auth only — no AIKO_USER_ID fallback."""
+    """Session auth with owner fallback for the Android app.
+
+    Mirrors lingo's get_lingo_session: the Aiko-Shogi client has no
+    CookieJar/login flow, so unauthenticated calls fall back to the app
+    owner (AIKO_USER_ID) instead of hard-401ing every move.
+    """
     from interface.webui import auth
 
     try:
         session = await auth.require_session(request)
         return await auth.require_accepted_session(session)
     except HTTPException:
+        # Auth attempted but rejected (no/invalid cookie, terms unaccepted)
+        # — fall back to owner before giving up.
+        owner = (os.getenv("AIKO_USER_ID") or "").strip()
+        if owner:
+            log.warning("Shogi session auth failed — falling back to app owner")
+            return {"user_id": owner, "username": owner}
         raise
     except Exception as e:
         log.warning("Shogi auth failed: %s", e)
+        owner = (os.getenv("AIKO_USER_ID") or "").strip()
+        if owner:
+            return {"user_id": owner, "username": owner}
         raise HTTPException(status_code=401, detail="Authentication required")
 
 
@@ -82,6 +98,11 @@ def _status_for(board) -> str:
         return "checkmate"
     if board.is_stalemate():
         return "stalemate"
+    try:
+        if board.is_fourfold_repetition():
+            return "draw"
+    except AttributeError:
+        pass
     if board.is_game_over():
         return "draw"
     return "playing"
@@ -150,7 +171,7 @@ async def engine_status(session: dict = Depends(_require_user)):
         ok = yaneuraou.available()
         return {
             "yaneuraou": ok,
-            "path": path if ok else path,
+            "path": path,
             "movetime_ms": yaneuraou.normalized_movetime_ms(),
             "fallback": "random",
         }

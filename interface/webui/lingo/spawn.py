@@ -22,8 +22,39 @@ from .lingo_store import (
 )
 
 POOL_DB = MATERIALS_DB  # consolidated single global file
-SPAWN_BATCH = int(os.getenv("LINGO_SPAWN_BATCH", "20"))
-POOL_MIN = int(os.getenv("LINGO_POOL_MIN", "30"))
+
+
+def _spawn_batch() -> int:
+    """LLM-spawn batch size from config/android_app.yaml (LINGO_SPAWN_BATCH)."""
+    try:
+        from system.config import env_int
+
+        return env_int("LINGO_SPAWN_BATCH", 20)
+    except Exception:
+        try:
+            return int(os.getenv("LINGO_SPAWN_BATCH", "20"))
+        except (TypeError, ValueError):
+            return 20
+
+
+def _pool_min() -> int:
+    """Pool minimum from config/android_app.yaml (LINGO_POOL_MIN)."""
+    try:
+        from system.config import env_int
+
+        return env_int("LINGO_POOL_MIN", 30)
+    except Exception:
+        try:
+            return int(os.getenv("LINGO_POOL_MIN", "30"))
+        except (TypeError, ValueError):
+            return 30
+
+
+# Import-time snapshots kept for backward compat (tests / external reads).
+# Internal code below uses _spawn_batch() / _pool_min() so YAML + env
+# overrides apply even if the process imports this module before load_config().
+SPAWN_BATCH = int(os.getenv("LINGO_SPAWN_BATCH", "20") or 20)
+POOL_MIN = int(os.getenv("LINGO_POOL_MIN", "30") or 30)
 LEARN_SESSION_N = 10
 REVIEW_SESSION_N = 10
 
@@ -265,7 +296,9 @@ def mark_learned(uid: str, items: List[dict]) -> int:
     return n
 
 
-def _llm_spawn_batch(count: int = SPAWN_BATCH, level: str = "N5") -> List[dict]:
+def _llm_spawn_batch(count: int | None = None, level: str = "N5") -> List[dict]:
+    if count is None:
+        count = _spawn_batch()
     try:
         from interface.webui import auth
         if not auth.aiko_web_instance or not auth.aiko_web_instance._think:
@@ -315,9 +348,9 @@ def _llm_spawn_batch(count: int = SPAWN_BATCH, level: str = "N5") -> List[dict]:
 def top_up_pool(level: str = "N5", force: bool = False) -> int:
     level = normalize_level(level)
     with _pool_lock:
-        if not force and pool_count(level) >= POOL_MIN:
+        if not force and pool_count(level) >= _pool_min():
             return 0
-        items = _llm_spawn_batch(SPAWN_BATCH, level=level)
+        items = _llm_spawn_batch(_spawn_batch(), level=level)
         if not items:
             return 0
         return pool_add(items, level=level)
