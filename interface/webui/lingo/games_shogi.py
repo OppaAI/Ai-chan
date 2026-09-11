@@ -7,6 +7,7 @@ Endpoints (mounted at /api/games/shogi):
   GET  /state          — current board + status
   GET  /legal-moves    — legal USI moves for the side to move
   GET  /engine         — whether YaneuraOu is available
+  POST /warmup         — pre-spawn + handshake YaneuraOu without playing a move
   POST /resign         — end the game
 
 Board state is SFEN (Shogi FEN). Moves use USI, e.g. "7g7f", "B*5e".
@@ -155,6 +156,29 @@ async def engine_status(session: dict = Depends(_require_user)):
         }
     except Exception as e:
         return {"yaneuraou": False, "error": str(e), "fallback": "random"}
+
+
+@router.post("/warmup")
+async def warmup_engine(session: dict = Depends(_require_user)):
+    """
+    Pre-spawn YaneuraOu and complete its USI handshake now, without playing
+    a move. Meant to be called when the app opens (or the lobby loads) so
+    the process is already up and ready by the time the user starts a game
+    — the first real move then has no extra spawn/handshake latency.
+
+    Safe to call anytime, including with no active game and repeatedly;
+    it's a fast no-op if the engine is already warm.
+    """
+    try:
+        from . import yaneuraou
+
+        if not yaneuraou.available():
+            return {"warmed": False, "reason": "engine binary not found/configured"}
+        ok = await asyncio.to_thread(yaneuraou.ensure_ready)
+        return {"warmed": ok}
+    except Exception as e:
+        log.warning("Engine warmup failed: %s", e)
+        return {"warmed": False, "error": str(e)}
 
 
 @router.post("/start", response_model=GameState)
