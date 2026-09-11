@@ -22,8 +22,6 @@ try:
     register_lingo_spawn_handler(seed_jobs=False)
     warm_pools_on_startup()
 
-    # Post-login schedule bootstrap does not yet call ensure_lingo_spawn_job
-    # directly; wrap it so the hourly job is seeded with other user jobs.
     def _wrap_bootstrap() -> None:
         try:
             from system import schedule as sched
@@ -56,6 +54,15 @@ try:
 except Exception:
     import logging
     logging.getLogger(__name__).warning("lingo spawn handler not registered", exc_info=True)
+
+# Mount Shogi game API on the main FastAPI app when Lingo loads.
+try:
+    from interface.webui import auth as _auth
+    from .games_shogi import router as _shogi_router
+    _auth.app.include_router(_shogi_router)
+except Exception:
+    import logging
+    logging.getLogger(__name__).warning("Shogi games router not mounted", exc_info=True)
 
 __all__ = [
     "router",
