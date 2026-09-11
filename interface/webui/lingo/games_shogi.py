@@ -6,10 +6,13 @@ Endpoints (mounted at /api/games/shogi):
   POST /move           — play a USI move; Aiko replies if vs_ai
   GET  /state          — current board + status
   GET  /legal-moves    — legal USI moves for the side to move
+  GET  /engine         — whether YaneuraOu is available
   POST /resign         — end the game
 
 Board state is SFEN (Shogi FEN). Moves use USI, e.g. "7g7f", "B*5e".
-MVP AI picks a random legal move; swap _ai_move for LLM later.
+
+AI: Aiko asks YaneuraOu (USI) for the best move when YANEURAOU_PATH is set;
+otherwise falls back to a random legal move.
 """
 from __future__ import annotations
 
@@ -25,7 +28,6 @@ log = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/games/shogi", tags=["games"])
 
 # In-memory games keyed by user_id. Fine for single-user / MVP.
-# Persist to SQLite later if needed.
 _games: dict[str, dict] = {}
 
 
@@ -44,6 +46,7 @@ class GameState(BaseModel):
     status: str  # playing | checkmate | stalemate | draw | resigned
     mode: str = "vs_ai"
     ai_comment: Optional[str] = None
+    engine: Optional[str] = None  # "yaneuraou" | "random" | None
 
 
 async def _require_user(request: Request) -> dict:
@@ -83,20 +86,46 @@ def _status_for(board) -> str:
 
 
 def _turn_label(board) -> str:
-    # python-shogi: BLACK moves first (先手)
     shogi = _import_shogi()
     return "black" if board.turn == shogi.BLACK else "white"
 
 
 def _ai_move(board):
-    """MVP: random legal move. Replace with LLM / engine later."""
+    """
+    Aiko asks YaneuraOu for the right move when available;
+    otherwise picks a random legal move.
+    Returns (move | None, engine_name).
+    """
+    shogi = _import_shogi()
     legal = list(board.legal_moves)
     if not legal:
-        return None
-    return random.choice(legal)
+        return None, None
+
+    # 1) Ask YaneuraOu
+    try:
+        from . import yaneuraou
+
+        usi = yaneuraou.best_move_usi(board.sfen())
+        if usi:
+            try:
+                mv = shogi.Move.from_usi(usi)
+                if mv in board.legal_moves:
+                    return mv, "yaneuraou"
+                log.warning("YaneuraOu returned illegal move %s — ignoring", usi)
+            except Exception:
+                log.warning("Could not parse YaneuraOu move %s", usi, exc_info=True)
+    except Exception:
+        log.warning("YaneuraOu bridge error", exc_info=True)
+
+    # 2) Fallback
+    return random.choice(legal), "random"
 
 
-def _state_response(uid: str, ai_comment: Optional[str] = None) -> GameState:
+def _state_response(
+    uid: str,
+    ai_comment: Optional[str] = None,
+    engine: Optional[str] = None,
+) -> GameState:
     game = _games[uid]
     board = game["board"]
     return GameState(
@@ -106,7 +135,26 @@ def _state_response(uid: str, ai_comment: Optional[str] = None) -> GameState:
         status=game.get("status", _status_for(board)),
         mode=game.get("mode", "vs_ai"),
         ai_comment=ai_comment,
+        engine=engine,
     )
+
+
+@router.get("/engine")
+async def engine_status(session: dict = Depends(_require_user)):
+    """Report whether YaneuraOu is configured and runnable."""
+    try:
+        from . import yaneuraou
+
+        path = yaneuraou.engine_path()
+        ok = yaneuraou.available()
+        return {
+            "yaneuraou": ok,
+            "path": path if ok else path,
+            "movetime_ms": int(__import__("os").getenv("YANEURAOU_MOVETIME_MS", "800")),
+            "fallback": "random",
+        }
+    except Exception as e:
+        return {"yaneuraou": False, "error": str(e), "fallback": "random"}
 
 
 @router.post("/start", response_model=GameState)
@@ -121,8 +169,20 @@ async def start_game(body: StartRequest, session: dict = Depends(_require_user))
         "last_move": None,
         "status": "playing",
     }
-    log.info("Shogi game started for %s mode=%s", uid, mode)
-    return _state_response(uid, ai_comment="Let's play Shogi! You move first ♟️")
+    eng = None
+    try:
+        from . import yaneuraou
+
+        eng = "yaneuraou" if yaneuraou.available() else "random"
+    except Exception:
+        eng = "random"
+    comment = "Let's play Shogi! You move first ♟️"
+    if eng == "yaneuraou":
+        comment += " (Aiko will ask YaneuraOu for strong moves)"
+    else:
+        comment += " (engine offline — Aiko plays casual moves)"
+    log.info("Shogi game started for %s mode=%s engine=%s", uid, mode, eng)
+    return _state_response(uid, ai_comment=comment, engine=eng)
 
 
 @router.post("/move", response_model=GameState)
@@ -156,18 +216,22 @@ async def make_move(body: MoveRequest, session: dict = Depends(_require_user)):
     game["status"] = status
 
     ai_comment = None
+    engine = None
     if game["mode"] == "vs_ai" and status == "playing":
-        ai = _ai_move(board)
+        ai, engine = _ai_move(board)
         if ai is not None:
             board.push(ai)
             usi = ai.usi()
             game["last_move"] = usi
             game["status"] = _status_for(board)
-            ai_comment = f"Aiko plays {usi}"
+            if engine == "yaneuraou":
+                ai_comment = f"Aiko (via YaneuraOu) plays {usi}"
+            else:
+                ai_comment = f"Aiko plays {usi}"
             if game["status"] == "checkmate":
                 ai_comment += " — checkmate! 🐱"
 
-    return _state_response(uid, ai_comment=ai_comment)
+    return _state_response(uid, ai_comment=ai_comment, engine=engine)
 
 
 @router.get("/state", response_model=GameState)
