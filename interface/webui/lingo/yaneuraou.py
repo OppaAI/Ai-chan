@@ -5,7 +5,7 @@ Aiko asks the engine for the best move; she does not embed search herself.
 
 Setup:
   1. Build/download YaneuraOu: https://github.com/yaneurao/YaneuraOu
-  2. export YANEURAOU_PATH=/path/to/YaneuraOu  (or YaneuraOu-byoyomi)
+  2. export YANEURAOU_PATH=/path/to/YaneuraOu-byoyomi)
   3. Optional: YANEURAOU_MOVETIME_MS=800  (default 800)
 
 If the binary is missing or errors, callers should fall back to another AI.
@@ -180,6 +180,19 @@ def _shutdown() -> None:
         except Exception:
             pass
         _proc = None
+
+
+def ensure_ready() -> bool:
+    """
+    Public warmup hook: spawn the engine process and complete the USI
+    handshake now, without running a search. Safe to call speculatively
+    (e.g. when the app launches) — if the engine is already up and ready
+    this is a fast no-op; otherwise it pays the process-spawn + handshake
+    cost up front so the first real move has no extra latency.
+    """
+    with _LOCK:
+        proc = _ensure_engine()
+        return proc is not None
 
 
 def best_move_usi(sfen: str, movetime_ms: Optional[int] = None) -> Optional[str]:
