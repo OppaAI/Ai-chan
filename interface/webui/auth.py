@@ -115,6 +115,13 @@ try:
 except Exception as e:
     log.warning(f"Could not mount Shogi router: {e}")
 
+# Go (囲碁) game API — parallel to shogi/
+try:
+    from interface.webui.go import router as go_router
+    app.include_router(go_router)
+except Exception as e:
+    log.warning(f"Could not mount Go router: {e}")
+
 # Codebase Figure Studio (sharp silhouette — brain/eyes/ears/mouth/legs)
 try:
     from interface.webui.studio.codebase.backend.api import app as codebase_studio_app
