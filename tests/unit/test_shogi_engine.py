@@ -3,7 +3,10 @@ from __future__ import annotations
 import asyncio
 import importlib.util
 import sys
+import time
 from pathlib import Path
+
+import pytest
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -136,6 +139,8 @@ def test_make_move_runs_ai_search_in_worker_and_updates_engine(monkeypatch):
 
     async def fake_to_thread(function, *args):
         calls.append((function, *args))
+        if function is games_shogi._banter_for:
+            return "mocked banter"
         return Move("3c3d"), "random"
 
     monkeypatch.setattr(games_shogi.asyncio, "to_thread", fake_to_thread)
@@ -143,8 +148,12 @@ def test_make_move_runs_ai_search_in_worker_and_updates_engine(monkeypatch):
         games_shogi.make_move(games_shogi.MoveRequest(move="7g7f"), {"user_id": "user"})
     )
 
-    assert calls == [(games_shogi._ai_move, board, None)]
+    assert calls == [
+        (games_shogi._ai_move, board, None, None),
+        (games_shogi._banter_for, "3c3d", None, "playing"),
+    ]
     assert response.engine == "random"
+    assert response.ai_comment.endswith("mocked banter")
     assert games_shogi._games["user"]["engine"] == "random"
 
 
@@ -272,3 +281,182 @@ def test_ai_move_medium_caps_depth(monkeypatch):
     assert move.usi() == "7g7f"
     assert engine == "yaneuraou"
     assert seen == {"movetime_ms": 400, "depth": 6}
+
+
+def test_banter_disabled_skips_llm_call(monkeypatch):
+    class Move:
+        def __init__(self, value):
+            self.value = value
+
+        def __eq__(self, other):
+            return isinstance(other, Move) and self.value == other.value
+
+        def usi(self):
+            return self.value
+
+    class MoveFactory:
+        @staticmethod
+        def from_usi(value):
+            return Move(value)
+
+    class Board:
+        turn = 0
+
+        def __init__(self):
+            self.legal_moves = [Move("7g7f")]
+
+        def push(self, move):
+            self.legal_moves = [Move("3c3d")]
+
+        def sfen(self):
+            return "test-sfen"
+
+    board = Board()
+    games_shogi._games["user"] = {
+        "board": board,
+        "mode": "vs_ai",
+        "status": "playing",
+        "engine": "yaneuraou",
+    }
+    monkeypatch.setenv("SHOGI_BANTER", "0")
+    monkeypatch.setattr(games_shogi, "_import_shogi", lambda: type("Shogi", (), {"Move": MoveFactory}))
+    monkeypatch.setattr(games_shogi, "_status_for", lambda board: "playing")
+    monkeypatch.setattr(games_shogi, "_turn_label", lambda board: "black")
+    calls = []
+
+    async def fake_to_thread(function, *args):
+        calls.append((function, *args))
+        return Move("3c3d"), "random"
+
+    monkeypatch.setattr(games_shogi.asyncio, "to_thread", fake_to_thread)
+    response = asyncio.run(
+        games_shogi.make_move(games_shogi.MoveRequest(move="7g7f"), {"user_id": "user"})
+    )
+
+    assert calls == [(games_shogi._ai_move, board, None, None)]
+    assert response.ai_comment == "Aiko plays 3c3d"
+
+
+def test_banter_for_returns_none_without_llm():
+    assert games_shogi._banter_for("7g7f", "medium", "playing") is None
+
+
+def test_clock_charge_main_then_byoyomi(monkeypatch):
+    monkeypatch.setenv("SHOGI_MAIN_TIME_S", "60")
+    monkeypatch.setenv("SHOGI_BYOYOMI_S", "30")
+    game = {"clock": games_shogi._new_clock()}
+    assert game["clock"] is not None
+    assert games_shogi._charge_clock(game, "black", 10_000) is True
+    assert game["clock"]["remaining"]["black"] == pytest.approx(50_000)
+    assert games_shogi._charge_clock(game, "black", 50_000) is True
+    assert game["clock"]["remaining"]["black"] == 0
+    assert games_shogi._charge_clock(game, "black", 31_000) is False
+
+
+def test_clock_off_when_zeroed(monkeypatch):
+    monkeypatch.setenv("SHOGI_MAIN_TIME_S", "0")
+    monkeypatch.setenv("SHOGI_BYOYOMI_S", "0")
+    assert games_shogi._new_clock() is None
+    assert games_shogi._clock_view({"clock": None}) == (None, None, None)
+
+
+def test_make_move_flags_on_timeout(monkeypatch):
+    class Move:
+        def __init__(self, value):
+            self.value = value
+
+        def __eq__(self, other):
+            return isinstance(other, Move) and self.value == other.value
+
+        def usi(self):
+            return self.value
+
+    class MoveFactory:
+        @staticmethod
+        def from_usi(value):
+            return Move(value)
+
+    class Board:
+        turn = 0
+
+        def __init__(self):
+            self.legal_moves = [Move("7g7f")]
+            self.pushed = []
+
+        def push(self, move):
+            self.pushed.append(move)
+
+        def sfen(self):
+            return "test-sfen"
+
+    monkeypatch.setenv("SHOGI_MAIN_TIME_S", "600")
+    monkeypatch.setenv("SHOGI_BYOYOMI_S", "30")
+    board = Board()
+    games_shogi._games["user"] = {
+        "board": board,
+        "mode": "vs_ai",
+        "status": "playing",
+        "engine": "yaneuraou",
+        "clock": {
+            "remaining": {"black": 1_000.0, "white": 600_000.0},
+            "byoyomi_ms": 30_000.0,
+            "stamp": time.monotonic() - 60.0,  # 60s think > 30s byoyomi
+        },
+    }
+    monkeypatch.setattr(games_shogi, "_import_shogi", lambda: type("Shogi", (), {"Move": MoveFactory}))
+    monkeypatch.setattr(games_shogi, "_turn_label", lambda board: "black")
+    monkeypatch.setattr(games_shogi, "_status_for", lambda board: "playing")
+    calls = []
+
+    async def fake_to_thread(function, *args):
+        calls.append((function, *args))
+        raise AssertionError("no AI search after flag")
+
+    monkeypatch.setattr(games_shogi.asyncio, "to_thread", fake_to_thread)
+    response = asyncio.run(
+        games_shogi.make_move(games_shogi.MoveRequest(move="7g7f"), {"user_id": "user"})
+    )
+
+    assert calls == []
+    assert board.pushed == []
+    assert response.status == "timeout"
+    assert "Flag" in (response.ai_comment or "")
+
+
+def test_ai_move_caps_movetime_by_clock(monkeypatch):
+    class Move:
+        def __init__(self, value):
+            self.value = value
+
+        def __eq__(self, other):
+            return isinstance(other, Move) and self.value == other.value
+
+        def usi(self):
+            return self.value
+
+    class MoveFactory:
+        @staticmethod
+        def from_usi(value):
+            return Move(value)
+
+    class Board:
+        legal_moves = [Move("7g7f")]
+
+        def sfen(self):
+            return "test-sfen"
+
+    seen = {}
+
+    class FakeBridge:
+        @staticmethod
+        def best_move_usi(sfen, movetime_ms=None, depth="unset"):
+            seen["movetime_ms"] = movetime_ms
+            seen["depth"] = depth
+            return "7g7f"
+
+    monkeypatch.setattr(games_shogi, "_import_shogi", lambda: type("Shogi", (), {"Move": MoveFactory}))
+    monkeypatch.setattr(games_shogi, "_engine_bridge", lambda: FakeBridge)
+    move, engine = games_shogi._ai_move(Board(), difficulty="hard", movetime_cap_ms=120.0)
+    assert move.usi() == "7g7f"
+    assert engine == "yaneuraou"
+    assert seen == {"movetime_ms": 120, "depth": None}

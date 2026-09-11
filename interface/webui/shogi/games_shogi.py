@@ -19,6 +19,11 @@ otherwise falls back to a random legal move.
 Strength: SHOGI_DIFFICULTY (config/android_app.yaml, or per-game
 `difficulty` in POST /start) — easy | medium | hard. Lower levels cap
 the search depth and mix in random moves.
+
+Clock: real byoyomi (SHOGI_MAIN_TIME_S + SHOGI_BYOYOMI_S in
+config/android_app.yaml). Each side's main time ticks on their moves;
+once it hits zero, every move must come within the byoyomi allowance
+or that side flags (status "timeout"). 0/0 disables the clock.
 """
 from __future__ import annotations
 
@@ -26,6 +31,7 @@ import asyncio
 import logging
 import os
 import random
+import time
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -37,6 +43,67 @@ router = APIRouter(prefix="/api/games/shogi", tags=["games"])
 
 # In-memory games keyed by user_id. Fine for single-user / MVP.
 _games: dict[str, dict] = {}
+
+
+def _clock_settings() -> tuple[Optional[float], float]:
+    """(main_ms per side or None, byoyomi_ms). (None, 0) = clock off."""
+    try:
+        main_s = float(os.getenv("SHOGI_MAIN_TIME_S", "600"))
+    except (TypeError, ValueError):
+        main_s = 600.0
+    try:
+        byoyomi_s = float(os.getenv("SHOGI_BYOYOMI_S", "30"))
+    except (TypeError, ValueError):
+        byoyomi_s = 30.0
+    main_ms = max(0.0, main_s) * 1000.0
+    byoyomi_ms = max(0.0, byoyomi_s) * 1000.0
+    if main_ms <= 0 and byoyomi_ms <= 0:
+        return None, 0.0
+    return main_ms, byoyomi_ms
+
+
+def _new_clock() -> Optional[dict]:
+    """Fresh clock state, or None when the clock is disabled."""
+    main_ms, byoyomi_ms = _clock_settings()
+    if main_ms is None:
+        return None
+    return {
+        "remaining": {"black": main_ms, "white": main_ms},
+        "byoyomi_ms": byoyomi_ms,
+        "stamp": time.monotonic(),
+    }
+
+
+def _charge_clock(game: dict, side: str, elapsed_ms: float) -> bool:
+    """Deduct elapsed_ms from side's clock. False = flagged.
+
+    Main time first; once it is gone, the move must still fall inside
+    one byoyomi period (classic single-period byoyomi).
+    """
+    clock = game.get("clock")
+    if not clock:
+        return True
+    remaining = clock["remaining"][side] - elapsed_ms
+    if remaining >= 0:
+        clock["remaining"][side] = remaining
+        return True
+    if elapsed_ms <= clock["byoyomi_ms"]:
+        clock["remaining"][side] = 0.0
+        return True
+    clock["remaining"][side] = 0.0
+    return False
+
+
+def _clock_view(game: dict) -> tuple[Optional[int], Optional[int], Optional[int]]:
+    """(black_ms, white_ms, byoyomi_ms) snapshot for API responses."""
+    clock = game.get("clock")
+    if not clock:
+        return None, None, None
+    return (
+        max(0, int(clock["remaining"]["black"])),
+        max(0, int(clock["remaining"]["white"])),
+        int(clock["byoyomi_ms"]),
+    )
 
 
 class StartRequest(BaseModel):
@@ -54,10 +121,13 @@ class GameState(BaseModel):
     sfen: str
     turn: str  # "black" (user / 先手) or "white" (Aiko / 後手)
     last_move: Optional[str] = None
-    status: str  # playing | checkmate | stalemate | draw | resigned
+    status: str  # playing | checkmate | stalemate | draw | resigned | timeout
     mode: str = "vs_ai"
     ai_comment: Optional[str] = None
     engine: Optional[str] = None  # "yaneuraou" | "random" | None
+    clock_black_ms: Optional[int] = None  # remaining main time (None = no clock)
+    clock_white_ms: Optional[int] = None
+    byoyomi_ms: Optional[int] = None
 
 
 async def _require_user(request: Request) -> dict:
@@ -150,11 +220,69 @@ def _engine_bridge():
         return None
 
 
-def _ai_move(board, difficulty: Optional[str] = None):
+def _banter_enabled() -> bool:
+    """LLM move chatter on/off (SHOGI_BANTER, default on — shogi is slow anyway)."""
+    return (os.getenv("SHOGI_BANTER", "1") or "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+
+def _banter_for(usi: str, difficulty: Optional[str], status: str) -> Optional[str]:
+    """One short Aiko line about her just-played move, or None.
+
+    Never raises and never blocks the game: any failure (no LLM
+    instance, timeout, empty reply) falls back to the template comment.
+    """
+    try:
+        from interface.webui import auth
+
+        if not auth.aiko_web_instance or not auth.aiko_web_instance._think:
+            return None
+        think = auth.aiko_web_instance._think
+        ending = " and checkmated the user" if status == "checkmate" else ""
+        response = think._client.chat.completions.create(
+            model=think._llm_model,
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "You are Aiko, a playful cat-girl AI playing shogi "
+                        "(Japanese chess) as White against the user. "
+                        f"You just played {usi} in a {difficulty_name(difficulty)} game{ending}. "
+                        "Reply with ONE short playful line (under 20 words, "
+                        "English with a touch of Japanese flavor). No board "
+                        "analysis, no notation lecture, no quotes."
+                    ),
+                },
+                {"role": "user", "content": "React to your move."},
+            ],
+            max_tokens=60,
+            timeout=30.0,
+        )
+        text = (response.choices[0].message.content or "").strip().splitlines()
+        line = (text[0] if text else "").strip().strip("\"'")[:140]
+        return line or None
+    except Exception:
+        log.debug("Shogi banter failed, using template comment", exc_info=True)
+        return None
+
+
+def _ai_move(
+    board,
+    difficulty: Optional[str] = None,
+    movetime_cap_ms: Optional[float] = None,
+):
     """
     Aiko asks YaneuraOu for the right move when available;
     otherwise picks a random legal move.
     Returns (move | None, engine_name).
+
+    movetime_cap_ms bounds the search so the engine can never flag
+    itself when the clock is on (hard mode only; depth-capped levels
+    finish in milliseconds anyway).
     """
     shogi = _import_shogi()
     legal = list(board.legal_moves)
@@ -162,6 +290,11 @@ def _ai_move(board, difficulty: Optional[str] = None):
         return None, None
 
     preset = _DIFFICULTY_PRESETS[difficulty_name(difficulty)]
+    movetime_ms = preset["movetime_ms"]
+    if preset["depth"] is None and movetime_cap_ms is not None:
+        # best_move_usi() clamps this again via normalized_movetime_ms.
+        if movetime_ms is None or movetime_cap_ms < movetime_ms:
+            movetime_ms = max(50, int(movetime_cap_ms))
 
     # 0) Human-like blunder: occasional random move, no engine search.
     if preset["blunder"] > 0 and random.random() < preset["blunder"]:
@@ -173,7 +306,7 @@ def _ai_move(board, difficulty: Optional[str] = None):
         usi = (
             bridge.best_move_usi(
                 board.sfen(),
-                movetime_ms=preset["movetime_ms"],
+                movetime_ms=movetime_ms,
                 depth=preset["depth"],
             )
             if bridge is not None
@@ -200,6 +333,7 @@ def _state_response(
 ) -> GameState:
     game = _games[uid]
     board = game["board"]
+    black_ms, white_ms, byoyomi_ms = _clock_view(game)
     return GameState(
         sfen=board.sfen(),
         turn=_turn_label(board),
@@ -208,6 +342,9 @@ def _state_response(
         mode=game.get("mode", "vs_ai"),
         ai_comment=ai_comment,
         engine=game.get("engine"),
+        clock_black_ms=black_ms,
+        clock_white_ms=white_ms,
+        byoyomi_ms=byoyomi_ms,
     )
 
 
@@ -265,6 +402,7 @@ async def start_game(body: StartRequest, session: dict = Depends(_require_user))
         "board": shogi.Board(),
         "mode": mode,
         "difficulty": diff,
+        "clock": _new_clock(),
         "last_move": None,
         "status": "playing",
     }
@@ -310,6 +448,16 @@ async def make_move(body: MoveRequest, session: dict = Depends(_require_user)):
     if move not in board.legal_moves:
         raise HTTPException(status_code=400, detail=f"Illegal move: {move_str}")
 
+    # Charge the user's (black) clock for time since the last stamp.
+    now = time.monotonic()
+    if game.get("clock"):
+        elapsed_ms = (now - game["clock"]["stamp"]) * 1000.0
+        if not _charge_clock(game, "black", elapsed_ms):
+            game["status"] = "timeout"
+            log.info("Shogi flag: %s ran out of time", uid)
+            return _state_response(uid, ai_comment="Flag! You ran out of time — Aiko wins. ⏰")
+        game["clock"]["stamp"] = now
+
     board.push(move)
     game["last_move"] = move_str
     status = _status_for(board)
@@ -318,7 +466,20 @@ async def make_move(body: MoveRequest, session: dict = Depends(_require_user)):
     ai_comment = None
     engine = None
     if game["mode"] == "vs_ai" and status == "playing":
-        ai, engine = await asyncio.to_thread(_ai_move, board, game.get("difficulty"))
+        cap_ms = None
+        if game.get("clock"):
+            cap_ms = max(50.0, game["clock"]["remaining"]["white"] - 100.0)
+        ai_start = time.monotonic()
+        ai, engine = await asyncio.to_thread(
+            _ai_move, board, game.get("difficulty"), cap_ms
+        )
+        if game.get("clock"):
+            ai_elapsed_ms = (time.monotonic() - ai_start) * 1000.0
+            if not _charge_clock(game, "white", ai_elapsed_ms):
+                game["status"] = "timeout"
+                game["engine"] = engine
+                return _state_response(uid, ai_comment="Flag! Aiko ran out of time — you win! 🐱⏰")
+            game["clock"]["stamp"] = time.monotonic()
         game["engine"] = engine
         if ai is not None:
             board.push(ai)
@@ -331,6 +492,15 @@ async def make_move(body: MoveRequest, session: dict = Depends(_require_user)):
                 ai_comment = f"Aiko plays {usi}"
             if game["status"] == "checkmate":
                 ai_comment += " — checkmate! 🐱"
+            elif _banter_enabled():
+                # LLM chatter runs after the move is committed, in a worker
+                # so the event loop stays free; template above survives any
+                # failure.
+                line = await asyncio.to_thread(
+                    _banter_for, usi, game.get("difficulty"), game["status"]
+                )
+                if line:
+                    ai_comment = f"{ai_comment} — {line}"
 
     return _state_response(uid, ai_comment=ai_comment)
 

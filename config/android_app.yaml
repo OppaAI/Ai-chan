@@ -13,6 +13,9 @@
 YANEURAOU_PATH: "/home/oppa-ai/YaneuraOu/source/YaneuraOu-by-gcc"  # Jetson Orin Nano layout (~/YaneuraOu); blank = search PATH, fallback to random moves.
 YANEURAOU_MOVETIME_MS: "800"  # Engine search time per move (ms); clamped 50-30000. Used by hard; easy/medium use their own caps below.
 SHOGI_DIFFICULTY: "medium"  # easy | medium | hard. easy = depth 3 + 150ms + 35% random moves; medium = depth 6 + 400ms + 10% random; hard = full strength, no random.
+SHOGI_BANTER: "1"  # Aiko says one short LLM line per move (1/true/yes/on). Adds seconds per move on Nano; 0 = silent template comments only.
+SHOGI_MAIN_TIME_S: "600"  # Main time per side in seconds (10 min). 0 = sudden-death byoyomi (every move within SHOGI_BYOYOMI_S).
+SHOGI_BYOYOMI_S: "30"  # Byoyomi allowance per move in seconds once main time is gone. 0 with 0 main = no clock.
 
 # -- Lingo vocab spawn pool (server side, used by Aiko-Lingo Learn) --
 LINGO_SPAWN_BATCH: "20"  # LLM-spawned vocab items per top-up batch.
