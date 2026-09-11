@@ -88,8 +88,14 @@ class GoBoard:
                 out.append((nr, nc))
         return out
 
-    def _group(self, r: int, c: int) -> Tuple[Set[Tuple[int, int]], Set[Tuple[int, int]]]:
-        color = self.grid[r][c]
+    def _group_on(
+        self,
+        grid: List[List[int]],
+        r: int,
+        c: int,
+    ) -> Tuple[Set[Tuple[int, int]], Set[Tuple[int, int]]]:
+        """Group + liberties on an arbitrary grid (supports trial stones)."""
+        color = grid[r][c]
         if color == EMPTY:
             return set(), set()
         stones: Set[Tuple[int, int]] = set()
@@ -100,7 +106,7 @@ class GoBoard:
             cr, cc = stack.pop()
             stones.add((cr, cc))
             for nr, nc in self._neighbors(cr, cc):
-                v = self.grid[nr][nc]
+                v = grid[nr][nc]
                 if v == EMPTY:
                     libs.add((nr, nc))
                 elif v == color and (nr, nc) not in seen:
@@ -108,8 +114,15 @@ class GoBoard:
                     stack.append((nr, nc))
         return stones, libs
 
+    def _group(self, r: int, c: int) -> Tuple[Set[Tuple[int, int]], Set[Tuple[int, int]]]:
+        return self._group_on(self.grid, r, c)
+
     def is_legal(self, r: Optional[int], c: Optional[int] = None) -> bool:
-        """Pass is always legal while playing. Point must be empty, not suicide, not ko."""
+        """Pass is always legal while playing. Point must be empty, not suicide, not ko.
+
+        Non-mutating: builds a local trial grid so concurrent /state and
+        /legal-moves readers never observe a phantom stone.
+        """
         if self.status != "playing":
             return False
         if r is None:
@@ -121,20 +134,22 @@ class GoBoard:
             return False
         if self.ko is not None and (r, c) == self.ko:
             return False
-        # Trial place
+
         color = self.turn
         opp = opponent(color)
-        self.grid[r][c] = color
+        # Shallow-copy rows so we do not touch self.grid
+        trial = [row[:] for row in self.grid]
+        trial[r][c] = color
+
         captured_any = False
         for nr, nc in self._neighbors(r, c):
-            if self.grid[nr][nc] == opp:
-                stones, libs = self._group(nr, nc)
+            if trial[nr][nc] == opp:
+                _stones, libs = self._group_on(trial, nr, nc)
                 if not libs:
                     captured_any = True
                     break
-        stones, libs = self._group(r, c)
+        _stones, libs = self._group_on(trial, r, c)
         suicide = not libs and not captured_any
-        self.grid[r][c] = EMPTY
         return not suicide
 
     def legal_moves_gtp(self) -> List[str]:
@@ -175,12 +190,13 @@ class GoBoard:
         color = self.turn
         opp = opponent(color)
         self.grid[r][c] = color
-        captured: List[Tuple[int, int]] = []
+        # One group may touch the play point on multiple sides — dedupe.
+        captured: Set[Tuple[int, int]] = set()
         for nr, nc in self._neighbors(r, c):
             if self.grid[nr][nc] == opp:
                 stones, libs = self._group(nr, nc)
                 if not libs:
-                    captured.extend(stones)
+                    captured.update(stones)
         for sr, sc in captured:
             self.grid[sr][sc] = EMPTY
         self.captured[color] += len(captured)
@@ -190,7 +206,7 @@ class GoBoard:
         if len(captured) == 1:
             stones, libs = self._group(r, c)
             if len(stones) == 1 and len(libs) == 1:
-                self.ko = captured[0]
+                self.ko = next(iter(captured))
 
         self.passes = 0
         self.history.append(to_gtp(r, c, self.size))

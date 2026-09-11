@@ -24,12 +24,15 @@ from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
-from .board import BLACK, WHITE, GoBoard, color_name, opponent
+from .board import BLACK, WHITE, GoBoard, color_name
 
 log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/games/go", tags=["games"])
 
+# Process-local game store. Requires a **single worker process** (or sticky
+# sessions). Multi-worker / restart will drop or 404 in-flight games — same
+# constraint as interface/webui/shogi. Shared store is a follow-up if needed.
 _games: dict[str, dict] = {}
 
 
@@ -63,8 +66,26 @@ class GameState(BaseModel):
     moves: List[str] = Field(default_factory=list)
 
 
+def _allow_owner_fallback(request: Request) -> bool:
+    """Gate the AIKO_USER_ID fallback used by the Android companion apps.
+
+    Allows fallback only for:
+      * loopback clients, or
+      * Tailscale CGNAT (100.x.x.x), or
+      * requests carrying X-Aiko-App-Secret matching GAMES_APP_SECRET
+        (when that env is set).
+    """
+    host = (request.client.host if request.client else "") or ""
+    if host in ("127.0.0.1", "::1", "localhost") or host.startswith("100."):
+        return True
+    secret = (os.getenv("GAMES_APP_SECRET") or "").strip()
+    if secret and request.headers.get("X-Aiko-App-Secret") == secret:
+        return True
+    return False
+
+
 async def _require_user(request: Request) -> dict:
-    """Session auth with owner fallback (same pattern as Shogi)."""
+    """Session auth; limited owner fallback for the Android app."""
     from interface.webui import auth
 
     try:
@@ -72,16 +93,14 @@ async def _require_user(request: Request) -> dict:
         return await auth.require_accepted_session(session)
     except HTTPException:
         owner = (os.getenv("AIKO_USER_ID") or "").strip()
-        if owner:
+        if owner and _allow_owner_fallback(request):
             log.warning("Go session auth failed — falling back to app owner")
             return {"user_id": owner, "username": owner}
         raise
     except Exception as e:
+        # Do not convert unexpected errors into an owner session.
         log.warning("Go auth failed: %s", e)
-        owner = (os.getenv("AIKO_USER_ID") or "").strip()
-        if owner:
-            return {"user_id": owner, "username": owner}
-        raise HTTPException(status_code=401, detail="Authentication required")
+        raise HTTPException(status_code=401, detail="Authentication required") from e
 
 
 _DIFFICULTY_PRESETS = {

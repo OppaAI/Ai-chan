@@ -90,19 +90,32 @@ def _read_gtp_response(proc: subprocess.Popen, timeout: float = 60.0) -> str:
 
 
 def _shutdown() -> None:
+    """Kill engine process, reap zombie, and close pipes."""
     global _proc, _ready, _board_size
     _ready = False
     _board_size = None
-    if _proc is not None:
-        try:
-            _write(_proc, "quit")
-        except Exception:
-            pass
-        try:
-            _proc.kill()
-        except Exception:
-            pass
-        _proc = None
+    proc = _proc
+    _proc = None
+    if proc is None:
+        return
+    try:
+        _write(proc, "quit")
+    except Exception:
+        pass
+    try:
+        proc.kill()
+    except Exception:
+        pass
+    try:
+        proc.wait(timeout=5)
+    except Exception:
+        pass
+    for stream in (proc.stdin, proc.stdout, proc.stderr):
+        if stream is not None:
+            try:
+                stream.close()
+            except Exception:
+                pass
 
 
 def _ensure_engine() -> Optional[subprocess.Popen]:
