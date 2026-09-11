@@ -16,6 +16,7 @@ otherwise falls back to a random legal move.
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import random
 from typing import Optional
@@ -124,7 +125,6 @@ def _ai_move(board):
 def _state_response(
     uid: str,
     ai_comment: Optional[str] = None,
-    engine: Optional[str] = None,
 ) -> GameState:
     game = _games[uid]
     board = game["board"]
@@ -135,7 +135,7 @@ def _state_response(
         status=game.get("status", _status_for(board)),
         mode=game.get("mode", "vs_ai"),
         ai_comment=ai_comment,
-        engine=engine,
+        engine=game.get("engine"),
     )
 
 
@@ -150,7 +150,7 @@ async def engine_status(session: dict = Depends(_require_user)):
         return {
             "yaneuraou": ok,
             "path": path if ok else path,
-            "movetime_ms": int(__import__("os").getenv("YANEURAOU_MOVETIME_MS", "800")),
+            "movetime_ms": yaneuraou.normalized_movetime_ms(),
             "fallback": "random",
         }
     except Exception as e:
@@ -176,13 +176,14 @@ async def start_game(body: StartRequest, session: dict = Depends(_require_user))
         eng = "yaneuraou" if yaneuraou.available() else "random"
     except Exception:
         eng = "random"
+    _games[uid]["engine"] = eng
     comment = "Let's play Shogi! You move first ♟️"
     if eng == "yaneuraou":
         comment += " (Aiko will ask YaneuraOu for strong moves)"
     else:
         comment += " (engine offline — Aiko plays casual moves)"
     log.info("Shogi game started for %s mode=%s engine=%s", uid, mode, eng)
-    return _state_response(uid, ai_comment=comment, engine=eng)
+    return _state_response(uid, ai_comment=comment)
 
 
 @router.post("/move", response_model=GameState)
@@ -218,7 +219,8 @@ async def make_move(body: MoveRequest, session: dict = Depends(_require_user)):
     ai_comment = None
     engine = None
     if game["mode"] == "vs_ai" and status == "playing":
-        ai, engine = _ai_move(board)
+        ai, engine = await asyncio.to_thread(_ai_move, board)
+        game["engine"] = engine
         if ai is not None:
             board.push(ai)
             usi = ai.usi()
@@ -231,7 +233,7 @@ async def make_move(body: MoveRequest, session: dict = Depends(_require_user)):
             if game["status"] == "checkmate":
                 ai_comment += " — checkmate! 🐱"
 
-    return _state_response(uid, ai_comment=ai_comment, engine=engine)
+    return _state_response(uid, ai_comment=ai_comment)
 
 
 @router.get("/state", response_model=GameState)

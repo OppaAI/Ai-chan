@@ -17,14 +17,25 @@ import os
 import shutil
 import subprocess
 import threading
+import time
 from typing import Optional
 
 log = logging.getLogger(__name__)
 
-_DEFAULT_MOVETIME_MS = int(os.getenv("YANEURAOU_MOVETIME_MS", "800"))
+_DEFAULT_MOVETIME_MS = 800
 _LOCK = threading.Lock()
 _proc: Optional[subprocess.Popen] = None
 _ready = False
+
+
+def normalized_movetime_ms(value: object = None) -> int:
+    """Return a valid engine search time from an override or the environment."""
+    raw = os.getenv("YANEURAOU_MOVETIME_MS", str(_DEFAULT_MOVETIME_MS)) if value is None else value
+    try:
+        movetime = int(raw)
+    except (TypeError, ValueError):
+        movetime = _DEFAULT_MOVETIME_MS
+    return max(50, min(movetime, 30_000))
 
 
 def engine_path() -> Optional[str]:
@@ -68,10 +79,43 @@ def _write(proc: subprocess.Popen, cmd: str) -> None:
     proc.stdin.flush()
 
 
+def _stop_and_drain(proc: subprocess.Popen, timeout: float = 5.0) -> bool:
+    """Stop a timed-out search and consume output through its bestmove line."""
+    global _ready
+
+    _write(proc, "stop")
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        line = _readline(proc, timeout=max(0.0, deadline - time.monotonic()))
+        if line.startswith("bestmove"):
+            _ready = False
+            return True
+        if not line and proc.poll() is not None:
+            break
+    _shutdown()
+    return False
+
+
 def _ensure_engine() -> Optional[subprocess.Popen]:
     global _proc, _ready
     if _proc is not None and _proc.poll() is None and _ready:
         return _proc
+
+    if _proc is not None and _proc.poll() is None:
+        try:
+            _write(_proc, "isready")
+            deadline = time.monotonic() + 10.0
+            while time.monotonic() < deadline:
+                line = _readline(_proc, timeout=max(0.0, deadline - time.monotonic()))
+                if line == "readyok":
+                    _ready = True
+                    return _proc
+                if not line and _proc.poll() is not None:
+                    break
+            log.warning("YaneuraOu readyok timeout")
+        except Exception:
+            log.warning("YaneuraOu readiness check failed", exc_info=True)
+        _shutdown()
 
     path = engine_path()
     if not path or not os.path.isfile(path):
@@ -147,8 +191,7 @@ def best_move_usi(sfen: str, movetime_ms: Optional[int] = None) -> Optional[str]
     if not sfen or not sfen.strip():
         return None
 
-    movetime = int(movetime_ms if movetime_ms is not None else _DEFAULT_MOVETIME_MS)
-    movetime = max(50, min(movetime, 30_000))
+    movetime = normalized_movetime_ms(movetime_ms)
 
     with _LOCK:
         proc = _ensure_engine()
@@ -182,6 +225,7 @@ def best_move_usi(sfen: str, movetime_ms: Optional[int] = None) -> Optional[str]
                         return None
                     return move
             log.warning("YaneuraOu bestmove timeout")
+            _stop_and_drain(proc)
             return None
         except Exception:
             log.warning("YaneuraOu best_move_usi failed", exc_info=True)
