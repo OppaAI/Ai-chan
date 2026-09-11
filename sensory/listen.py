@@ -147,11 +147,11 @@ def _ensure_runtime() -> None:
     global _ort, sherpa_onnx, hf_hub_download
     if sherpa_onnx is not None and hf_hub_download is not None:
         return
-    import onnxruntime as _ort_mod
+    import sherpa_onnx as _sh  # load first so its bundled libonnxruntime.so wins the soname race
+    from huggingface_hub import hf_hub_download as _hfd
+    import onnxruntime as _ort_mod  # now just reuses sherpa_onnx's already-loaded onnxruntime
     if hasattr(_ort_mod, "set_default_logger_severity"):
         _ort_mod.set_default_logger_severity(3)
-    from huggingface_hub import hf_hub_download as _hfd
-    import sherpa_onnx as _sh
     _logging.getLogger("sherpa_onnx").setLevel(_logging.ERROR)
     _ort, sherpa_onnx, hf_hub_download = _ort_mod, _sh, _hfd
 
