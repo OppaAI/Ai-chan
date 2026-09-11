@@ -39,6 +39,17 @@ def normalized_movetime_ms(value: object = None) -> int:
     return max(50, min(movetime, 30_000))
 
 
+def normalized_depth(value: object = None) -> Optional[int]:
+    """Return a valid USI search-depth cap, or None for full strength."""
+    if value is None:
+        return None
+    try:
+        depth = int(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return None
+    return max(1, min(depth, 32))
+
+
 def engine_path() -> Optional[str]:
     """Resolve YaneuraOu binary path, or None if not configured/found."""
     raw = (os.getenv("YANEURAOU_PATH") or "").strip()
@@ -196,9 +207,17 @@ def ensure_ready() -> bool:
         return proc is not None
 
 
-def best_move_usi(sfen: str, movetime_ms: Optional[int] = None) -> Optional[str]:
+def best_move_usi(
+    sfen: str,
+    movetime_ms: Optional[int] = None,
+    depth: Optional[int] = None,
+) -> Optional[str]:
     """
     Ask YaneuraOu for the best USI move from an SFEN position.
+
+    depth caps the search (USI `go depth`, for Easy/Medium levels);
+    None means full strength with a `go movetime` search. movetime_ms
+    still bounds the read loop either way.
 
     Returns e.g. "7g7f" or "B*5e", or None if unavailable/failed.
     """
@@ -206,6 +225,7 @@ def best_move_usi(sfen: str, movetime_ms: Optional[int] = None) -> Optional[str]
         return None
 
     movetime = normalized_movetime_ms(movetime_ms)
+    depth = normalized_depth(depth)
 
     with _LOCK:
         proc = _ensure_engine()
@@ -218,7 +238,10 @@ def best_move_usi(sfen: str, movetime_ms: Optional[int] = None) -> Optional[str]
                 sfen_cmd = f"sfen {sfen_cmd}"
             _write(proc, "usinewgame")
             _write(proc, f"position {sfen_cmd}")
-            _write(proc, f"go movetime {movetime}")
+            if depth is not None:
+                _write(proc, f"go depth {depth}")
+            else:
+                _write(proc, f"go movetime {movetime}")
 
             # Read until bestmove (ignore info lines)
             deadline_reads = max(50, movetime // 20 + 50)

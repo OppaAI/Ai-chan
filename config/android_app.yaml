@@ -11,7 +11,8 @@
 
 # -- YaneuraOu (Shogi engine, USI) --
 YANEURAOU_PATH: "/home/oppa-ai/YaneuraOu/source/YaneuraOu-by-gcc"  # Jetson Orin Nano layout (~/YaneuraOu); blank = search PATH, fallback to random moves.
-YANEURAOU_MOVETIME_MS: "800"  # Engine search time per move (ms); clamped 50-30000.
+YANEURAOU_MOVETIME_MS: "800"  # Engine search time per move (ms); clamped 50-30000. Used by hard; easy/medium use their own caps below.
+SHOGI_DIFFICULTY: "medium"  # easy | medium | hard. easy = depth 3 + 150ms + 35% random moves; medium = depth 6 + 400ms + 10% random; hard = full strength, no random.
 
 # -- Lingo vocab spawn pool (server side, used by Aiko-Lingo Learn) --
 LINGO_SPAWN_BATCH: "20"  # LLM-spawned vocab items per top-up batch.

@@ -15,6 +15,10 @@ Board state is SFEN (Shogi FEN). Moves use USI, e.g. "7g7f", "B*5e".
 AI: Aiko asks YaneuraOu (USI) for the best move when YANEURAOU_PATH
 (config/android_app.yaml, or env) is set;
 otherwise falls back to a random legal move.
+
+Strength: SHOGI_DIFFICULTY (config/android_app.yaml, or per-game
+`difficulty` in POST /start) — easy | medium | hard. Lower levels cap
+the search depth and mix in random moves.
 """
 from __future__ import annotations
 
@@ -37,6 +41,9 @@ _games: dict[str, dict] = {}
 
 class StartRequest(BaseModel):
     mode: str = Field(default="vs_ai", description="vs_ai | practice")
+    difficulty: Optional[str] = Field(
+        default=None, description="easy | medium | hard (None = server default)"
+    )
 
 
 class MoveRequest(BaseModel):
@@ -113,7 +120,37 @@ def _turn_label(board) -> str:
     return "black" if board.turn == shogi.BLACK else "white"
 
 
-def _ai_move(board):
+# Difficulty presets: depth caps the engine search (USI `go depth`),
+# movetime_ms bounds the read loop (None = YANEURAOU_MOVETIME_MS),
+# blunder = probability of a uniform-random legal move instead of asking
+# the engine at all (skips the search, saving Nano CPU too).
+_DIFFICULTY_PRESETS: dict[str, dict] = {
+    "easy": {"depth": 3, "movetime_ms": 150, "blunder": 0.35},
+    "medium": {"depth": 6, "movetime_ms": 400, "blunder": 0.10},
+    "hard": {"depth": None, "movetime_ms": None, "blunder": 0.0},
+}
+
+_DEFAULT_DIFFICULTY = "medium"
+
+
+def difficulty_name(value: Optional[str] = None) -> str:
+    """Normalize a difficulty level; unknown/blank falls back to default."""
+    raw = (value if value is not None else os.getenv("SHOGI_DIFFICULTY", _DEFAULT_DIFFICULTY))
+    raw = (raw or "").strip().lower()
+    return raw if raw in _DIFFICULTY_PRESETS else _DEFAULT_DIFFICULTY
+
+
+def _engine_bridge():
+    """Resolve the YaneuraOu bridge module (separate hook so tests can patch it)."""
+    try:
+        from . import yaneuraou
+
+        return yaneuraou
+    except ImportError:
+        return None
+
+
+def _ai_move(board, difficulty: Optional[str] = None):
     """
     Aiko asks YaneuraOu for the right move when available;
     otherwise picks a random legal move.
@@ -124,11 +161,24 @@ def _ai_move(board):
     if not legal:
         return None, None
 
-    # 1) Ask YaneuraOu
-    try:
-        from . import yaneuraou
+    preset = _DIFFICULTY_PRESETS[difficulty_name(difficulty)]
 
-        usi = yaneuraou.best_move_usi(board.sfen())
+    # 0) Human-like blunder: occasional random move, no engine search.
+    if preset["blunder"] > 0 and random.random() < preset["blunder"]:
+        return random.choice(legal), "random"
+
+    # 1) Ask YaneuraOu (depth-capped unless hard)
+    try:
+        bridge = _engine_bridge()
+        usi = (
+            bridge.best_move_usi(
+                board.sfen(),
+                movetime_ms=preset["movetime_ms"],
+                depth=preset["depth"],
+            )
+            if bridge is not None
+            else None
+        )
         if usi:
             try:
                 mv = shogi.Move.from_usi(usi)
@@ -174,6 +224,8 @@ async def engine_status(session: dict = Depends(_require_user)):
             "path": path,
             "movetime_ms": yaneuraou.normalized_movetime_ms(),
             "fallback": "random",
+            "difficulty": difficulty_name(),
+            "difficulties": sorted(_DIFFICULTY_PRESETS),
         }
     except Exception as e:
         return {"yaneuraou": False, "error": str(e), "fallback": "random"}
@@ -208,9 +260,11 @@ async def start_game(body: StartRequest, session: dict = Depends(_require_user))
     shogi = _import_shogi()
     uid = session["user_id"]
     mode = body.mode if body.mode in ("vs_ai", "practice") else "vs_ai"
+    diff = difficulty_name(body.difficulty)
     _games[uid] = {
         "board": shogi.Board(),
         "mode": mode,
+        "difficulty": diff,
         "last_move": None,
         "status": "playing",
     }
@@ -224,10 +278,10 @@ async def start_game(body: StartRequest, session: dict = Depends(_require_user))
     _games[uid]["engine"] = eng
     comment = "Let's play Shogi! You move first ♟️"
     if eng == "yaneuraou":
-        comment += " (Aiko will ask YaneuraOu for strong moves)"
+        comment += f" (Aiko will ask YaneuraOu for {diff} moves)"
     else:
         comment += " (engine offline — Aiko plays casual moves)"
-    log.info("Shogi game started for %s mode=%s engine=%s", uid, mode, eng)
+    log.info("Shogi game started for %s mode=%s engine=%s difficulty=%s", uid, mode, eng, diff)
     return _state_response(uid, ai_comment=comment)
 
 
@@ -264,7 +318,7 @@ async def make_move(body: MoveRequest, session: dict = Depends(_require_user)):
     ai_comment = None
     engine = None
     if game["mode"] == "vs_ai" and status == "playing":
-        ai, engine = await asyncio.to_thread(_ai_move, board)
+        ai, engine = await asyncio.to_thread(_ai_move, board, game.get("difficulty"))
         game["engine"] = engine
         if ai is not None:
             board.push(ai)

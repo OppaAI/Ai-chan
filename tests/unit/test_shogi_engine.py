@@ -134,8 +134,8 @@ def test_make_move_runs_ai_search_in_worker_and_updates_engine(monkeypatch):
     monkeypatch.setattr(games_shogi, "_turn_label", lambda board: "black")
     calls = []
 
-    async def fake_to_thread(function, arg):
-        calls.append((function, arg))
+    async def fake_to_thread(function, *args):
+        calls.append((function, *args))
         return Move("3c3d"), "random"
 
     monkeypatch.setattr(games_shogi.asyncio, "to_thread", fake_to_thread)
@@ -143,6 +143,132 @@ def test_make_move_runs_ai_search_in_worker_and_updates_engine(monkeypatch):
         games_shogi.make_move(games_shogi.MoveRequest(move="7g7f"), {"user_id": "user"})
     )
 
-    assert calls == [(games_shogi._ai_move, board)]
+    assert calls == [(games_shogi._ai_move, board, None)]
     assert response.engine == "random"
     assert games_shogi._games["user"]["engine"] == "random"
+
+
+def test_normalized_depth_caps_and_defaults():
+    assert yaneuraou.normalized_depth() is None
+    assert yaneuraou.normalized_depth(None) is None
+    assert yaneuraou.normalized_depth("nope") is None
+    assert yaneuraou.normalized_depth(0) == 1
+    assert yaneuraou.normalized_depth(3) == 3
+    assert yaneuraou.normalized_depth(99) == 32
+
+
+def test_difficulty_name_parsing(monkeypatch):
+    monkeypatch.delenv("SHOGI_DIFFICULTY", raising=False)
+    assert games_shogi.difficulty_name() == "medium"
+    assert games_shogi.difficulty_name("HARD") == "hard"
+    assert games_shogi.difficulty_name("  easy  ") == "easy"
+    assert games_shogi.difficulty_name("grandmaster") == "medium"
+    monkeypatch.setenv("SHOGI_DIFFICULTY", "easy")
+    assert games_shogi.difficulty_name() == "easy"
+    assert games_shogi.difficulty_name("hard") == "hard"
+
+
+def test_ai_move_blunder_skips_engine(monkeypatch):
+    class Move:
+        def __init__(self, value):
+            self.value = value
+
+        def __eq__(self, other):
+            return isinstance(other, Move) and self.value == other.value
+
+        def usi(self):
+            return self.value
+
+    class Board:
+        legal_moves = [Move("7g7f")]
+
+        def sfen(self):
+            return "test-sfen"
+
+    def _boom():
+        raise AssertionError("engine must not be consulted on a blunder")
+
+    monkeypatch.setattr(games_shogi.random, "random", lambda: 0.0)
+    monkeypatch.setattr(games_shogi, "_engine_bridge", _boom)
+    move, engine = games_shogi._ai_move(Board(), difficulty="easy")
+    assert move.usi() == "7g7f"
+    assert engine == "random"
+
+
+def test_ai_move_hard_asks_engine_with_full_strength(monkeypatch):
+    class Move:
+        def __init__(self, value):
+            self.value = value
+
+        def __eq__(self, other):
+            return isinstance(other, Move) and self.value == other.value
+
+        def usi(self):
+            return self.value
+
+    class MoveFactory:
+        @staticmethod
+        def from_usi(value):
+            return Move(value)
+
+    class Board:
+        legal_moves = [Move("7g7f")]
+
+        def sfen(self):
+            return "test-sfen"
+
+    seen = {}
+
+    class FakeBridge:
+        @staticmethod
+        def best_move_usi(sfen, movetime_ms=None, depth="unset"):
+            seen["movetime_ms"] = movetime_ms
+            seen["depth"] = depth
+            return "7g7f"
+
+    monkeypatch.setattr(games_shogi, "_import_shogi", lambda: type("Shogi", (), {"Move": MoveFactory}))
+    monkeypatch.setattr(games_shogi, "_engine_bridge", lambda: FakeBridge)
+    move, engine = games_shogi._ai_move(Board(), difficulty="hard")
+    assert move.usi() == "7g7f"
+    assert engine == "yaneuraou"
+    assert seen == {"movetime_ms": None, "depth": None}
+
+
+def test_ai_move_medium_caps_depth(monkeypatch):
+    class Move:
+        def __init__(self, value):
+            self.value = value
+
+        def __eq__(self, other):
+            return isinstance(other, Move) and self.value == other.value
+
+        def usi(self):
+            return self.value
+
+    class MoveFactory:
+        @staticmethod
+        def from_usi(value):
+            return Move(value)
+
+    class Board:
+        legal_moves = [Move("7g7f")]
+
+        def sfen(self):
+            return "test-sfen"
+
+    seen = {}
+
+    class FakeBridge:
+        @staticmethod
+        def best_move_usi(sfen, movetime_ms=None, depth="unset"):
+            seen["movetime_ms"] = movetime_ms
+            seen["depth"] = depth
+            return "7g7f"
+
+    monkeypatch.setattr(games_shogi, "_import_shogi", lambda: type("Shogi", (), {"Move": MoveFactory}))
+    monkeypatch.setattr(games_shogi.random, "random", lambda: 0.99)  # no blunder
+    monkeypatch.setattr(games_shogi, "_engine_bridge", lambda: FakeBridge)
+    move, engine = games_shogi._ai_move(Board(), difficulty="medium")
+    assert move.usi() == "7g7f"
+    assert engine == "yaneuraou"
+    assert seen == {"movetime_ms": 400, "depth": 6}
