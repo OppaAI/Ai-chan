@@ -10,7 +10,7 @@
 # back to casual random moves (python-shogi).
 
 # -- YaneuraOu (Shogi engine, USI) --
-YANEURAOU_PATH: ""  # e.g. "/home/aiko/jetson/YaneuraOu/source/YaneuraOu-by-gcc" on Jetson Orin Nano; blank = search PATH, fallback to random moves.
+YANEURAOU_PATH: "/home/oppa-ai/YaneuraOu/source/YaneuraOu-by-gcc"  # Jetson Orin Nano layout (~/YaneuraOu); blank = search PATH, fallback to random moves.
 YANEURAOU_MOVETIME_MS: "800"  # Engine search time per move (ms); clamped 50-30000.
 
 # -- Lingo vocab spawn pool (server side, used by Aiko-Lingo Learn) --
