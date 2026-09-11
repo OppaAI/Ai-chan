@@ -132,7 +132,7 @@ def test_make_move_runs_ai_search_in_worker_and_updates_engine(monkeypatch):
         "status": "playing",
         "engine": "yaneuraou",
     }
-    monkeypatch.setattr(games_shogi, "_import_shogi", lambda: type("Shogi", (), {"Move": MoveFactory}))
+    monkeypatch.setattr(games_shogi, "_import_shogi", lambda: type("Shogi", (), {"Move": MoveFactory, "BLACK": 0, "WHITE": 1}))
     monkeypatch.setattr(games_shogi, "_status_for", lambda board: "playing")
     monkeypatch.setattr(games_shogi, "_turn_label", lambda board: "black")
     calls = []
@@ -235,7 +235,7 @@ def test_ai_move_hard_asks_engine_with_full_strength(monkeypatch):
             seen["depth"] = depth
             return "7g7f"
 
-    monkeypatch.setattr(games_shogi, "_import_shogi", lambda: type("Shogi", (), {"Move": MoveFactory}))
+    monkeypatch.setattr(games_shogi, "_import_shogi", lambda: type("Shogi", (), {"Move": MoveFactory, "BLACK": 0, "WHITE": 1}))
     monkeypatch.setattr(games_shogi, "_engine_bridge", lambda: FakeBridge)
     move, engine = games_shogi._ai_move(Board(), difficulty="hard")
     assert move.usi() == "7g7f"
@@ -274,7 +274,7 @@ def test_ai_move_medium_caps_depth(monkeypatch):
             seen["depth"] = depth
             return "7g7f"
 
-    monkeypatch.setattr(games_shogi, "_import_shogi", lambda: type("Shogi", (), {"Move": MoveFactory}))
+    monkeypatch.setattr(games_shogi, "_import_shogi", lambda: type("Shogi", (), {"Move": MoveFactory, "BLACK": 0, "WHITE": 1}))
     monkeypatch.setattr(games_shogi.random, "random", lambda: 0.99)  # no blunder
     monkeypatch.setattr(games_shogi, "_engine_bridge", lambda: FakeBridge)
     move, engine = games_shogi._ai_move(Board(), difficulty="medium")
@@ -319,7 +319,7 @@ def test_banter_disabled_skips_llm_call(monkeypatch):
         "engine": "yaneuraou",
     }
     monkeypatch.setenv("SHOGI_BANTER", "0")
-    monkeypatch.setattr(games_shogi, "_import_shogi", lambda: type("Shogi", (), {"Move": MoveFactory}))
+    monkeypatch.setattr(games_shogi, "_import_shogi", lambda: type("Shogi", (), {"Move": MoveFactory, "BLACK": 0, "WHITE": 1}))
     monkeypatch.setattr(games_shogi, "_status_for", lambda board: "playing")
     monkeypatch.setattr(games_shogi, "_turn_label", lambda board: "black")
     calls = []
@@ -339,6 +339,126 @@ def test_banter_disabled_skips_llm_call(monkeypatch):
 
 def test_banter_for_returns_none_without_llm():
     assert games_shogi._banter_for("7g7f", "medium", "playing") is None
+
+
+def _opening_board():
+    class Board:
+        def __init__(self):
+            self.pushed = []
+
+        def push(self, move):
+            self.pushed.append(move)
+
+        def sfen(self):
+            return "test-sfen"
+
+    return Board()
+
+
+def test_start_white_ai_opens(monkeypatch):
+    class Move:
+        def __init__(self, value):
+            self.value = value
+
+        def usi(self):
+            return self.value
+
+    board = _opening_board()
+    fake_shogi = type("Shogi", (), {"Board": lambda *a, **k: board, "BLACK": 0, "WHITE": 1})
+    monkeypatch.setattr(games_shogi, "_import_shogi", lambda: fake_shogi)
+    monkeypatch.setattr(games_shogi, "_turn_label", lambda board: "white")
+    monkeypatch.setattr(games_shogi, "_status_for", lambda board: "playing")
+
+    async def fake_to_thread(function, *args):
+        assert function is games_shogi._ai_move
+        return Move("7g7f"), "yaneuraou"
+
+    monkeypatch.setattr(games_shogi.asyncio, "to_thread", fake_to_thread)
+    response = asyncio.run(
+        games_shogi.start_game(
+            games_shogi.StartRequest(mode="vs_ai", difficulty="hard", side="white"),
+            {"user_id": "opener"},
+        )
+    )
+
+    assert games_shogi._games["opener"]["side"] == "white"
+    assert response.side == "white"
+    assert response.last_move == "7g7f"
+    assert response.engine == "yaneuraou"
+    assert "opens" in (response.ai_comment or "")
+
+
+def test_start_black_no_opening_and_bad_side_defaults(monkeypatch):
+    board = _opening_board()
+    fake_shogi = type("Shogi", (), {"Board": lambda *a, **k: board, "BLACK": 0, "WHITE": 1})
+    monkeypatch.setattr(games_shogi, "_import_shogi", lambda: fake_shogi)
+    monkeypatch.setattr(games_shogi, "_turn_label", lambda board: "black")
+    monkeypatch.setattr(games_shogi, "_status_for", lambda board: "playing")
+
+    async def fake_to_thread(function, *args):
+        raise AssertionError("black starts with no AI opening")
+
+    monkeypatch.setattr(games_shogi.asyncio, "to_thread", fake_to_thread)
+    response = asyncio.run(
+        games_shogi.start_game(
+            games_shogi.StartRequest(mode="vs_ai", side="queenside"),
+            {"user_id": "first"},
+        )
+    )
+
+    assert games_shogi._games["first"]["side"] == "black"
+    assert response.side == "black"
+    assert response.last_move is None
+    assert "move first" in (response.ai_comment or "")
+
+
+def test_make_move_rejects_wrong_turn(monkeypatch):
+    from fastapi import HTTPException
+
+    class Move:
+        def __init__(self, value):
+            self.value = value
+
+        def __eq__(self, other):
+            return isinstance(other, Move) and self.value == other.value
+
+        def usi(self):
+            return self.value
+
+    class MoveFactory:
+        @staticmethod
+        def from_usi(value):
+            return Move(value)
+
+    class Board:
+        turn = 0  # black to move, but the user plays white
+
+        def __init__(self):
+            self.legal_moves = [Move("7g7f")]
+
+        def push(self, move):
+            raise AssertionError("must not push on wrong turn")
+
+        def sfen(self):
+            return "test-sfen"
+
+    games_shogi._games["user"] = {
+        "board": Board(),
+        "mode": "vs_ai",
+        "side": "white",
+        "status": "playing",
+        "engine": "yaneuraou",
+    }
+    monkeypatch.setattr(
+        games_shogi,
+        "_import_shogi",
+        lambda: type("Shogi", (), {"Move": MoveFactory, "BLACK": 0, "WHITE": 1}),
+    )
+    with pytest.raises(HTTPException) as exc_info:
+        asyncio.run(
+            games_shogi.make_move(games_shogi.MoveRequest(move="7g7f"), {"user_id": "user"})
+        )
+    assert exc_info.value.status_code == 400
 
 
 def test_clock_charge_main_then_byoyomi(monkeypatch):
@@ -403,7 +523,7 @@ def test_make_move_flags_on_timeout(monkeypatch):
             "stamp": time.monotonic() - 60.0,  # 60s think > 30s byoyomi
         },
     }
-    monkeypatch.setattr(games_shogi, "_import_shogi", lambda: type("Shogi", (), {"Move": MoveFactory}))
+    monkeypatch.setattr(games_shogi, "_import_shogi", lambda: type("Shogi", (), {"Move": MoveFactory, "BLACK": 0, "WHITE": 1}))
     monkeypatch.setattr(games_shogi, "_turn_label", lambda board: "black")
     monkeypatch.setattr(games_shogi, "_status_for", lambda board: "playing")
     calls = []
@@ -454,7 +574,7 @@ def test_ai_move_caps_movetime_by_clock(monkeypatch):
             seen["depth"] = depth
             return "7g7f"
 
-    monkeypatch.setattr(games_shogi, "_import_shogi", lambda: type("Shogi", (), {"Move": MoveFactory}))
+    monkeypatch.setattr(games_shogi, "_import_shogi", lambda: type("Shogi", (), {"Move": MoveFactory, "BLACK": 0, "WHITE": 1}))
     monkeypatch.setattr(games_shogi, "_engine_bridge", lambda: FakeBridge)
     move, engine = games_shogi._ai_move(Board(), difficulty="hard", movetime_cap_ms=120.0)
     assert move.usi() == "7g7f"

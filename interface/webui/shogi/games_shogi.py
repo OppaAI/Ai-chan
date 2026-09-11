@@ -111,6 +111,9 @@ class StartRequest(BaseModel):
     difficulty: Optional[str] = Field(
         default=None, description="easy | medium | hard (None = server default)"
     )
+    side: Optional[str] = Field(
+        default=None, description="black (first, 先手) | white (second, 後手)"
+    )
 
 
 class MoveRequest(BaseModel):
@@ -123,6 +126,7 @@ class GameState(BaseModel):
     last_move: Optional[str] = None
     status: str  # playing | checkmate | stalemate | draw | resigned | timeout
     mode: str = "vs_ai"
+    side: str = "black"  # user's color: "black" (first, 先手) or "white" (second, 後手)
     ai_comment: Optional[str] = None
     engine: Optional[str] = None  # "yaneuraou" | "random" | None
     clock_black_ms: Optional[int] = None  # remaining main time (None = no clock)
@@ -340,6 +344,7 @@ def _state_response(
         last_move=game.get("last_move"),
         status=game.get("status", _status_for(board)),
         mode=game.get("mode", "vs_ai"),
+        side=game.get("side", "black"),
         ai_comment=ai_comment,
         engine=game.get("engine"),
         clock_black_ms=black_ms,
@@ -393,15 +398,18 @@ async def warmup_engine(session: dict = Depends(_require_user)):
 
 @router.post("/start", response_model=GameState)
 async def start_game(body: StartRequest, session: dict = Depends(_require_user)):
-    """Start a new Shogi game. User plays 先手 (black, first move)."""
+    """Start a new Shogi game. Default: user is 先手 (black, first move)."""
     shogi = _import_shogi()
     uid = session["user_id"]
     mode = body.mode if body.mode in ("vs_ai", "practice") else "vs_ai"
     diff = difficulty_name(body.difficulty)
+    side = (body.side or "").strip().lower()
+    side = side if side in ("black", "white") else "black"
     _games[uid] = {
         "board": shogi.Board(),
         "mode": mode,
         "difficulty": diff,
+        "side": side,
         "clock": _new_clock(),
         "last_move": None,
         "status": "playing",
@@ -414,12 +422,31 @@ async def start_game(body: StartRequest, session: dict = Depends(_require_user))
     except Exception:
         eng = "random"
     _games[uid]["engine"] = eng
-    comment = "Let's play Shogi! You move first ♟️"
+    if side == "black":
+        comment = "Let's play Shogi! You move first ♟️"
+    else:
+        comment = "You are 後手 (White) — Aiko moves first ♟️"
     if eng == "yaneuraou":
         comment += f" (Aiko will ask YaneuraOu for {diff} moves)"
     else:
         comment += " (engine offline — Aiko plays casual moves)"
-    log.info("Shogi game started for %s mode=%s engine=%s difficulty=%s", uid, mode, eng, diff)
+    if side == "white" and mode == "vs_ai":
+        # Aiko (black) opens immediately so it is the user's turn.
+        ai, eng2 = await asyncio.to_thread(_ai_move, _games[uid]["board"], diff, None)
+        _games[uid]["engine"] = eng2
+        if ai is not None:
+            _games[uid]["board"].push(ai)
+            _games[uid]["last_move"] = ai.usi()
+            _games[uid]["status"] = _status_for(_games[uid]["board"])
+            comment = f"Aiko opens with {ai.usi()} — your move!"
+    log.info(
+        "Shogi game started for %s mode=%s engine=%s difficulty=%s side=%s",
+        uid,
+        mode,
+        _games[uid]["engine"],
+        diff,
+        side,
+    )
     return _state_response(uid, ai_comment=comment)
 
 
@@ -435,6 +462,9 @@ async def make_move(body: MoveRequest, session: dict = Depends(_require_user)):
     if game.get("status") != "playing":
         raise HTTPException(status_code=400, detail=f"Game already over: {game['status']}")
 
+    user_side = game.get("side", "black")
+    ai_side = "white" if user_side == "black" else "black"
+
     move_str = (body.move or "").strip()
     if not move_str:
         raise HTTPException(status_code=400, detail="move is required (USI, e.g. 7g7f)")
@@ -448,11 +478,14 @@ async def make_move(body: MoveRequest, session: dict = Depends(_require_user)):
     if move not in board.legal_moves:
         raise HTTPException(status_code=400, detail=f"Illegal move: {move_str}")
 
-    # Charge the user's (black) clock for time since the last stamp.
+    if game.get("mode") == "vs_ai" and _turn_label(board) != user_side:
+        raise HTTPException(status_code=400, detail="Not your turn")
+
+    # Charge the user's clock for time since the last stamp.
     now = time.monotonic()
     if game.get("clock"):
         elapsed_ms = (now - game["clock"]["stamp"]) * 1000.0
-        if not _charge_clock(game, "black", elapsed_ms):
+        if not _charge_clock(game, user_side, elapsed_ms):
             game["status"] = "timeout"
             log.info("Shogi flag: %s ran out of time", uid)
             return _state_response(uid, ai_comment="Flag! You ran out of time — Aiko wins. ⏰")
@@ -468,14 +501,14 @@ async def make_move(body: MoveRequest, session: dict = Depends(_require_user)):
     if game["mode"] == "vs_ai" and status == "playing":
         cap_ms = None
         if game.get("clock"):
-            cap_ms = max(50.0, game["clock"]["remaining"]["white"] - 100.0)
+            cap_ms = max(50.0, game["clock"]["remaining"][ai_side] - 100.0)
         ai_start = time.monotonic()
         ai, engine = await asyncio.to_thread(
             _ai_move, board, game.get("difficulty"), cap_ms
         )
         if game.get("clock"):
             ai_elapsed_ms = (time.monotonic() - ai_start) * 1000.0
-            if not _charge_clock(game, "white", ai_elapsed_ms):
+            if not _charge_clock(game, ai_side, ai_elapsed_ms):
                 game["status"] = "timeout"
                 game["engine"] = engine
                 return _state_response(uid, ai_comment="Flag! Aiko ran out of time — you win! 🐱⏰")
