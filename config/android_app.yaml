@@ -22,4 +22,4 @@ LINGO_SPAWN_BATCH: "20"  # LLM-spawned vocab items per top-up batch.
 LINGO_POOL_MIN: "30"  # Minimum pooled items per JLPT level before top-up triggers.
 
 # -- Public base URL (Android audio URLs, TTS callbacks) --
-AIKO_PUBLIC_BASE_URL: "https://aiko.ide-chroma.ts.net"  # e.g. "https://aiko.ide-chroma.ts.net"; blank = use live request host, then auth REDIRECT_BASE.
+AIKO_PUBLIC_BASE_URL: ""  # e.g. "https://aiko.ide-chroma.ts.net"; blank = use live request host, then auth REDIRECT_BASE.
