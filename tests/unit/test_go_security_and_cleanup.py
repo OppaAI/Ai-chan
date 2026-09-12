@@ -23,31 +23,28 @@ def _request(host: str, headers: dict[str, str] | None = None) -> Request:
 
 @pytest.mark.parametrize(
     "host",
-    ["127.0.0.1", "127.255.255.254", "::1", "100.64.0.1", "100.127.255.254"],
+    ["127.0.0.1", "::1", "100.64.0.1", "203.0.113.10", "not-an-ip"],
 )
-def test_owner_fallback_allows_direct_loopback_and_tailscale(host, monkeypatch):
-    monkeypatch.delenv("GAMES_APP_SECRET", raising=False)
+def test_owner_fallback_allows_any_client_when_owner_set(host, monkeypatch):
+    """Same-as-Shogi policy: owner configured ⇒ app treated as owner."""
+    monkeypatch.setenv("AIKO_USER_ID", "owner_123")
 
     assert games_go._allow_owner_fallback(_request(host))
 
 
-@pytest.mark.parametrize(
-    "host",
-    ["localhost", "100.63.255.255", "100.128.0.1", "100.200.1.1", "not-an-ip"],
-)
-def test_owner_fallback_rejects_non_trusted_addresses(host, monkeypatch):
-    monkeypatch.delenv("GAMES_APP_SECRET", raising=False)
-
-    assert not games_go._allow_owner_fallback(_request(host))
-
-
 @pytest.mark.parametrize("header", ["Forwarded", "X-Forwarded-For", "X-Real-IP"])
-def test_owner_fallback_does_not_trust_proxy_supplied_loopback(header, monkeypatch):
-    monkeypatch.delenv("GAMES_APP_SECRET", raising=False)
+def test_owner_fallback_ignores_proxy_headers_when_owner_set(header, monkeypatch):
+    monkeypatch.setenv("AIKO_USER_ID", "owner_123")
 
-    request = _request("127.0.0.1", {header: "for=203.0.113.10"})
+    request = _request("203.0.113.10", {header: "for=198.51.100.7"})
 
-    assert not games_go._allow_owner_fallback(request)
+    assert games_go._allow_owner_fallback(request)
+
+
+def test_owner_fallback_denies_when_no_owner_configured(monkeypatch):
+    monkeypatch.delenv("AIKO_USER_ID", raising=False)
+
+    assert not games_go._allow_owner_fallback(_request("127.0.0.1"))
 
 
 class _Stream:

@@ -16,7 +16,6 @@ AI: optional KataGo GTP (KATAGO_PATH + KATAGO_MODEL); else random legal.
 from __future__ import annotations
 
 import asyncio
-import ipaddress
 import logging
 import os
 import random
@@ -35,15 +34,6 @@ router = APIRouter(prefix="/api/games/go", tags=["games"])
 # sessions). Multi-worker / restart will drop or 404 in-flight games — same
 # constraint as interface/android_app/shogi. Shared store is a follow-up if needed.
 _games: dict[str, dict] = {}
-
-_TAILSCALE_IPV4_NETWORK = ipaddress.ip_network("100.64.0.0/10")
-_PROXY_CLIENT_IP_HEADERS = (
-    "forwarded",
-    "x-forwarded-for",
-    "x-real-ip",
-    "cf-connecting-ip",
-    "true-client-ip",
-)
 
 
 class StartRequest(BaseModel):
@@ -76,38 +66,20 @@ class GameState(BaseModel):
     moves: List[str] = Field(default_factory=list)
 
 
-def _allow_owner_fallback(request: Request) -> bool:
+def _allow_owner_fallback(_request: Request) -> bool:
     """Gate the AIKO_USER_ID fallback used by the Android companion apps.
 
-    Allows fallback only for:
-      * direct loopback clients, or
-      * direct IPv4 clients in Tailscale CGNAT (100.64.0.0/10), or
-      * requests carrying X-Aiko-App-Secret matching GAMES_APP_SECRET
-        (when that env is set).
+    Same-as-Shogi policy: whenever the server owner is configured, the
+    companion app (which has no login flow) is treated as the owner,
+    regardless of client IP or proxy headers. Keep the server on
+    Tailscale-only networking — anyone able to reach these endpoints
+    plays Go as the owner.
     """
-    host = (request.client.host if request.client else "") or ""
-    has_proxy_client_ip = any(header in request.headers for header in _PROXY_CLIENT_IP_HEADERS)
-    if not has_proxy_client_ip:
-        try:
-            address = ipaddress.ip_address(host)
-        except ValueError:
-            address = None
-        if address is not None and (
-            address.is_loopback
-            or (
-                isinstance(address, ipaddress.IPv4Address)
-                and address in _TAILSCALE_IPV4_NETWORK
-            )
-        ):
-            return True
-    secret = (os.getenv("GAMES_APP_SECRET") or "").strip()
-    if secret and request.headers.get("X-Aiko-App-Secret") == secret:
-        return True
-    return False
+    return bool((os.getenv("AIKO_USER_ID") or "").strip())
 
 
 async def _require_user(request: Request) -> dict:
-    """Session auth; limited owner fallback for the Android app."""
+    """Session auth with owner fallback for the Android app (same as Shogi)."""
     from interface.webui import auth
 
     try:
