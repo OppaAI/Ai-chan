@@ -49,6 +49,7 @@ dependencies = [
     "sherpa-onnx>=1.13.7",
     "python-shogi>=1.1.1",
     "onnxruntime-gpu>=1.30.0",
+    "h11>=0.16.0",
 ]
 
 [project.optional-dependencies]
