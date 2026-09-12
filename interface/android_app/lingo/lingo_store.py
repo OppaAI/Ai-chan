@@ -2,7 +2,7 @@
 Lingo centralized storage.
 
 Global (shared, versioned with code):
-    interface/webui/lingo/materials.db
+    interface/android_app/lingo/materials.db
     - jlpt_cards / courses / grammar_decks, read-only at runtime.
     - One copy for all users, no per-user download.
 

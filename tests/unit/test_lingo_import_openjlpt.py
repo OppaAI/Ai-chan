@@ -2,7 +2,7 @@ import csv
 import sqlite3
 import time
 
-from interface.webui.lingo import import_bank, import_openjlpt, lingo_store
+from interface.android_app.lingo import import_bank, import_openjlpt, lingo_store
 
 
 def _write_csv(path, fieldnames, row):

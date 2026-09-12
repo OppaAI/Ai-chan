@@ -101,23 +101,23 @@ try:
 except ImportError as e:
     log.warning(f"Could not mount Log studio: {e}")
 
-# Lingo Japanese Learning API
+# Lingo Japanese Learning API (Android-app backend)
 try:
-    from interface.webui.lingo.router import router as lingo_router
+    from interface.android_app.lingo.router import router as lingo_router
     app.include_router(lingo_router)
 except Exception as e:
     log.warning(f"Could not mount Lingo router: {e}")
 
-# Shogi game API (moved out of lingo/ into interface/webui/shogi/)
+# Shogi game API (Android-app backend, moved from interface/webui/shogi/)
 try:
-    from interface.webui.shogi import router as shogi_router
+    from interface.android_app.shogi import router as shogi_router
     app.include_router(shogi_router)
 except Exception as e:
     log.warning(f"Could not mount Shogi router: {e}")
 
-# Go (囲碁) game API — parallel to shogi/
+# Go (囲碁) game API — Android-app backend, parallel to shogi/
 try:
-    from interface.webui.go import router as go_router
+    from interface.android_app.go import router as go_router
     app.include_router(go_router)
 except Exception as e:
     log.warning(f"Could not mount Go router: {e}")

@@ -14,7 +14,7 @@ sources: lingo
 > warm teaching via `persona/JAPANESE_CHAT.md` (no rigid tags). Only
 > activate this skill when the request carries an explicit Lingo marker
 > (`lingo`, `Lingo App Mode`, `ACTIVATE SKILL: JAPANESE_TUTOR`, or
-> `[source:lingo]`), which `interface/webui/lingo.py` always injects.
+> `[source:lingo]`), which `interface/android_app/lingo/router.py` always injects.
 
 Use this skill when the Lingo app asks Aiko to teach/correct/quiz Japanese.
 

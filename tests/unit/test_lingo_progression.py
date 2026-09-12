@@ -3,11 +3,11 @@ import importlib
 
 import pytest
 
-# NOTE: `interface.webui.lingo.__init__` re-exports the FastAPI `router`
+# NOTE: `interface.android_app.lingo.__init__` re-exports the FastAPI `router`
 # object, so plain `from ... import router` binds the APIRouter, not the
 # module. import_module reliably returns the module itself.
-router = importlib.import_module("interface.webui.lingo.router")
-from interface.webui.lingo import models as lingo_models
+router = importlib.import_module("interface.android_app.lingo.router")
+from interface.android_app.lingo import models as lingo_models
 
 
 def test_deck_sort_key_numeric_order():
@@ -64,7 +64,7 @@ def test_grade_and_advance_pass_moves_lesson(monkeypatch):
             level="N5", track=track, current_lesson=2, lessons_total=56
         ),
     )
-    from interface.webui.lingo import lingo_store
+    from interface.android_app.lingo import lingo_store
 
     advanced = []
     monkeypatch.setattr(

@@ -21,8 +21,8 @@ def _load_module(name: str, relative_path: str):
     return module
 
 
-games_shogi = _load_module("games_shogi_under_test", "interface/webui/shogi/games_shogi.py")
-yaneuraou = _load_module("yaneuraou_under_test", "interface/webui/shogi/yaneuraou.py")
+games_shogi = _load_module("games_shogi_under_test", "interface/android_app/shogi/games_shogi.py")
+yaneuraou = _load_module("yaneuraou_under_test", "interface/android_app/shogi/yaneuraou.py")
 
 
 class _FakeProcess:

@@ -1,7 +1,9 @@
 """
 Lingo: Japanese conversation learning with spaced repetition.
 
-Shared vocab: interface/webui/lingo/vocab_pool.db
+Android-app backend (moved from interface/webui/lingo/).
+
+Shared vocab: interface/android_app/lingo/materials.db
 Per-user progress: USER_SPACE_ROOT/<uid>/agentic/lingo/vocab.db
 """
 
@@ -55,8 +57,8 @@ except Exception:
     import logging
     logging.getLogger(__name__).warning("lingo spawn handler not registered", exc_info=True)
 
-# NOTE: Shogi used to live here (games_shogi.py + yaneuraou.py).
-# It moved to interface/webui/shogi/ — see that package + auth.py.
+# NOTE: Shogi used to live alongside lingo (games_shogi.py + yaneuraou.py).
+# It moved to interface/android_app/shogi/ — see that package + webui/auth.py.
 # This module no longer mounts the Shogi router.
 
 __all__ = [

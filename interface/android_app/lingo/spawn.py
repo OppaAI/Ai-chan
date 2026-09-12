@@ -1,7 +1,7 @@
 """
 Shared Lingo vocab spawn pool + hourly scheduler handler.
 
-  * Content: interface/webui/lingo/materials.db table vocab_pool (shared,
+  * Content: interface/android_app/lingo/materials.db table vocab_pool (shared,
     consolidated — replaces the old vocab_pool.db file).
   * Progress: USER_SPACE_ROOT/<uid>/agentic/lingo/vocab.db (per-user SRS)
 """

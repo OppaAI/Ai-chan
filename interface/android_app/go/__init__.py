@@ -1,7 +1,8 @@
 """
 Go (囲碁): play Go vs Aiko.
 
-Parallel to interface/webui/shogi/. Importing this package exposes the
+Android-app backend (moved from interface/webui/go/).
+Parallel to interface/android_app/shogi/. Importing this package exposes the
 FastAPI router; auth.py mounts it explicitly.
 """
 

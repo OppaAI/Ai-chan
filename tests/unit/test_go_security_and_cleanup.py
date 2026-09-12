@@ -5,7 +5,7 @@ import subprocess
 import pytest
 from fastapi import Request
 
-from interface.webui.go import games_go, katago
+from interface.android_app.go import games_go, katago
 
 
 def _request(host: str, headers: dict[str, str] | None = None) -> Request:

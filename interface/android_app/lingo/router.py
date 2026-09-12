@@ -118,9 +118,11 @@ router = APIRouter(prefix="/api/nihongo", tags=["lingo"])
 # ============================================================================
 STATIC_DIR = Path(__file__).parent / "static"
 # NOTE: wav files must land under interface/webui/static — that is the
-# directory webui.py actually mounts. lingo/static is NOT served, so audio
-# URLs written there 404 and the app's Play button silently fails.
-AUDIO_DIR = Path(__file__).parent.parent / "static" / "lingo_audio"
+# directory webui.py actually mounts. android_app/lingo/static is NOT served,
+# so audio URLs written there 404 and the app's Play button silently fails.
+# This backend lives under interface/android_app/, so climb to interface/
+# and back down into webui/static.
+AUDIO_DIR = Path(__file__).resolve().parents[2] / "webui" / "static" / "lingo_audio"
 AUDIO_DIR.mkdir(parents=True, exist_ok=True)
 
 # No hardcoded server address: audio URLs are built from the live request

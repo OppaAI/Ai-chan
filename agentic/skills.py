@@ -148,7 +148,7 @@ class SkillDoc:
 # its triggers match. It is only returned when the query carries an explicit
 # source marker, e.g. "lingo", "Lingo App Mode", "ACTIVATE SKILL: <id>",
 # or "[source:lingo]". The Lingo phone app forces JAPANESE_TUTOR via an
-# explicit system prompt (see interface/webui/lingo.py) and bypasses
+# explicit system prompt (see interface/android_app/lingo/router.py) and bypasses
 # retrieval, so gating here only blocks webui/threads/normal-chat
 # auto-activation — never the Lingo app itself.
 _SOURCE_MARKERS: dict[str, tuple[str, ...]] = {

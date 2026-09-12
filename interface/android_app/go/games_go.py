@@ -10,7 +10,7 @@ Endpoints (mounted at /api/games/go):
   POST /warmup         — pre-spawn KataGo GTP
   POST /resign         — end the game
 
-Board: pure Python (interface/webui/go/board.py).
+Board: pure Python (interface/android_app/go/board.py).
 AI: optional KataGo GTP (KATAGO_PATH + KATAGO_MODEL); else random legal.
 """
 from __future__ import annotations
@@ -33,7 +33,7 @@ router = APIRouter(prefix="/api/games/go", tags=["games"])
 
 # Process-local game store. Requires a **single worker process** (or sticky
 # sessions). Multi-worker / restart will drop or 404 in-flight games — same
-# constraint as interface/webui/shogi. Shared store is a follow-up if needed.
+# constraint as interface/android_app/shogi. Shared store is a follow-up if needed.
 _games: dict[str, dict] = {}
 
 _TAILSCALE_IPV4_NETWORK = ipaddress.ip_network("100.64.0.0/10")
