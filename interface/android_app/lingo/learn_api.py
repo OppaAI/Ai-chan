@@ -1,11 +1,13 @@
 """
 Learn helpers on shared vocab pool + per-user SRS.
 
-Mutating routes require a real authenticated session (no owner fallback).
+Session auth falls back to the app owner (AIKO_USER_ID), same as every
+other Lingo route — the Android app has no login flow.
 """
 from __future__ import annotations
 
 import logging
+import os
 from typing import List, Optional
 
 from fastapi import Depends, HTTPException, Request
@@ -73,16 +75,23 @@ class MarkLearnedResponse(BaseModel):
 
 
 async def require_lingo_user(request: Request) -> dict:
-    """Authenticated session only — no AIKO_USER_ID fallback (for mutating routes)."""
+    """Session auth with app-owner fallback, like get_lingo_session.
+
+    The Android app sends no cookies, so unauthenticated calls fall back
+    to AIKO_USER_ID instead of 401ing learn/mark while every other
+    mutating route succeeds.
+    """
     from interface.webui import auth
     try:
         session = await auth.require_session(request)
         return await auth.require_accepted_session(session)
-    except HTTPException:
-        raise
     except Exception as e:
-        log.warning("Lingo auth required failed: %s", e)
-        raise HTTPException(status_code=401, detail="Authentication required")
+        log.warning("Lingo auth required failed: %s — falling back to app owner", e)
+        owner = os.getenv("AIKO_USER_ID", "")
+        if not owner:
+            log.error("AIKO_USER_ID not set and auth failed; aborting request")
+            raise HTTPException(status_code=500, detail="Session unavailable")
+        return {"user_id": owner, "username": owner}
 
 
 def _allowed_levels(uid: str) -> list:
