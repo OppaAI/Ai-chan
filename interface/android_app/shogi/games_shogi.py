@@ -48,13 +48,13 @@ _games: dict[str, dict] = {}
 def _clock_settings() -> tuple[Optional[float], float]:
     """(main_ms per side or None, byoyomi_ms). (None, 0) = clock off."""
     try:
-        main_s = float(os.getenv("SHOGI_MAIN_TIME_S", "600"))
+        main_s = float(os.getenv("SHOGI_MAIN_TIME_S", "3600"))
     except (TypeError, ValueError):
-        main_s = 600.0
+        main_s = 3600.0
     try:
-        byoyomi_s = float(os.getenv("SHOGI_BYOYOMI_S", "30"))
+        byoyomi_s = float(os.getenv("SHOGI_BYOYOMI_S", "60"))
     except (TypeError, ValueError):
-        byoyomi_s = 30.0
+        byoyomi_s = 60.0
     main_ms = max(0.0, main_s) * 1000.0
     byoyomi_ms = max(0.0, byoyomi_s) * 1000.0
     if main_ms <= 0 and byoyomi_ms <= 0:
